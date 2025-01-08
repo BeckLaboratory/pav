@@ -69,7 +69,7 @@ if __name__ == '__main__':
                 sys.stderr.flush()
 
             # Get coordinates
-            ref_bp, tig_bp, clip_h_l, clip_s_l, clip_h_r, clip_s_r = pavlib.align.count_cigar(row)
+            ref_bp, tig_bp, clip_h_l, clip_s_l, clip_h_r, clip_s_r = pavlib.align.util.count_cigar(row)
 
             if row['REV']:
                 clip_r = clip_s_l

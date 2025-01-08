@@ -384,19 +384,6 @@ def check_record(row, df_qry_fai):
 
     qry_len = df_qry_fai[row['QRY_ID']]
 
-    if 'QRY_LEN' in row.index:
-        raise RuntimeError('QRY_LEN defined (was removed from PAV alignment files) (INDEX={}, QRY={}:{}-{}, REF={}:{}-{})'.format(
-            row['INDEX'], row['QRY_ID'], row['QRY_POS'], row['QRY_END'], row['#CHROM'], row['POS'], row['END']
-        ))
-
-    # if row['QRY_LEN'] != qry_len:
-    #     raise RuntimeError('QRY_LEN != length from FAI ({} != {}) (INDEX={}, QRY={}:{}-{}, REF={}:{}-{})'.format(
-    #         row['QRY_LEN'], qry_len,
-    #         row['INDEX'], row['QRY_ID'], row['QRY_POS'], row['QRY_END'], row['#CHROM'], row['POS'], row['END']
-    #     ))
-
-    # qry_map_rgn = pavlib.seq.region_from_string(row['QRY_MAP_RGN'])
-
     # Query and reference positions are in the right order
     if row['QRY_POS'] >= row['QRY_END']:
         raise RuntimeError('QRY_POS >= QRY_END ({} >= {}) (INDEX={}, QRY={}:{}-{}, REF={}:{}-{})'.format(

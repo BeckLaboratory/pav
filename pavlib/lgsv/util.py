@@ -270,7 +270,31 @@ class SeqCache:
         return self.seq
 
 
-def dot_graph_writer(out_file, df_align, chain_set, optimal_interval_list, sv_dict, graph_name='Unnamed_Graph', forcelabels=True, anchor_width=2.5):
+def dot_graph_writer(
+        out_file, df_align, chain_set, optimal_interval_list, sv_dict,
+        graph_name='Unnamed_Graph', forcelabels=True, anchor_width=2.5,
+        index_interval=None, discard_null=True
+):
+    """
+    Write a DOT graph file for a set of alignments.
+
+
+    :param out_file: Output DOT file (open filehandle, not filename).
+    :param df_align: Table of aligned records (anchors).
+    :param chain_set: The set of chained elements.
+    :param optimal_interval_list: A list of intervals chosen for the optimal path through the alignment graph.
+    :param sv_dict: Dictionary of SVs where the key is an interval (tuple) and the value is a variant call object.
+    :param graph_name: Name of the graph.
+    :param forcelabels: Force all labels (do not omit).
+    :param anchor_width: Line width of anchors.
+    :param index_interval: Only output a graph for nodes in this interval (tuple of min and max indexes, inclusive on both ends).
+    :param discard_null: Discard null variants if True.
+    """
+
+    if index_interval is not None:
+        min_index, max_index = index_interval
+    else:
+        min_index, max_index = -np.inf, np.inf
 
     # Header
     out_file.write(f'graph {graph_name} {{\n')
@@ -293,6 +317,9 @@ def dot_graph_writer(out_file, df_align, chain_set, optimal_interval_list, sv_di
     # Add nodes
     for index, row in df_align.iterrows():
 
+        if index < min_index or index > max_index:
+            continue
+
         if index in optimal_anchor_set:
             color = 'blue'
         elif index in variant_anchor_set:
@@ -302,10 +329,14 @@ def dot_graph_writer(out_file, df_align, chain_set, optimal_interval_list, sv_di
 
         width = anchor_width if index in variant_anchor_set else 1
 
-        out_file.write(f'    n{index} [label="{index} ({row["INDEX"]}) - {row["#CHROM"]}:{row["POS"]}-{row["END"]} {"-" if row["REV"] else "+"} s={row["SCORE"]}", penwidth={width}, color="{color}"]\n')
+        out_file.write(f'    n{index} [label="{index} ({row["INDEX"]})\n{row["#CHROM"]}:{row["POS"]}-{row["END"]} ({"-" if row["REV"] else "+"})\ns={row["SCORE"]}", penwidth={width}, color="{color}"]\n')
+        # out_file.write(f'    n{index} [label="{index} ({row["INDEX"]}) - {row["#CHROM"]}:{row["POS"]}-{row["END"]} {"-" if row["REV"] else "+"} s={row["SCORE"]}", penwidth={width}, color="{color}"]\n')
 
     # Add candidate edges
     for start_index, end_index in chain_set:
+
+        if start_index < min_index or end_index > max_index:
+            continue
 
         if (start_index, end_index) in optimal_interval_set:
             color = 'blue'
@@ -323,11 +354,20 @@ def dot_graph_writer(out_file, df_align, chain_set, optimal_interval_list, sv_di
         else:
             var_name = sv_dict[start_index, end_index].variant_id
 
-        out_file.write(f'    n{start_index} -- n{end_index} [label="{var_name} (s={sv_dict[start_index, end_index].score_variant})", penwidth={width}, color="{color}"]\n')
+        if discard_null and sv_dict[start_index, end_index].is_null():
+            var_label = ''
+        else:
+            var_label = f'{var_name}\n(s={sv_dict[start_index, end_index].score_variant})'
+            # var_label = f'{var_name} (s={sv_dict[start_index, end_index].score_variant})'
+
+        out_file.write(f'    n{start_index} -- n{end_index} [label="{var_label}", penwidth={width}, color="{color}"]\n')
 
     # Add adjacent edges (not anchor candidates)
     for start_index in range(df_align.shape[0] - 1):
         end_index = start_index + 1
+
+        if start_index < min_index or end_index > max_index:
+            continue
 
         if (start_index, end_index) in optimal_interval_set:
             color = 'blue'

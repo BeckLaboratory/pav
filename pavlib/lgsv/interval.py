@@ -103,7 +103,7 @@ class AnchoredInterval:
         return f'AnchoredInterval(start={self.chain_node.start_index}, end={self.chain_node.end_index}, chr={self.region_ref.chrom}, query={self.region_qry.chrom}, seg_n={self.seg_n}, is_rev={self.is_rev})'
 
 
-def get_segment_table(start_index, end_index, df_align, score_model):
+def get_segment_table(start_index, end_index, df_align, caller_resources):
     """
     Get a table of segments across between two alignment records, which may or may not be anchors for variant detection.
     In the case that the alignment records are not anchors, the table is not fully well-formed, but contains enough
@@ -112,10 +112,12 @@ def get_segment_table(start_index, end_index, df_align, score_model):
     :param start_index: Index of the left-most aligned segment in query coordinate order.
     :param end_index: Index of the right-most aligned segment in query coordinate order.
     :param df_align: Table of trimmed alignments.
-    :param score_model: Alignment score model.
+    :param caller_resources: Caller resources.
 
     :return: A segment table with aligned and unaligned segments from `start_index` to `end_index` (inclusive).
     """
+
+    score_model = caller_resources.score_model
 
     # Create templated and untemplated insertions for each aligned segment and transition.
     # Save row_l outside the loop, row_r may be transformed inside the loop and should be preserved for the next round

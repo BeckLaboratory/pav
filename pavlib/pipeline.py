@@ -24,13 +24,15 @@ def expand_pattern(pattern, asm_table, config, **kwargs):
     if kwargs is None or len(kwargs) == 0:
         # Empty kwargs so the kwargs product iterates over one item
         kwargs = {None: (None,)}
+    else:
+        kwargs = kwargs.copy()
 
     for key, val in kwargs.items():
         if isinstance(val, str):
             # Single string value, iterate over one item, not each string character
             kwargs[key] = (val,)
 
-    kwargs_keys = sorted(kwargs.keys())
+    kwargs_keys = [val for val in sorted(kwargs.keys()) if val not in {'asm_name', 'hap'}]
     kwargs_n = len(kwargs_keys)
 
     sub_dict = dict()  # String substitution dict

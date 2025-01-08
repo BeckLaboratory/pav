@@ -364,7 +364,7 @@ class TandemDuplicationVariant(InsertionVariant):
     # Qry 1:    --------->--------->--------->--------->--------->--------->
     # Qry 2:                                  --------->--------->--------->--------->--------->--------->
     #
-    # Directly-oriented repeats may mediated tandem repeats. Look at alignment-trimming in three ways:
+    # Directly-oriented repeats may mediated by tandem repeats. Look at alignment-trimming in three ways:
     # * Qry trimming: Identifies TD if redundant query bases are removed, but queries still overlap
     # * Qry & Ref trimming: Find a breakpoint for an insertion call.
     # * No trimming: Identify the repeats at the ends of the TD.

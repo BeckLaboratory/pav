@@ -51,6 +51,9 @@ DEFAULT_MIN_ANCHOR_SCORE = '50bp'
 
 DEFAULT_LG_OFF_GAP_MULT = 1.5
 
+DEFAULT_LG_GAP_SCALE = 0.2
+
+
 #
 # Inversion parameters
 #

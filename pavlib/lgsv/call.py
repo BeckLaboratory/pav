@@ -149,7 +149,8 @@ def call_from_align(caller_resources, min_anchor_score=pavlib.const.DEFAULT_MIN_
             while end_index < last_index and pavlib.lgsv.chain.can_reach_anchor(start_row, df_align.loc[end_index], caller_resources.score_model):
 
                 if df_align.loc[end_index]['INDEX'] in qryref_index_set and pavlib.lgsv.chain.can_anchor(
-                        start_row, df_align.loc[end_index], caller_resources.score_model, min_anchor_score
+                        start_row, df_align.loc[end_index], caller_resources.score_model, min_anchor_score,
+                        gap_scale=caller_resources.config_params.lg_gap_scale
                 ):
                     chain_set.add((start_index, end_index))
 
@@ -167,7 +168,7 @@ def call_from_align(caller_resources, min_anchor_score=pavlib.const.DEFAULT_MIN_
         for start_index, end_index in chain_set:
             chain_node = pavlib.lgsv.chain.AnchorChainNode(start_index, end_index)
 
-            interval = pavlib.lgsv.interval.AnchoredInterval(chain_node, df_align, caller_resources.score_model)
+            interval = pavlib.lgsv.interval.AnchoredInterval(chain_node, df_align, caller_resources)
 
             # Get variant region KDE
             var_region_kde = VarRegionKde(interval, caller_resources)

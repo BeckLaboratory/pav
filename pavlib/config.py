@@ -241,6 +241,17 @@ CONFIG_PARAM_LIST = [
                             'by this factor (see parameter "align_score_model" for gap scores).',
                 advanced=True
     ),
+    ConfigParam('lg_gap_scale', 'float', pavlib.const.DEFAULT_LG_GAP_SCALE,
+                min=(0.0, False),
+                description='Alignment anchoring candidate SVs are ignored if the penalty of the gap between two '
+                            'candidate anchor alignments (reference gap) is greater than the alignment score of '
+                            'either anchor. The gap score between anchors is multiplied by this value before it is '
+                            'compared to the anchor scores. A value of less than 1.0 reduces the gap penalty (i.e. '
+                            'allows smaller alignments to anchor larger variantns), and a value greater than 1.0 '
+                            'increases the gap penalty (i.e. variant require more substantial anchoring alignments. '
+                            'See parameter "align_score_model" for how gap and anchor alignments are score.',
+                advanced=True
+    ),
 
     # Inversion site flagging from variant call clusters
     ConfigParam('inv_sig_cluster_win', 'int', 200,

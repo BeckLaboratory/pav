@@ -423,9 +423,9 @@ rule tracks_lgsv_all:
 
 rule tracks_lgsv_cpx_bed:
     input:
-        bed_cpx='temp/{asm_name}/lgsv/sv_cpx_{hap}.bed.gz',
-        bed_seg='temp/{asm_name}/lgsv/segment_cpx_{hap}.bed.gz',
-        bed_ref='temp/{asm_name}/lgsv/reftrace_cpx_{hap}.bed.gz',
+        bed_cpx='results/{asm_name}/lgsv/sv_cpx_{hap}.bed.gz',
+        bed_cpx_seg='results/{asm_name}/lgsv/segment_cpx_{hap}.bed.gz',
+        bed_cpx_ref='results/{asm_name}/lgsv/reftrace_cpx_{hap}.bed.gz',
         fai=REF_FAI
     output:
         bed=temp('temp/{asm_name}/tracks/lgsv/lgsv_cpx_{hap}.bed'),
@@ -440,11 +440,11 @@ rule tracks_lgsv_cpx_bed:
 
         # Read structure tables
         df_rt_all = pd.read_csv(
-            input.bed_ref, sep='\t', low_memory=False,
+            input.bed_cpx_ref, sep='\t', low_memory=False,
             usecols=['#CHROM', 'POS', 'END', 'ID', 'TYPE', 'DEPTH', 'INDEX', 'FWD_COUNT', 'REV_COUNT']
         )[['#CHROM', 'POS', 'END', 'ID', 'TYPE', 'DEPTH', 'INDEX', 'FWD_COUNT', 'REV_COUNT']]
 
-        df_seg_all = pd.read_csv(input.bed_seg, sep='\t', low_memory=False)
+        df_seg_all = pd.read_csv(input.bed_cpx_seg, sep='\t', low_memory=False)
 
         # Read FAI and table columns
         df_fai = svpoplib.ref.get_df_fai(input.fai)
@@ -590,9 +590,9 @@ rule tracks_lgsv_cpx_bed:
 
 rule tracks_lgsv_insdelinv_bed:
     input:
-        bed_ins='temp/{asm_name}/lgsv/svindel_ins_{hap}.bed.gz',
-        bed_del='temp/{asm_name}/lgsv/svindel_del_{hap}.bed.gz',
-        bed_inv='temp/{asm_name}/lgsv/sv_inv_{hap}.bed.gz',
+        bed_ins='results/{asm_name}/lgsv/svindel_ins_{hap}.bed.gz',
+        bed_del='results/{asm_name}/lgsv/svindel_del_{hap}.bed.gz',
+        bed_inv='results/{asm_name}/lgsv/sv_inv_{hap}.bed.gz',
         fai=REF_FAI
     output:
         bed=temp('temp/{asm_name}/tracks/lgsv/lgsv_insdelinv_{hap}.bed'),
