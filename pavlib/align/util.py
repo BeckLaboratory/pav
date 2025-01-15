@@ -52,7 +52,7 @@ TRIM_DESC = {
 }
 
 
-def align_bed_to_depth_bed(df, df_fai=None):
+def align_bed_to_depth_bed(df, df_fai=None, index_sep=','):
     """
     Get a BED file of alignment depth from an alignment BED.
 
@@ -71,6 +71,7 @@ def align_bed_to_depth_bed(df, df_fai=None):
 
     :param df: Alignment BED file.
     :param df_fai: FAI series (keys = reference sequence names, values = sequence lengths).
+    :param index_sep: Entries in the index are separated by this character
 
     :return: A Pandas DataTable with depth across all reference loci.
     """
@@ -135,6 +136,7 @@ def align_bed_to_depth_bed(df, df_fai=None):
 
     # Process BED records
     for chrom, pos, event, index, qry, row_index in align_list:
+        # print(f'{chrom} {pos} {event} {index} {qry} {row_index}')  # DBGTMP
 
         # Chromosome change
         if chrom != last_chrom:
@@ -177,7 +179,7 @@ def align_bed_to_depth_bed(df, df_fai=None):
                                 [
                                     last_chrom, last_pos, df_fai[last_chrom], len(qry_list),
                                     ','.join([val[1] for val in qry_list]),
-                                    ','.join([str(val[0]) for val in qry_list])
+                                    index_sep.join([str(val[0]) for val in qry_list])
                                 ],
                                 index=['#CHROM', 'POS', 'END', 'DEPTH', 'QRY_ID', 'INDEX']
                             )
@@ -190,7 +192,7 @@ def align_bed_to_depth_bed(df, df_fai=None):
                         [
                             chrom, 0, pos, len(qry_list),
                             ','.join([val[1] for val in qry_list]),
-                            ','.join([str(val[0]) for val in qry_list])
+                            index_sep.join([str(val[0]) for val in qry_list])
                         ],
                         index=['#CHROM', 'POS', 'END', 'DEPTH', 'QRY_ID', 'INDEX']
                     )
@@ -211,7 +213,7 @@ def align_bed_to_depth_bed(df, df_fai=None):
                     [
                         chrom, last_pos, pos, len(qry_list),
                         ','.join([val[1] for val in qry_list]),
-                        ','.join([str(val[0]) for val in qry_list])
+                        index_sep.join([str(val[0]) for val in qry_list])
                     ],
                     index=['#CHROM', 'POS', 'END', 'DEPTH', 'QRY_ID', 'INDEX']
                 )
@@ -232,13 +234,13 @@ def align_bed_to_depth_bed(df, df_fai=None):
             qry_list = [val for val in qry_list if val != (index, qry)]
 
             if len(qry_list) == n:
-                raise RuntimeError(f'Could not find query to END in query list: {chrom},{pos},{event},{index},{qry}')
+                raise RuntimeError(f'Could not find query to END in query list: chrom={chrom},pos={pos},event={event},index="{index}",qry={qry}')
 
             if len(qry_list) < n - 1:
-                raise RuntimeError(f'END removed multiple queries: {chrom},{pos},{event},{index},{qry}')
+                raise RuntimeError(f'END removed multiple queries: chrom={chrom},pos={pos},event={event},index="{index}",qry={qry}')
 
         else:
-            raise RuntimeError(f'Unknown event type {event}: {chrom},{pos},{event},{index},{qry}')
+            raise RuntimeError(f'Unknown event type event={event}: chrom={chrom},pos={pos},event={event},index="{index}",qry={qry}')
 
     # Check final state
     if qry_list:
@@ -258,7 +260,7 @@ def align_bed_to_depth_bed(df, df_fai=None):
                     [
                         last_chrom, last_pos, df_fai[last_chrom], len(qry_list),
                         ','.join([val[1] for val in qry_list]),
-                        ','.join([str(val[0]) for val in qry_list])
+                        index_sep.join([str(val[0]) for val in qry_list])
                     ],
                     index=['#CHROM', 'POS', 'END', 'DEPTH', 'QRY_ID', 'INDEX']
                 )

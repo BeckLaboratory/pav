@@ -33,6 +33,54 @@ class AnchorChainNode:
         """
         return len(self.next_node_list)
 
+def get_chain_set(df_align, caller_resources, min_anchor_score=None):
+    """
+    Identify anchors (alignments that may "anchor" variants). Return a set of intervals where each edge of the interval
+    is an anchor.
+
+    :param df_align: Query alignment records for one query sequence sorted and indexed in query order.
+    :param caller_resources: Caller resources.
+
+    :return: A set of anchor intervals.
+    """
+
+    chain_set = set()
+
+    start_index = 0
+    last_index = df_align.shape[0]
+
+    qryref_index_set = set(caller_resources.df_align_qryref.index)
+
+    if min_anchor_score is None:
+        min_anchor_score = pavlib.lgsv.util.get_min_anchor_score(min_anchor_score, caller_resources.score_model)
+
+    # Traverse interval setting each position to the left-most anchor candidate.
+    while start_index < last_index:
+
+        # Skip if anchor did not pass TIG & REF trimming
+        if df_align.loc[start_index]['INDEX'] not in qryref_index_set:
+            start_index += 1
+            continue
+
+        start_row = df_align.loc[start_index]
+        end_index = start_index + 1
+
+        # Traverse each interval after the start for right-most anchor candidates. Limit search by contig distance
+        while end_index < last_index and pavlib.lgsv.chain.can_reach_anchor(start_row, df_align.loc[end_index], caller_resources.score_model):
+
+            if df_align.loc[end_index]['INDEX'] in qryref_index_set and pavlib.lgsv.chain.can_anchor(
+                    start_row, df_align.loc[end_index], caller_resources.score_model, min_anchor_score,
+                    gap_scale=caller_resources.config_params.lg_gap_scale
+            ):
+                chain_set.add((start_index, end_index))
+
+            end_index += 1
+
+        start_index += 1
+
+    return chain_set
+
+
 def can_anchor(row_a, row_b, score_model, min_score=100, gap_scale=pavlib.const.DEFAULT_LG_GAP_SCALE):
     """
     Determine if two alignment rows can anchor a rearrangement. Requires the "SCORE" column is added to the alignment

@@ -324,7 +324,8 @@ class InsertionVariant(Variant):
         self.score_variant = \
             caller_resources.score_model.gap(self.svlen) + \
             caller_resources.score_model.gap(abs(len_ref)) * \
-                caller_resources.config_params.lg_off_gap_mult
+                caller_resources.config_params.lg_off_gap_mult + \
+            caller_resources.score_model.gap(ref_overlap)
 
         self.pos = self.region_ref.pos
         self.end = self.pos + 1
@@ -632,6 +633,8 @@ class ComplexVariant(Variant):
     def __init__(self, interval, caller_resources, var_region_kde=None):
         Variant.__init__(self, interval)
 
+        self.caller_resources = caller_resources
+
         # Null variant (for creating table headers when no variants are found)
         if interval is None or interval.len_qry <= 0:
             self.struct_qry = None
@@ -664,12 +667,21 @@ class ComplexVariant(Variant):
 
     def complete_anno_impl(self):
 
+        # Get smoothed segment table
+        if self.caller_resources.config_params.lg_smooth_segments > 0.0:
+            self.df_segment_smooth = collapse_segments(self, self.caller_resources.config_params.lg_smooth_segments)
+            df_segment = self.df_segment_smooth
+        else:
+            self.df_segment_smooth = None
+            df_segment = self.interval.df_segment
+
         # Get reference trace
         if self.df_ref_trace is None:
-            self.df_ref_trace = get_reference_trace(self.interval)
+            self.df_ref_trace = get_reference_trace(self.interval, df_segment, 0.01, self.svlen)
+            # self.df_ref_trace = get_reference_trace(self.interval, df_segment, self.caller_resources.config_params.lg_smooth_segments, self.svlen)
 
-        self.struct_qry = get_qry_struct_str(self.interval.df_segment)
-        self.struct_ref = get_ref_struct_str(self.df_ref_trace)
+        self.struct_qry = get_qry_struct_str(df_segment)
+        self.struct_ref = get_ref_struct_str(self.df_ref_trace, self.interval.len_ref, self.interval.len_qry)
 
     def row_impl(self):
         return pd.Series(
@@ -752,7 +764,159 @@ class VariantMatchError(Exception):
 # Reference and query structure routines
 #
 
-def get_reference_trace(interval):
+def collapse_segments(variant_call, smooth_factor=pavlib.const.DEFAULT_LG_SMOOTH_SEGMENTS):
+    """
+    Smooth over segments in the variant call. Alignment records over a template are often broken by the alignment. These
+    may contain real variants or not, but do create noise in the complex call structure (i.e. a single large
+    DUP might become "DUP:NML:DUP:NML:DUP" with small "NML" segments.
+
+    :param variant_call: Variant call object.
+    :param smooth_factor: Smoothing factor as a minimum proportion of variant length to retain. For example, at 0.05,
+        any segment smaller than 5% of the total SV length is smoothed out (assuming approximate colinearity)
+        simplifying the annotated structure. Variant calls retain the original segments, so while this creates an
+        approximation of the structure for the call, the full structure is not lost.
+
+    :return: A smoothed segment table.
+    """
+
+    # Check variant and get segment table
+    if variant_call is None:
+        raise RuntimeError(f'Cannot collapse segments: No variant call')
+
+    df_segment = variant_call.interval.df_segment
+    svlen = variant_call.svlen
+
+    if df_segment is None or df_segment.empty:
+        raise RuntimeError('Missing or empty segment table')
+
+    df_segment = df_segment.sort_index().copy()
+    df_segment['INDEX_SEG_SCORE'] = df_segment.apply(lambda row: [(row['INDEX'], row['SEG_ORDER'], row['SCORE'])], axis=1)
+
+    # List of segments (concatenated into the output table)
+    df_segment_list = list()
+
+    # Traverse and merge
+    start_index = 0
+    start_row = df_segment.iloc[start_index]  # May come out of the segment table or be a merged record from the last iteration
+
+    while start_index < df_segment.shape[0]:
+
+        # if start_index == 60:
+        #     print(f'Break at {start_index}')  # DBGTMP
+        #     break
+
+        # Find end row
+        end_index = start_index
+        end_row = None
+
+        while end_row is None and end_index < df_segment.shape[0] - 1:
+            end_index += 1
+
+            if df_segment.iloc[end_index]['IS_ALIGNED']:
+                end_row = df_segment.iloc[end_index]
+
+        # End case: Ran out of records to advance
+        if start_index == end_index:
+            df_segment_list.append(start_row)
+            break
+
+        if (
+                end_row is not None and  # Should not occur
+                start_row['IS_REV'] == end_row['IS_REV'] and
+                start_row['#CHROM'] == end_row['#CHROM'] and
+                start_row['QRY_ID'] == end_row['QRY_ID']
+        ):
+            if start_row['IS_REV']:
+                is_cont = start_row['POS'] >= end_row['POS']
+            else:
+                is_cont = start_row['END'] <= end_row['END']
+
+        else:
+            is_cont = False
+
+        # If end row is not compatible with the start row, no smoothing from start to end occurs.
+        if not is_cont:
+            # Not contiguous
+            df_segment_list.append(start_row)
+
+            # Incompatible, no smoothing, retain unmodified records in this range (start_index to end_index).
+            # The next round begins at end_index
+            start_index += 1
+
+            while start_index < end_index:
+                df_segment_list.append(df_segment.iloc[start_index])
+                start_index += 1
+
+            start_row = df_segment.iloc[start_index]
+
+            continue
+
+        # Get lengths
+        if start_row['IS_REV']:
+            len_ref = np.abs(start_row['POS'] - end_row['END'])
+        else:
+            len_ref = np.abs(end_row['POS'] - start_row['END'])
+
+        len_qry = end_row['QRY_POS'] - start_row['QRY_END']
+
+        # Smooth records
+        if (np.abs(len_ref) + len_qry) / svlen < smooth_factor:
+
+            # Set values
+            start_row = start_row.copy()
+
+            start_row['POS'] = np.min([start_row['POS'], end_row['POS']])
+            start_row['END'] = np.max([start_row['END'], end_row['END']])
+
+            start_row['IS_ANCHOR'] |= end_row['IS_ANCHOR']
+            start_row['QRY_END'] = end_row['QRY_END']
+            start_row['LEN_REF'] += end_row['LEN_REF'] + len_ref
+            start_row['LEN_QRY'] += end_row['LEN_QRY'] + len_qry
+
+            # Append index, segement, and score
+            start_index += 1
+
+            while start_index < end_index:
+                start_row['INDEX_SEG_SCORE'] += df_segment.iloc[start_index]['INDEX_SEG_SCORE']
+                start_index += 1
+
+            start_row['INDEX_SEG_SCORE'] += end_row['INDEX_SEG_SCORE']
+
+            # Do not append start_row, it is the starting row for the next round and more records may be concatenated
+            # with it.
+
+        else:
+            # Skip to next aligned record
+            df_segment_list.append(start_row)
+
+            start_index += 1
+
+            while start_index < end_index:
+                df_segment_list.append(df_segment.iloc[start_index])
+                start_index += 1
+
+            start_row = df_segment.iloc[start_index]
+
+    # Format table
+    df_segment = pd.concat(df_segment_list, axis=1).T
+
+    df_segment['INDEX'] = df_segment['INDEX_SEG_SCORE'].apply(lambda val_list:
+        ','.join([str(val[0]) for val in val_list])
+    )
+
+    df_segment['SEG_ORDER'] = df_segment['INDEX_SEG_SCORE'].apply(lambda val_list:
+        ','.join([str(val[1]) for val in val_list])
+    )
+
+    df_segment['SCORE'] = df_segment['INDEX_SEG_SCORE'].apply(lambda val_list:
+        ','.join([str(val[2]) for val in val_list])
+    )
+
+    del df_segment['INDEX_SEG_SCORE']
+
+    return df_segment
+
+def get_reference_trace(interval, df_segment=None, smooth_factor=0.0, svlen=None):
     """
     Get a table representing the trace across the reference locus for this SV. This only covers the locus of the SV
     and omits distal template switches.
@@ -762,9 +926,17 @@ def get_reference_trace(interval):
     insertions). In these cases, an empty table is returned.
 
     :param interval: Interval to generate a reference trace for.
+    :param df_segment: Segment table or `None` to use the segment table in `interval`.
+    :param smooth_factor: Smoothing factor.
+    :param svlen: SV length. Required for smoothing. May be `None` if smooth_factor is zero.
 
     :return: A reference trace table. Has no rows if there is no reference context at the SV site.
     """
+
+    if df_segment is None:
+        df_segment = interval.df_segment
+
+    # df_segment = df_segment.reset_index(drop=True)
 
     # Set local template switch boundaries
     # Distance from reference positions (pos & end) must be no more half of:
@@ -776,25 +948,27 @@ def get_reference_trace(interval):
     local_pos = max([
         interval.region_ref.pos - local_dist,
         min([
-            interval.df_segment.iloc[0]['POS'],
-            interval.df_segment.iloc[0]['END'],
-            interval.df_segment.iloc[-1]['POS'],
-            interval.df_segment.iloc[-1]['END']
+            df_segment.iloc[0]['POS'],
+            df_segment.iloc[0]['END'],
+            df_segment.iloc[-1]['POS'],
+            df_segment.iloc[-1]['END']
         ])
     ])
 
     local_end = min([
         interval.region_ref.end + local_dist,
         max([
-            interval.df_segment.iloc[0]['POS'],
-            interval.df_segment.iloc[0]['END'],
-            interval.df_segment.iloc[-1]['POS'],
-            interval.df_segment.iloc[-1]['END']
+            df_segment.iloc[0]['POS'],
+            df_segment.iloc[0]['END'],
+            df_segment.iloc[-1]['POS'],
+            df_segment.iloc[-1]['END']
         ])
     ])
 
     # Make depth table
-    df_depth = pavlib.align.util.align_bed_to_depth_bed(interval.df_segment.loc[interval.df_segment['IS_ALIGNED']], df_fai=None)
+    df_depth = pavlib.align.util.align_bed_to_depth_bed(df_segment.loc[df_segment['IS_ALIGNED']], df_fai=None, index_sep=';')
+
+    del df_depth['QRY_ID']
 
     # Refine depth to local regions (remove distal, trim segments crossing local region pos & end)
     df_depth['POS'] = df_depth['POS'].apply(lambda val: max(val, local_pos))
@@ -809,8 +983,8 @@ def get_reference_trace(interval):
 
     # Remove depth records that cover only anchor alignments at the flanks
     anchor_index_set = {
-        str(interval.df_segment.iloc[0]['INDEX']),
-        str(interval.df_segment.iloc[-1]['INDEX'])
+        str(df_segment.iloc[0]['INDEX']),
+        str(df_segment.iloc[-1]['INDEX'])
     }
 
     while df_depth.shape[0] > 0 and df_depth.iloc[-1]['INDEX'] in anchor_index_set and df_depth.iloc[-1]['DEPTH'] == 1:
@@ -818,16 +992,6 @@ def get_reference_trace(interval):
 
     while df_depth.shape[0] > 0 and df_depth.iloc[0]['INDEX'] in anchor_index_set and df_depth.iloc[0]['DEPTH'] == 1:
         df_depth = df_depth.iloc[1:]
-
-    # QRY_ID and INDEX to tuples
-    # df_depth['QRY_INDEX'] = df_depth.apply(lambda row:
-    #     sorted(zip(
-    #         row['QRY_ID'].split(','), row['INDEX'].split(',')
-    #     )), axis=1
-    # )
-    #
-    # del df_depth['QRY_ID']
-    # del df_depth['INDEX']
 
     # Add forward and reverse counts
     df_depth['FWD_COUNT'] = 0
@@ -838,12 +1002,12 @@ def get_reference_trace(interval):
         depth = row['DEPTH']
 
         if depth > 0:
-            index_set = {int(val) for val in row['INDEX'].split(',')}
+            index_set = {val for val in row['INDEX'].split(';')}
 
             if len(index_set) != depth:
                 raise RuntimeError(f'Depth record index list length {len(index_set)} does not match depth {depth}')
 
-            fwd_count = np.sum(interval.df_segment.loc[interval.df_segment['INDEX'].isin(index_set), 'STRAND'] == '+')
+            fwd_count = np.sum(df_segment.loc[df_segment['INDEX'].isin(index_set), 'STRAND'] == '+')
             rev_count = depth - fwd_count
 
         else:
@@ -855,35 +1019,6 @@ def get_reference_trace(interval):
 
         df_depth.loc[index, 'FWD_COUNT'] = fwd_count
         df_depth.loc[index, 'REV_COUNT'] = rev_count
-
-    # # Aggregate records
-    # if aggregate and df_depth.shape[0] > 0:
-    #     df_depth_list = list()
-    #     n = df_depth.shape[0]
-    #
-    #     i = 0
-    #     row = df_depth.iloc[i]
-    #
-    #     while i < n:
-    #
-    #         if i + 2 < n:
-    #             row2 = df_depth.iloc[i + 2]
-    #
-    #             if (
-    #                 row['#CHROM'] == row2['#CHROM']
-    #             ) and (
-    #                 row['FWD_COUNT'] = row2
-    #             ):
-    #
-    #     depth_len = df_depth['END'] - df_depth['POS']
-    #
-    #     for i in range(df_depth.shape[0] - 2):
-    #
-    #         if (
-    #                 depth_len.iloc[i + 1] / (depth_len.iloc[i] + depth_len.iloc[i + 2])
-    #         ) and (
-    #             np.all(df_depth.iloc[i][['FWD_COUNT', 'REV_COUNT']] == df_depth.iloc[i + 2][['FWD_COUNT', 'REV_COUNT']])
-    #         ):
 
     # Make reference context
     df_ref_trace_list = list()  # Type, length, depth fwd, depth rev, alignment index
@@ -943,8 +1078,11 @@ def get_reference_trace(interval):
 
     df_ref_trace = pd.concat(df_ref_trace_list, axis=1).T
 
-    if list(df_ref_trace.columns) != REF_TRACE_COLUMNS:
-        raise RuntimeError(f'Unexpected reference trace columns (Program bug): {", ".join(df_ref_trace.columns)}')
+    if smooth_factor > 0.0:
+        df_ref_trace = smooth_ref_trace(df_ref_trace, smooth_factor, svlen)
+
+    # if list(df_ref_trace.columns) != REF_TRACE_COLUMNS:
+    #     raise RuntimeError(f'Unexpected reference trace columns (Program bug): {", ".join(df_ref_trace.columns)}')
 
     return df_ref_trace
 
@@ -959,6 +1097,24 @@ def get_qry_struct_str(df_segment):
     :return: String describing the complex SV structure.
     """
 
+    df_segment = df_segment.sort_values(['QRY_ID', 'QRY_POS', 'QRY_END'])
+
+    strand_dict = None
+
+    if df_segment.iloc[0]['IS_ANCHOR'] and df_segment.iloc[0]['IS_REV']:
+        df_segment = df_segment.iloc[::-1]
+
+        strand_dict = {
+            '+': '-',
+            '-': '+'
+        }
+
+    if strand_dict is None:
+        strand_dict = {
+            '+': '+',
+            '-': '-'
+        }
+
     last_chrom = df_segment.iloc[0]['#CHROM']
     last_pos = df_segment.iloc[0]['END']
 
@@ -972,10 +1128,10 @@ def get_qry_struct_str(df_segment):
                 dist = row['POS'] - last_pos
                 struct_list.append(f'TS({dist})')
             else:
-                struct_list.append(f'TS({row["#CHROM"]})')
+                struct_list.append(f'TSCHR({row["#CHROM"]})')
                 last_chrom = row['#CHROM']
 
-            struct_list.append(f'TINS({row["STRAND"]}{row["LEN_QRY"]})')
+            struct_list.append(f'TINS({strand_dict[row["STRAND"]]}{row["LEN_QRY"]})')
 
             last_pos = row['END']
         else:
@@ -988,16 +1144,152 @@ def get_qry_struct_str(df_segment):
     return ':'.join(struct_list)
 
 
-def get_ref_struct_str(df_ref_trace):
+def get_ref_struct_str(df_ref_trace, len_ref, len_qry):
     """
     Get reference structure string describing a complex SV from the reference perspective.
 
     :param df_ref_trace: Reference trace table.
+    :param len_ref: Reference length.
+    :param len_qry: Query length.
 
     :return: A string describing the reference structure.
     """
 
     if df_ref_trace.shape[0] == 0:
-        return 'INS'
+        svlen = len_ref + len_qry
+
+        if svlen > 0:
+            return f'INS({len_ref + len_qry})' if len_ref + len_qry > 0 else 'UNKNOWN'
+        else:
+            return 'UNKNOWN'
 
     return ':'.join(df_ref_trace.apply(lambda row: f'{row["TYPE"]}({row["LEN"]})', axis=1))
+
+def smooth_ref_trace(df_ref_trace, smooth_factor=pavlib.const.DEFAULT_LG_SMOOTH_SEGMENTS, svlen=None):
+    """
+    Smooth a reference trace table.
+
+    :param df_ref_trace: Reference trace table.
+    :param smooth_factor: Smoothing factor.
+    :param svlen: SV length.
+
+    :return: Smoothed reference trace table.
+    """
+
+    if smooth_factor <= 0.0:
+        return df_ref_trace
+
+    if svlen is None:
+        raise RuntimeError('SV length is required for smoothing reference trace')
+
+    dim_len = np.ceil(svlen * smooth_factor)
+
+    # Strip diminuitive segments from edges
+    first_index = 0
+    last_index = df_ref_trace.shape[0]
+
+    while first_index < last_index and df_ref_trace.iloc[first_index]['LEN'] < dim_len:
+        first_index += 1
+
+    while last_index > first_index and df_ref_trace.iloc[last_index - 1]['LEN'] < dim_len:
+        last_index -= 1
+
+    df_ref_trace = df_ref_trace[first_index:last_index + 1].copy()
+
+    df_ref_trace['INDEX'] = df_ref_trace['INDEX'].astype(str)
+
+    if df_ref_trace.shape[0] == 0:
+        return df_ref_trace
+
+    # Search for diminuitive segments
+    df_trace_list = list()
+
+    last_index = df_ref_trace.shape[0]
+
+    start_index = 0
+    start_row = df_ref_trace.iloc[start_index].copy()
+
+    while start_row is not None:
+
+        # Next end
+        end_index = start_index + 1
+
+        # End of trace
+        if end_index == last_index:
+            df_trace_list.append(start_row)
+            start_row = None
+            continue
+
+        # Find end of this collapse
+        end_row = None
+
+        skip_len = 0
+        index_str = '+'
+        is_compat = False
+        do_collapse = False
+
+        while end_index < last_index and end_row is None:
+            next_end_row = df_ref_trace.iloc[end_index]
+
+            if next_end_row['#CHROM'] != start_row['#CHROM']:
+                break
+
+            if next_end_row['LEN'] >= dim_len:
+                end_row = next_end_row.copy()
+                break
+
+            if start_row['FWD_COUNT'] == next_end_row['FWD_COUNT'] and start_row['REV_COUNT'] == next_end_row['REV_COUNT']:
+                end_row = next_end_row.copy()
+                is_compat = True
+                break
+
+            skip_len += next_end_row['LEN']
+            index_str += next_end_row['INDEX'] + '+'
+            end_index += 1
+
+        if end_index == last_index:
+            df_trace_list.append(start_row)
+
+            start_index += 1
+            while start_index < last_index:
+                df_trace_list.append(df_ref_trace.iloc[start_index])
+                start_index += 1
+
+            break
+
+        end_row = df_ref_trace.iloc[end_index].copy()
+
+        if is_compat:
+            # Concat range
+            start_row['LEN'] += skip_len + end_row['LEN']
+            start_row['END'] = end_row['END']
+            start_row['INDEX'] += index_str + end_row['INDEX']
+
+            start_index = end_index
+
+        elif end_index > start_index + 1:
+            # Split range
+            skip_len_l = skip_len // 2
+            skip_len_r = skip_len - skip_len_l
+
+            start_row['LEN'] += skip_len_l
+            start_row['END'] = start_row['END'] + skip_len_l
+            start_row['INDEX'] += index_str
+
+            end_row['LEN'] += skip_len_r
+            end_row['POS'] = end_row['POS'] - skip_len_r
+            end_row['INDEX'] += index_str
+
+            df_trace_list.append(start_row)
+
+            start_row = end_row
+            start_index = end_index
+
+        else:
+            df_trace_list.append(start_row)
+            start_index = end_index
+
+            start_row = df_ref_trace.iloc[start_index].copy() if start_index < last_index else None
+
+    # Concat table
+    return pd.concat(df_trace_list, axis=1).T

@@ -252,6 +252,14 @@ CONFIG_PARAM_LIST = [
                             'See parameter "align_score_model" for how gap and anchor alignments are score.',
                 advanced=True
     ),
+    ConfigParam('lg_smooth_segments', 'float', pavlib.const.DEFAULT_LG_SMOOTH_SEGMENTS,
+                min=(0.0, True),
+                description='For complex variant calls, smooth aligned segments concatenating adjacent segments if '
+                            'they are this proportion or smaller than the total SV length. The full structure of SVs '
+                            'is accessible in the variant call, but reference and query traces are reported with '
+                            'smoothing applied.',
+                advanced=True
+    ),
 
     # Inversion site flagging from variant call clusters
     ConfigParam('inv_sig_cluster_win', 'int', 200,

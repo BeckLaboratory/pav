@@ -4,6 +4,7 @@ Variant call utilities.
 
 import numpy as np
 import pandas as pd
+import sys
 
 import Bio.Seq
 import pavlib
@@ -45,6 +46,7 @@ class CallerResources(object):
                  inv_params=None,
                  kde=None,
                  log_file=None,
+                 verbose=True,
                  config_params=None
                  ):
 
@@ -98,7 +100,12 @@ class CallerResources(object):
 
         self.inv_params = inv_params
 
+        if log_file is None:
+            log_file = sys.stdout
+
         self.log_file = log_file
+        self.verbose=verbose
+
         self.config_params = config_params
 
 

@@ -493,9 +493,10 @@ rule tracks_lgsv_cpx_bed:
 
             df_rt.reset_index(drop=True, inplace=True)
 
-            df_rt['ID'] = df_rt.apply(lambda row_rt: row_rt['ID'] + f' ({row_rt.name + 1} / {df_rt.shape[0]})', axis=1)
+            if df_rt.shape[0] > 0:
+                df_rt['ID'] = df_rt.apply(lambda row_rt: row_rt['ID'] + f' ({row_rt.name + 1} / {df_rt.shape[0]})', axis=1)
 
-            df_track_list.append(df_rt)
+                df_track_list.append(df_rt)
 
         if len(df_track_list) > 0:
             df = pd.concat(df_track_list, axis=0).reset_index(drop=True)

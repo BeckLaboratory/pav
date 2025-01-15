@@ -25,7 +25,7 @@ class AnchoredInterval:
     :param chain_node: A ChainNode object describing the start and end index positions of the chain anchors in query-
         sorted order.
     :param df_align: DataFrame of alignment records with the 'SCORE' column added.
-    :param score_model: Model for scoring alignments and template switches.
+    :param caller_resources: Caller resources.
 
     Attributes:
         * chain_node: AnchorChainNode object used to create this interval.
@@ -41,7 +41,7 @@ class AnchoredInterval:
         * region_qry: Query region (pavlib.seq.Region).
     """
 
-    def __init__(self, chain_node, df_align, score_model):
+    def __init__(self, chain_node, df_align, caller_resources):
         self.chain_node = chain_node
 
         # segment_list = list()  # List of query segments broken by template switches and untemplated insertions
@@ -60,7 +60,7 @@ class AnchoredInterval:
             raise RuntimeError(f'Anchors {chain_node.start_index} (index={head_row["INDEX"]}) and {chain_node.end_index} (index={tail_row["INDEX"]}): Non-matching REV, QRY_ID, or CHROM')
 
         # Get segment table
-        self.df_segment = get_segment_table(chain_node.start_index, chain_node.end_index, df_align, score_model)
+        self.df_segment = get_segment_table(chain_node.start_index, chain_node.end_index, df_align, caller_resources)
 
         # Get query and reference regions
         if self.is_rev:
@@ -250,7 +250,7 @@ def get_segment_table(start_index, end_index, df_align, caller_resources):
                 )
             )
 
-        seg_order += 1
+            seg_order += 1
 
         # Next aligned segment
         index_l = index_r

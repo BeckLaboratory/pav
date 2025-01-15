@@ -49,7 +49,7 @@ set-resources:
   - call_inv_part:mem_mb=4096
   - call_inv_part:runtime=120
   - call_inv_cluster:mem_mb=8192
-  - call_lg_discover:mem_mb=12288
+  - call_lg_discover:mem_mb=2048
   - call_lg_discover:runtime=120
   - call_merge_haplotypes:mem_mb=8192
   - call_merge_haplotypes:runtime=120

@@ -107,108 +107,113 @@ rule call_lg_discover:
                 k_util=kanapy.util.kmer.KmerUtil(config_params.inv_k_size),
                 kde=kde,
                 log_file=log_file,
+                verbose=True,
                 config_params=config_params
             )
 
             # Call
             lgsv_list = pavlib.lgsv.call.call_from_align(caller_resources, min_anchor_score=min_anchor_score, dot_dirname=dot_dirname)
 
-        # Remove duplicate IDs (most likely never actually removes variants, but creates table tracking issues if it does)
-        lgsv_list_dedup = list()
-        lgsv_id_set = set()
+            # Remove duplicate IDs (most likely never actually removes variants, but creates table tracking issues if it does)
+            lgsv_list_dedup = list()
+            lgsv_id_set = set()
 
-        for var in lgsv_list:
-            if var.variant_id not in lgsv_id_set:
-                lgsv_list_dedup.append(var)
-                lgsv_id_set.add(var.variant_id)
+            for var in lgsv_list:
+                if var.variant_id not in lgsv_id_set:
+                    lgsv_list_dedup.append(var)
+                    lgsv_id_set.add(var.variant_id)
 
-        lgsv_list = lgsv_list_dedup
+            lgsv_list = lgsv_list_dedup
 
-        # Create tables
-        df_list = {
-            'INS': list(),
-            'DEL': list(),
-            'INV': list(),
-            'CPX': list()
-        }
+            # Create tables
+            df_list = {
+                'INS': list(),
+                'DEL': list(),
+                'INV': list(),
+                'CPX': list()
+            }
 
-        for var in lgsv_list:
-            row = var.row()
+            for var in lgsv_list:
 
-            if row['SVTYPE'] not in df_list.keys():
-                raise RuntimeError(f'Unexpected SVTYPE: "{row["SVTYPE"]}"')
+                if caller_resources.verbose:
+                    print(f'Completing variant: {var}', file=caller_resources.log_file, flush=True)
 
-            df_list[row['SVTYPE']].append(row)
+                row = var.row()
 
-        if len(df_list['INS']) > 0:
-            df_ins = pd.concat(df_list['INS'], axis=1).T
-        else:
-            df_ins = pd.DataFrame([], columns=pavlib.lgsv.variant.InsertionVariant(None, None).row().index)
+                if row['SVTYPE'] not in df_list.keys():
+                    raise RuntimeError(f'Unexpected SVTYPE: "{row["SVTYPE"]}"')
 
-        if len(df_list['DEL']) > 0:
-            df_del = pd.concat(df_list['DEL'], axis=1).T
-        else:
-            df_del = pd.DataFrame([], columns=pavlib.lgsv.variant.DeletionVariant(None, None).row().index)
+                df_list[row['SVTYPE']].append(row)
 
-        if len(df_list['INV']) > 0:
-            df_inv = pd.concat(df_list['INV'], axis=1).T
-        else:
-            df_inv = pd.DataFrame([], columns=pavlib.lgsv.variant.InversionVariant(None, None).row().index)
+            if len(df_list['INS']) > 0:
+                df_ins = pd.concat(df_list['INS'], axis=1).T
+            else:
+                df_ins = pd.DataFrame([], columns=pavlib.lgsv.variant.InsertionVariant(None, None).row().index)
 
-        if len(df_list['CPX']) > 0:
-            df_cpx = pd.concat(df_list['CPX'], axis=1).T
-        else:
-            df_cpx = pd.DataFrame([], columns=pavlib.lgsv.variant.ComplexVariant(None, None).row().index)
+            if len(df_list['DEL']) > 0:
+                df_del = pd.concat(df_list['DEL'], axis=1).T
+            else:
+                df_del = pd.DataFrame([], columns=pavlib.lgsv.variant.DeletionVariant(None, None).row().index)
 
-        df_ins.sort_values(['#CHROM', 'POS', 'END', 'ID', 'QRY_REGION'], inplace=True)
-        df_del.sort_values(['#CHROM', 'POS', 'END', 'ID', 'QRY_REGION'], inplace=True)
-        df_inv.sort_values(['#CHROM', 'POS', 'END', 'ID', 'QRY_REGION'], inplace=True)
-        df_cpx.sort_values(['#CHROM', 'POS', 'END', 'ID', 'QRY_REGION'], inplace=True)
+            if len(df_list['INV']) > 0:
+                df_inv = pd.concat(df_list['INV'], axis=1).T
+            else:
+                df_inv = pd.DataFrame([], columns=pavlib.lgsv.variant.InversionVariant(None, None).row().index)
 
-        # Write variant tables
-        df_ins.to_csv(output.bed_ins, sep='\t', index=False, compression='gzip')
-        df_del.to_csv(output.bed_del, sep='\t', index=False, compression='gzip')
-        df_inv.to_csv(output.bed_inv, sep='\t', index=False, compression='gzip')
-        df_cpx.to_csv(output.bed_cpx, sep='\t', index=False, compression='gzip')
+            if len(df_list['CPX']) > 0:
+                df_cpx = pd.concat(df_list['CPX'], axis=1).T
+            else:
+                df_cpx = pd.DataFrame([], columns=pavlib.lgsv.variant.ComplexVariant(None, None).row().index)
 
-        # Write segment and reference trace tables
-        df_segment_list = list()
-        df_reftrace_list = list()
+            df_ins.sort_values(['#CHROM', 'POS', 'END', 'ID', 'QRY_REGION'], inplace=True)
+            df_del.sort_values(['#CHROM', 'POS', 'END', 'ID', 'QRY_REGION'], inplace=True)
+            df_inv.sort_values(['#CHROM', 'POS', 'END', 'ID', 'QRY_REGION'], inplace=True)
+            df_cpx.sort_values(['#CHROM', 'POS', 'END', 'ID', 'QRY_REGION'], inplace=True)
 
-        for var in lgsv_list:
-            if var.svtype != 'CPX':
-                continue
+            # Write variant tables
+            df_ins.to_csv(output.bed_ins, sep='\t', index=False, compression='gzip')
+            df_del.to_csv(output.bed_del, sep='\t', index=False, compression='gzip')
+            df_inv.to_csv(output.bed_inv, sep='\t', index=False, compression='gzip')
+            df_cpx.to_csv(output.bed_cpx, sep='\t', index=False, compression='gzip')
 
-            df_segment = var.interval.df_segment.copy()
-            df_segment.insert(3, 'ID', var.variant_id)
+            # Write segment and reference trace tables
+            df_segment_list = list()
+            df_reftrace_list = list()
 
-            df_reftrace = var.df_ref_trace.copy()
-            df_reftrace.insert(3, 'ID', var.variant_id)
+            for var in lgsv_list:
+                if var.svtype != 'CPX':
+                    continue
 
-            df_segment_list.append(df_segment)
-            df_reftrace_list.append(df_reftrace)
+                df_segment = var.interval.df_segment.copy()
+                df_segment.insert(3, 'ID', var.variant_id)
 
-        if len(df_segment_list) > 0:
-            df_segment = pd.concat(df_segment_list, axis=0)
-        else:
-            df_segment = pd.DataFrame([], columns=(
-                pavlib.lgsv.interval.SEGMENT_TABLE_FIELDS[:3] + ['ID'] + pavlib.lgsv.interval.SEGMENT_TABLE_FIELDS[3:]
-            ))
+                df_reftrace = var.df_ref_trace.copy()
+                df_reftrace.insert(3, 'ID', var.variant_id)
 
-        if len(df_reftrace_list) > 0:
-            df_reftrace = pd.concat(df_reftrace_list, axis=0)
-        else:
-            df_reftrace = pd.DataFrame([], columns=(
-                pavlib.lgsv.variant.REF_TRACE_COLUMNS[:3] + ['ID'] + pavlib.lgsv.variant.REF_TRACE_COLUMNS[3:]
-            ))
+                df_segment_list.append(df_segment)
+                df_reftrace_list.append(df_reftrace)
 
-        df_segment.to_csv(output.bed_cpx_seg, sep='\t', index=False, compression='gzip')
-        df_reftrace.to_csv(output.bed_cpx_ref, sep='\t', index=False, compression='gzip')
+            if len(df_segment_list) > 0:
+                df_segment = pd.concat(df_segment_list, axis=0)
+            else:
+                df_segment = pd.DataFrame([], columns=(
+                    pavlib.lgsv.interval.SEGMENT_TABLE_FIELDS[:3] + ['ID'] + pavlib.lgsv.interval.SEGMENT_TABLE_FIELDS[3:]
+                ))
 
-        # Compress graph dot files
-        if dot_dirname is not None:
-            with tarfile.open(output.dot_tar,'w') as tar_file:
-                for file in os.listdir(dot_dirname):
-                    tar_file.add(os.path.join(dot_dirname, file))
+            if len(df_reftrace_list) > 0:
+                df_reftrace = pd.concat(df_reftrace_list, axis=0)
+            else:
+                df_reftrace = pd.DataFrame([], columns=(
+                    pavlib.lgsv.variant.REF_TRACE_COLUMNS[:3] + ['ID'] + pavlib.lgsv.variant.REF_TRACE_COLUMNS[3:]
+                ))
+
+            df_segment.to_csv(output.bed_cpx_seg, sep='\t', index=False, compression='gzip')
+            df_reftrace.to_csv(output.bed_cpx_ref, sep='\t', index=False, compression='gzip')
+
+            # Compress graph dot files
+            if dot_dirname is not None:
+                with tarfile.open(output.dot_tar,'w') as tar_file:
+                    for file in os.listdir(dot_dirname):
+                        tar_file.add(os.path.join(dot_dirname, file))
 
             shutil.rmtree(dot_dirname)
