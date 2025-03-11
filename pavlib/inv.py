@@ -425,7 +425,10 @@ def get_state_table(
     :param max_ref_kmer_count: Remove high-count kmers greater than this value.
     :param force_norm: Normalize across states so that the sum of KDE_FWD, KDE_FWDREV, and KDE_REV is always 1.0. This
         is not needed for most KDE models.
-    :param log: Open log file.
+    :param expand_bound: Expand reference and query regions to include the convolution bandwidth and shrink it back down
+        after performing convolutions. This keeps the edges of region from dropping from convolutions, when set, the
+        edge density will still sum to 1 (approximately, FFT methods are not exact).
+    :param log: Open log file or None.
 
     :return: Initialized table.
     """

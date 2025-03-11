@@ -515,7 +515,7 @@ def get_override_config(config, asm_name, asm_table):
     return get_config_with_override(config, get_config_override_dict(asm_table_entry['CONFIG']))
 
 
-def read_assembly_table(asm_table_filename, config, strict_sample_name=False):
+def read_assembly_table(asm_table_filename, config=None, strict_sample_name=False):
     """
     Read assembly table.
 

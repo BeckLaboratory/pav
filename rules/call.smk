@@ -183,6 +183,16 @@ rule call_merge_haplotypes_batch:
 # Merge support
 #
 
+localrules: call_callable_regions_all
+
+# Generate BED files for all callable regions
+rule call_callable_regions_all:
+    input:
+        bed=lambda wildcards: pavlib.pipeline.expand_pattern(
+            'results/{asm_name}/callable/callable_regions_{hap}_500.bed.gz', ASM_TABLE, config
+        )
+
+
 # Make a table of mappable regions by merging aligned loci with loci covered by alignment-truncating events.
 # "flank" parameter is an integer describing how far away records may be to merge (similar to the "bedtools merge"
 # "slop" parameter). The flank is not added to the regions that are output.

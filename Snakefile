@@ -99,13 +99,13 @@ rule pav_all:
 
 ### Includes ###
 
-include: os.path.join(PIPELINE_DIR, 'rules/pipeline.snakefile')
+include: os.path.join(PIPELINE_DIR, 'rules/pipeline.smk')
 
-include: os.path.join(PIPELINE_DIR, 'rules/data.snakefile')
-include: os.path.join(PIPELINE_DIR, 'rules/align.snakefile')
-include: os.path.join(PIPELINE_DIR, 'rules/call.snakefile')
-include: os.path.join(PIPELINE_DIR, 'rules/call_inv.snakefile')
-include: os.path.join(PIPELINE_DIR, 'rules/call_lg.snakefile')
-include: os.path.join(PIPELINE_DIR, 'rules/tracks.snakefile')
-include: os.path.join(PIPELINE_DIR, 'rules/figures.snakefile')
-include: os.path.join(PIPELINE_DIR, 'rules/vcf.snakefile')
+include: os.path.join(PIPELINE_DIR, 'rules/data.smk')
+include: os.path.join(PIPELINE_DIR, 'rules/align.smk')
+include: os.path.join(PIPELINE_DIR, 'rules/call.smk')
+include: os.path.join(PIPELINE_DIR, 'rules/call_inv.smk')
+include: os.path.join(PIPELINE_DIR, 'rules/call_lg.smk')
+include: os.path.join(PIPELINE_DIR, 'rules/tracks.smk')
+include: os.path.join(PIPELINE_DIR, 'rules/figures.smk')
+include: os.path.join(PIPELINE_DIR, 'rules/vcf.smk')
