@@ -185,6 +185,11 @@ CONFIG_PARAM_LIST = [
     ConfigParam('align_params', 'str', is_null=True,
                 description='Parameters for the aligner. Default depends on aligner (minimap2: "-x asm5", lra: ""). '
                             'Keyword "pav2" reverts to legacy parameters used by PAV versions 1 & 2.'),
+    ConfigParam('lc_model', 'str', default='default',
+                description='Low-confidence (LC) alignment prediction model. May be the name of a model packaged with'
+                            'PAV or a path to a custom model. See "files/lcmodel/LC_MODEL.md for more information." in'
+                            'the PAV distribution for more information',
+                advanced=True),
     ConfigParam('align_score_model', 'str', pavlib.align.score.DEFAULT_ALIGN_SCORE_MODEL,
                 description='Default alignment score model as a string argument to pavlib.align.score.get_score_model(). '
                             'These parameters are also used for scoring large variants.',

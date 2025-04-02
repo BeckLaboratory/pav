@@ -97,3 +97,10 @@ INV_KDE_FUNC = 'auto'         # Convolution method. "fft" is a Fast-Fourier Tran
 # that the pipeline should go ahead without crashing. Return codes other than 0 and ERR_INV_FAIL indicate a problem or
 # that should be corrected.
 ERR_INV_FAIL = 125
+
+
+#
+# PAV Paths
+#
+
+PAV_LC_MODEL_SUBDIR = 'files/lcmodel/models'

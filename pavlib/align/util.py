@@ -1,6 +1,7 @@
 # Alignment base operations
 
 import numpy as np
+import os
 import pandas as pd
 import pysam
 
@@ -32,6 +33,18 @@ CIGAR_CODE_TO_CHAR = {
     CIGAR_X: 'X'
 }
 
+CIGAR_CHAR_TO_CODE = {
+    'M': CIGAR_M,
+    'I': CIGAR_I,
+    'D': CIGAR_D,
+    'N': CIGAR_N,
+    'S': CIGAR_S,
+    'H': CIGAR_H,
+    'P': CIGAR_P,
+    '=': CIGAR_EQ,
+    'X': CIGAR_X
+}
+
 # Indices for tuples returned by trace_cigar_to_zero()
 TC_INDEX = 0
 TC_OP_LEN = 1
@@ -52,7 +65,7 @@ TRIM_DESC = {
 }
 
 
-def align_bed_to_depth_bed(df, df_fai=None, index_sep=','):
+def align_bed_to_depth_bed(df, df_fai=None, index_sep=',', retain_filtered=False):
     """
     Get a BED file of alignment depth from an alignment BED.
 
@@ -72,6 +85,7 @@ def align_bed_to_depth_bed(df, df_fai=None, index_sep=','):
     :param df: Alignment BED file.
     :param df_fai: FAI series (keys = reference sequence names, values = sequence lengths).
     :param index_sep: Entries in the index are separated by this character
+    :param retain_filtered: Do not drop filtered alignment records if True.
 
     :return: A Pandas DataTable with depth across all reference loci.
     """
@@ -90,7 +104,16 @@ def align_bed_to_depth_bed(df, df_fai=None, index_sep=','):
 
     align_list = list()
 
+    if not retain_filtered and 'FILTER' in df.columns:
+        is_filtered = (df['FILTER'] != 'PASS') & ~ pd.isnull(df['FILTER'])
+    else:
+        is_filtered = pd.Series(False, index=df.index)
+
     for index, row in df.iterrows():
+
+        if is_filtered[index]:
+            continue
+
         align_list.append(
             (str(row['#CHROM']), row['POS'], 1, row['INDEX'], row['QRY_ID'], row['INDEX'])
         )
@@ -285,7 +308,6 @@ def align_bed_to_depth_bed(df, df_fai=None, index_sep=','):
 
     return df_bed
 
-
 def cigar_str_to_tuples(record):
     """
     Get an iterator for cigar operation tuples. Each tuple is (cigar-len, cigar-op).
@@ -295,7 +317,7 @@ def cigar_str_to_tuples(record):
     :return: Iterator of CIGAR operation tuples.
     """
 
-    if type(record) == pd.Series:
+    if isinstance(record, pd.Series):
         cigar = record['CIGAR']
     else:
         cigar = record
@@ -324,6 +346,12 @@ def cigar_str_to_tuples(record):
 
         pos = len_pos + 1
 
+def count_aligned_bases(record):
+    """
+    Count the number of bases aligned in an alignment record ignoring bases in gaps. This is an appropriate denominator
+    for calculating the fraction of mismatch bases over aligned bases.
+    """
+    return sum([cigar_len for cigar_len, cigar_op in cigar_str_to_tuples(record) if cigar_op in {'M', '=', 'X'}])
 
 def match_bp(record, right_end):
     """
@@ -616,6 +644,31 @@ def get_align_bed(align_file, df_qry_fai, hap, min_mapq=0, score_model=None):
     :return: BED file of alignment records.
     """
 
+    columns =[
+        '#CHROM', 'POS', 'END',
+        'INDEX',
+        'QRY_ID', 'QRY_POS', 'QRY_END', 'QRY_ORDER',
+        'RG', 'AO',
+        'MAPQ',
+        'REV', 'FLAGS', 'HAP',
+        'CIGAR',
+        'SCORE', 'SCORE_PROP',
+        'SCORE_MM', 'SCORE_MM_PROP',
+        'QRY_PROP',
+        'FILTER'
+    ]
+
+    columns_feature_set = {  # Columns computed post SAM parsing
+        'SCORE', 'SCORE_PROP',
+        'SCORE_MM', 'SCORE_MM_PROP',
+        'QRY_PROP'
+    }
+
+    columns_no_features = [col for col in columns if col not in columns_feature_set]
+
+    if align_file is None or os.stat(align_file).st_size == 0:
+        return pd.DataFrame([], columns=columns)
+
     # Get score model
     score_model = pavlib.align.score.get_score_model(score_model)
 
@@ -680,6 +733,7 @@ def get_align_bed(align_file, df_qry_fai, hap, min_mapq=0, score_model=None):
                         record.query_name,
                         qry_len - qry_map_end if record.is_reverse else qry_map_pos,
                         qry_len - qry_map_pos if record.is_reverse else qry_map_end,
+                        -1,  # QRY_ORDER filled in later
 
                         # pavlib.seq.Region(record.query_name, qry_map_pos, qry_map_pos + qry_map_len).to_base1_string(),
 
@@ -693,41 +747,32 @@ def get_align_bed(align_file, df_qry_fai, hap, min_mapq=0, score_model=None):
                         hap,
 
                         cigar_string,
-                        score_model.score_cigar_tuples(cigar_tuples, rev=True)  # rev for pysam CIGAR (operation code before length)
+
+                        np.nan
                     ],
-                    index=[
-                        '#CHROM', 'POS', 'END',
-                        'INDEX',
-                        'QRY_ID', 'QRY_POS', 'QRY_END',
-                        'RG', 'AO',
-                        'MAPQ',
-                        'REV', 'FLAGS', 'HAP',
-                        'CIGAR', 'SCORE'
-                    ]
+                    index=columns_no_features
                 )
             )
 
     # Merge records
-    if len(record_list) > 0:
-        df = pd.concat(record_list, axis=1).T
-    else:
-        df = pd.DataFrame(
-            [],
-            columns=[
-                '#CHROM', 'POS', 'END',
-                'INDEX',
-                'QRY_ID', 'QRY_POS', 'QRY_END',
-                'RG', 'AO',
-                'MAPQ',
-                'REV', 'FLAGS', 'HAP',
-                'CIGAR', 'SCORE'
-            ]
+    if len(record_list) == 0:
+        return pd.DataFrame(
+            [], columns=columns
         )
+
+    df = pd.concat(record_list, axis=1).T
+
+    df['SCORE'] = pavlib.align.features.score(df, score_model)
+    df['SCORE_PROP'] = pavlib.align.features.score_prop(df, score_model)
+    df['SCORE_MM'] = pavlib.align.features.score_mm(df, score_model)
+    df['SCORE_MM_PROP'] = pavlib.align.features.score_mm_prop(df, score_model)
+    df['QRY_PROP'] = pavlib.align.features.query_proportion(df, df_qry_fai)
+
+    # Set filter
+    df['FILTER'] = 'PASS'
 
     # Assign order per query sequence
     df.sort_values(['QRY_ID', 'QRY_POS', 'QRY_END'], inplace=True)
-
-    df['QRY_ORDER'] = -1
 
     for qry_id in df['QRY_ID'].unique():
         df.loc[df['QRY_ID'] == qry_id, 'QRY_ORDER'] = df.loc[df['QRY_ID'] == qry_id, 'QRY_POS'].rank().astype(int) - 1
@@ -737,6 +782,12 @@ def get_align_bed(align_file, df_qry_fai, hap, min_mapq=0, score_model=None):
 
     # Check sanity
     df.apply(check_record, df_qry_fai=df_qry_fai, axis=1)
+
+    # Check columns
+    missing_cols = [col for col in columns if col not in df.columns]
+
+    if missing_cols:
+        raise RuntimeError(f'Missing columns in alignment BED: {", ".join(missing_cols)}')
 
     # Return BED
     return df

@@ -9,6 +9,7 @@ POS_THICK	uint	thickStart	Coding region start	Coding region start
 END_THICK	uint	thickEnd	Coding region end	Coding region end
 COL	uint	reserved	Hap Color	Color by haplotype
 INDEX	uint	recordIndex	Record index	Unique index (per haplotype) for each alignment record
+FILTER	lstring	filter	Filter	Alignment filter (PASS if not filtered)
 QRY_ID	lstring	qryId	Query ID	Query (contig) ID
 QRY_POS	uint	qryPos	Query POS	Query start position in original contig (not reverse complemented if alignment was)
 QRY_END	uint	qryEnd	Query END	Query end position in original contig (not reverse complemented if alignment was)
@@ -20,6 +21,10 @@ REV	string	isRev	Rev	Alignment was reversed if True
 FLAGS	lstring	alignFlags	Flags	Alignment flags. May be a list if alignment was aggregated.
 HAP	string	haplotype	Haplotype	Haplotype
 PAV_SCORE	float	pavScore	Score	Alignment score using PAVs scoring system.
+PAV_SCORE_PROP	float	pavScoreProp	Score prop.	Proportion of the alignment score over the maximum score.
+PAV_SCORE_MM	float	pavScoreMm	Mismatch score	Alignment score for mismatches (INS/DEL not penalized)
+PAV_SCORE_MM_PROP	float	pavScoreMmProp	Mismatch prop.	Proportion of the alignment score over all aligned based (INS/DEL not in numerator or denominator for this proportion)
+QRY_PROP	float	qryProp	Query prop.	Proportion of the assembled query sequence represented by this alignment.
 TRIM_REF_L	uint	trimRefL	Align trim (ref L)	Number of reference bases trimmed from the left side
 TRIM_REF_R	uint	trimRefR	Align trim (ref R)	Number of reference bases trimmed from the right side
 TRIM_QRY_L	uint	trimTigL	Align trim (tig L)	Number of contig (query) bases trimmed from the left side

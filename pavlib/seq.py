@@ -19,7 +19,7 @@ import kanapy
 import pavlib
 
 
-class Region:
+class Region(object):
     """
     Represents a region (chromosome, pos, and end) in 0-based half-open coordinates (BED).
 
@@ -276,7 +276,10 @@ class Region:
         :return: New copy.
         """
         return Region(
-            self.chrom, self.pos, self.end, self.is_rev, self.pos_min, self.pos_max, self.end_min, self.end_max
+            self.chrom, self.pos, self.end, self.is_rev,
+            self.pos_min, self.pos_max,
+            self.end_min, self.end_max,
+            self.pos_aln_index, self.end_aln_index
         )
 
 

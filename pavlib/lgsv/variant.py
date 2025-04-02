@@ -126,6 +126,7 @@ class Variant(object, metaclass=abc.ABCMeta):
         self.interval = interval
 
         self.score_variant = -np.inf
+        self.filter = 'PASS'
 
         self.df_ref_trace = None
 
@@ -338,6 +339,7 @@ class InsertionVariant(Variant):
         return pd.Series(
             [
                 self.chrom, self.pos, self.end, self.variant_id, self.svtype, self.svlen,
+                self.filter,
                 str(self.region_qry), self.strand,
                 self.svsubtype, self.score_variant,
                 self.call_source,
@@ -346,6 +348,7 @@ class InsertionVariant(Variant):
             ],
             index=[
                 '#CHROM', 'POS', 'END', 'ID', 'SVTYPE', 'SVLEN',
+                'FILTER',
                 'QRY_REGION', 'QRY_STRAND',
                 'SVSUBTYPE', 'VAR_SCORE',
                 'CALL_SOURCE',
@@ -445,6 +448,7 @@ class DeletionVariant(Variant):
         return pd.Series(
             [
                 self.chrom, self.pos, self.end, self.variant_id, self.svtype, self.svlen,
+                self.filter,
                 str(self.region_qry), self.strand,
                 self.score_variant,
                 self.call_source,
@@ -453,6 +457,7 @@ class DeletionVariant(Variant):
             ],
             index=[
                 '#CHROM', 'POS', 'END', 'ID', 'SVTYPE', 'SVLEN',
+                'FILTER',
                 'QRY_REGION', 'QRY_STRAND',
                 'VAR_SCORE',
                 'CALL_SOURCE',
@@ -604,6 +609,7 @@ class InversionVariant(Variant):
         return pd.Series(
             [
                 self.chrom, self.pos, self.end, self.variant_id, self.svtype, self.svlen,
+                self.filter,
                 str(self.region_qry_inner), self.strand,
                 self.score_variant,
                 str(self.region_ref_outer), str(self.region_qry_outer),
@@ -614,6 +620,7 @@ class InversionVariant(Variant):
             ],
             index=[
                 '#CHROM', 'POS', 'END', 'ID', 'SVTYPE', 'SVLEN',
+                'FILTER',
                 'QRY_REGION', 'QRY_STRAND',
                 'VAR_SCORE',
                 'REGION_REF_OUTER', 'REGION_QRY_OUTER',
@@ -687,6 +694,7 @@ class ComplexVariant(Variant):
         return pd.Series(
             [
                 self.chrom, self.pos, self.end, self.variant_id, self.svtype, self.svlen,
+                self.filter,
                 str(self.region_qry), self.strand,
                 self.seg_n, self.struct_ref, self.struct_qry,
                 self.score_variant,
@@ -695,6 +703,7 @@ class ComplexVariant(Variant):
             ],
             index=[
                 '#CHROM', 'POS', 'END', 'ID', 'SVTYPE', 'SVLEN',
+                'FILTER',
                 'QRY_REGION', 'QRY_STRAND',
                 'SEG_N', 'STRUCT_REF', 'STRUCT_QRY',
                 'VAR_SCORE',

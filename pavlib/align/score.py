@@ -8,9 +8,9 @@ import re
 
 import pavlib
 
-AFFINE_SCORE_MATCH = 2
-AFFINE_SCORE_MISMATCH = 4
-AFFINE_SCORE_GAP = ((4, 2), (24, 1))
+AFFINE_SCORE_MATCH = 2.0
+AFFINE_SCORE_MISMATCH = 4.0
+AFFINE_SCORE_GAP = ((4.0, 2.0), (24.0, 1.0))
 AFFINE_SCORE_TS = None
 
 DEFAULT_ALIGN_SCORE_MODEL = f'affine::match={AFFINE_SCORE_MATCH},mismatch={AFFINE_SCORE_MISMATCH},gap={";".join([f"{gap_open}:{gap_extend}" for gap_open, gap_extend in AFFINE_SCORE_GAP])}'
@@ -114,10 +114,28 @@ class ScoreModel(object, metaclass=abc.ABCMeta):
 
             cigar_tuples = pavlib.align.util.cigar_str_to_tuples(cigar_tuples)
 
-        if not rev:
-            return np.sum([self.score(op_len, op_code) for op_len, op_code in cigar_tuples])
-        else:
-            return np.sum([self.score(op_len, op_code) for op_code, op_len in cigar_tuples])
+        if rev:
+            cigar_tuples = list(cigar_tuples)[::-1]
+
+        return np.sum([self.score(op_len, op_code) for op_len, op_code in cigar_tuples])
+
+    @abc.abstractmethod
+    def mismatch_model(self):
+        """
+        Return a copy of this score model that does not penalize gaps. Used for computing the score of mismatches.
+        """
+        raise NotImplementedError
+
+    @abc.abstractmethod
+    def model_param_string(self):
+        """
+        Return a parameter string for this score model.
+        """
+        raise NotImplementedError
+
+    @abc.abstractmethod
+    def __eq__(self, other):
+        raise NotImplementedError
 
     @abc.abstractmethod
     def __repr__(self):
@@ -176,7 +194,7 @@ class AffineScoreModel(ScoreModel):
         """
 
         if n == 0.0:
-            return 0
+            return 0.0
 
         return np.max(
             [
@@ -192,6 +210,83 @@ class AffineScoreModel(ScoreModel):
         :return: Template switch score.
         """
         return self.score_template_switch
+
+    def mismatch_model(self):
+        """
+        Create a version of this model that scores only mismatches (ignores gaps). Thd mismatch model retains the
+        template-switch penalty based on the original model even if it was derived from gap scores. A new model
+        is returned and this model is not altered.
+        """
+        return AffineScoreModel(
+            match=self.score_match,
+            mismatch=self.score_mismatch,
+            affine_gap=[(0.0, 0.0)],
+            template_switch=self.score_template_switch
+        )
+
+    def score_cigar_tuples(self, cigar_tuples, rev=False):
+        """
+        A vectorized implementation of summing scores for affine models.
+
+        :param cigar_tuples: List of tuples of (op_len, op_code). If string, then assume this is a list of CIGAR
+            operations and convert to tuples.
+        :param rev: If True, each tuple is "(CIGAR op, CIGAR length)" (pysam) instead of the default order "(CIGAR
+            length, CIGAR op)" (CIGAR-string order).
+
+        :return: Sum of scores for each CIGAR operation.
+        """
+
+        if cigar_tuples is None:
+            raise RuntimeError('CIGAR list is None')
+
+        if isinstance(cigar_tuples, str):
+            if len(cigar_tuples.strip()) == 0:
+                raise RuntimeError('CIGAR string is empty')
+
+            cigar_tuples = list(pavlib.align.util.cigar_str_to_tuples(cigar_tuples))
+        else:
+            cigar_tuples = list(cigar_tuples)
+
+        if rev:
+            cigar_tuples = cigar_tuples[::-1]
+
+        # Convert to arrays of numeric types
+        op_len = np.array([op_len for op_len, op_code in cigar_tuples])
+        op_code = np.array([op_code for op_len, op_code in cigar_tuples])
+
+        if not np.issubdtype(op_code.dtype, int):
+            op_code = np.vectorize(pavlib.align.util.CIGAR_CHAR_TO_CODE.get)(op_code)
+
+        if np.any(op_code == pavlib.align.util.CIGAR_M):
+            raise RuntimeError('Cannot score alignments with match ("M") in CIGAR string (requires "=" and "X")')
+
+        # Score gaps
+        gap_arr = op_len[(op_code == pavlib.align.util.CIGAR_D) | (op_code == pavlib.align.util.CIGAR_I)]
+
+        gap_score = np.full((gap_arr.shape[0], 2), -np.inf)
+
+        for gap_open, gap_extend in self.score_affine_gap:
+            gap_score[:, 1] = gap_open + gap_arr * gap_extend
+            gap_score[:, 0] = np.max(gap_score, axis=1)
+
+        return \
+                (op_len[op_code == pavlib.align.util.CIGAR_EQ] * self.score_match).sum() + \
+                (op_len[op_code == pavlib.align.util.CIGAR_X] * self.score_mismatch).sum() + \
+                gap_score[:, 0].sum()
+
+    def model_param_string(self):
+        return f'affine::match={self.score_match},mismatch={self.score_mismatch},gap={";".join([f"{gap_open}:{gap_extend}" for gap_open, gap_extend in self.score_affine_gap])}'
+
+    def __eq__(self, other):
+
+        if other is None or not isinstance(other, self.__class__):
+            return False
+
+        return \
+                self.score_match == other.score_match and \
+                self.score_mismatch == other.score_mismatch and \
+                self.score_affine_gap == other.score_affine_gap and \
+                self.score_template_switch == other.score_template_switch
 
     def __repr__(self):
         gap_str = ';'.join([f'{abs(gap_open)}:{abs(gap_extend)}' for gap_open, gap_extend in self.score_affine_gap])
@@ -229,7 +324,6 @@ def get_score_model(param_string=None):
         return get_affine_by_params(model_params)
 
     raise RuntimeError(f'Unrecognized score model type: {model_type}')
-
 
 def get_affine_by_params(param_string):
     """

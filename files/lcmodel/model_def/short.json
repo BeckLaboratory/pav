@@ -1,0 +1,13 @@
+{
+  "name": "short",
+  "type": "logistic",
+  "description": "Short test model",
+  "features": [
+    "SCORE_PROP", "SCORE_MM_PROP", "ANCHOR_PROP", "QRY_PROP"
+  ],
+  "threshold": 0.5,
+  "epochs": 8,
+  "test_size": 2000,
+  "k_fold": 4,
+  "batch_size": 512
+}

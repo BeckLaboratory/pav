@@ -282,11 +282,26 @@ rule tracks_align:
 
         del df['CIGAR']
 
+        # Set Filter
+        if 'FILTER' not in df.columns:
+            df['FILTER'] = 'PASS'
+
+        df['FILTER'] = df['FILTER'].fillna('PASS')
+
         # Rename SCORE to PAV_SCORE
-        df.columns = [{'SCORE': 'PAV_SCORE'}.get(col, col) for col in df.columns]
+        df.columns = [
+            {
+                'SCORE': 'PAV_SCORE',
+                'SCORE_PROP': 'PAV_SCORE_PROP',
+                'SCORE_MM': 'PAV_SCORE_MM',
+                'SCORE_MM_PROP': 'PAV_SCORE_MM_PROP'
+            }.get(col, col) for col in df.columns
+        ]
 
         # Sort
         df.sort_values(['#CHROM', 'POS', 'END', 'QRY_ID'], inplace=True)
+
+        df.reset_index(drop=True, inplace=True)
 
         # Add BED fields
         df['POS_THICK'] = df['POS']
@@ -300,16 +315,32 @@ rule tracks_align:
         colormap_index = np.linspace(0, 0.9999, len(hap_list))
         colormap = mpl.colormaps[ALIGN_COLORMAP]
 
-        hap_color = {  # Color to RGB string (e.g. "(0.267004, 0.004874, 0.329415, 1.0)" from colormap to "68,1,84")
-            hap_list[i]: ','.join([str(int(col * 255)) for col in mpl.colors.to_rgb(colormap(colormap_index[i]))])
-                for i in range(len(hap_list))
-        }
-
-        # hap_color = {
-        #     hap_list[i]: colormap(colormap_index[i]) for i in range(len(hap_list))
+        # hap_color = {  # Color to RGB string (e.g. "(0.267004, 0.004874, 0.329415, 1.0)" from colormap to "68,1,84")
+        #     hap_list[i]: ','.join([str(int(col * 255)) for col in mpl.colors.to_rgb(colormap(colormap_index[i]))])
+        #         for i in range(len(hap_list))
         # }
 
-        df['COL'] = df['HAP'].apply(lambda val: hap_color[val])
+        hap_color_pass = {  # Color to RGB string (e.g. "(0.267004, 0.004874, 0.329415, 1.0)" from colormap to "68,1,84")
+            (hap_list[i], True): mpl.colors.to_rgb(colormap(colormap_index[i])) for i in range(len(hap_list))
+        }
+
+        hap_color_fail = {  # Lighter color for filtered alignments
+            (hap_name, False): pavlib.fig.util.lighten_color(color, 0.25) for (hap_name, is_pass), color in hap_color_pass.items()
+        }
+
+        hap_color = pd.Series(
+            hap_color_pass | hap_color_fail,
+            name='COL'
+        )
+
+        hap_color.index = hap_color.index.set_names(('HAP', 'PASS'))
+
+        hap_color = hap_color.apply(lambda val: ','.join([str(int(col * 255)) for col in val]))
+
+        df['COL'] = df.apply(lambda row:
+            hap_color[(row['HAP'], row['FILTER'] == 'PASS')],
+            axis=1
+        )
 
         # Sort columns
         head_cols = ['#CHROM', 'POS', 'END', 'ID', 'SCORE', 'STRAND', 'POS_THICK', 'END_THICK', 'COL']

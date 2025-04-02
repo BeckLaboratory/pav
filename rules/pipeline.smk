@@ -25,7 +25,7 @@ def get_config(key, wildcards):
 
     return pavlib.config.get_config(
         key,
-        wildcards.asm_name if 'asm_name' in wildcards else None,
+        wildcards.asm_name if 'asm_name' in wildcards.keys() else None,
         config,
         ASM_TABLE
     )

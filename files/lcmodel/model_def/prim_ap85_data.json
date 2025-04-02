@@ -1,0 +1,123 @@
+{
+  "data": [
+    {
+      "name": "hgsvc-vk-asm20-human-hs1",
+      "comment": "HGSVC3 (Logsdon 2025) assemblies with hifiasm (asm20) - T2T-CHM13v2.0 - Human (no trios)",
+      "path": "/path/to/pav/vk-asm20/hs1",
+      "exclude": [
+        "PanTro", "PanPan", "GorGor", "PonAbe", "PonPyg", "SymSyn",
+        "HG00733", "HG00731", "HG00732",
+        "HG00514", "HG00512", "HG00513",
+        "NA19240", "NA19238", "NA19239"
+      ]
+    },
+    {
+      "name": "hgsvc-vk-asm20-human-hg38",
+      "comment": "HGSVC3 (Logsdon 2025) assemblies with hifiasm (asm20) - GRCh38 - Human (no trios)",
+      "path": "/path/to/pav/vk-asm20/hg38",
+      "exclude": [
+        "PanTro", "PanPan", "GorGor", "PonAbe", "PonPyg", "SymSyn",
+        "HG00733", "HG00731", "HG00732",
+        "HG00514", "HG00512", "HG00513",
+        "NA19240", "NA19238", "NA19239"
+      ]
+    },
+
+    {
+      "name": "hgsvc-vk-asm20-nhp10mya-hs1",
+      "comment": "NHP T2T (Yoo 2025) assemblies with hifiasm (asm20) - T2T-CHM13v2.0 - Non-human primates (< 12 mya)",
+      "path": "/path/to/pav/vk-asm20/hs1",
+      "include": ["PanTro", "PanPan", "GorGor"]
+    },
+    {
+      "name": "hgsvc-vk-asm20-nhp10mya-hg38",
+      "comment": "NHP T2T (Yoo 2025) assemblies with hifiasm (asm20) - GRCh38 - Closest Non-human primates (< 12 mya)",
+      "path": "/path/to/pav/vk-asm20/hg38",
+      "include": ["PanTro", "PanPan", "GorGor"]
+    },
+
+    {
+      "name": "hgsvc-vk-asm5-human-hs1",
+      "comment": "HGSVC3 (Logsdon 2025) assemblies with hifiasm (asm5) - T2T-CHM13v2.0 - Human (no trios)",
+      "path": "/path/to/pav/vk-asm5/hs1",
+      "exclude": [
+        "PanTro", "PanPan", "GorGor", "PonAbe", "PonPyg", "SymSyn",
+        "HG00733", "HG00731", "HG00732",
+        "HG00514", "HG00512", "HG00513",
+        "NA19240", "NA19238", "NA19239"
+      ]
+    },
+    {
+      "name": "hgsvc-vk-asm5-human-hg38",
+      "comment": "HGSVC3 (Logsdon 2025) assemblies with hifiasm (asm5) - GRCh38 - Human (no trios)",
+      "path": "/path/to/pav/vk-asm5/hg38",
+      "exclude": [
+        "PanTro", "PanPan", "GorGor", "PonAbe", "PonPyg", "SymSyn",
+        "HG00733", "HG00731", "HG00732",
+        "HG00514", "HG00512", "HG00513",
+        "NA19240", "NA19238", "NA19239"
+      ]
+    },
+
+    {
+      "name": "hgsvc-vk-asm20-humantrio-hs1",
+      "eval": "true",
+      "comment": "HGSVC3 (Logsdon 2025) assemblies with hifiasm (asm20) - T2T-CHM13v2.0 - Human trios",
+      "path": "/path/to/pav/vk-asm20/hs1",
+      "include": [
+        "HG00733", "HG00731", "HG00732",
+        "HG00514", "HG00512", "HG00513",
+        "NA19240", "NA19238", "NA19239"
+      ]
+    },
+    {
+      "name": "hgsvc-vk-asm20-humantrio-hg38",
+      "eval": "true",
+      "comment": "HGSVC3 (Logsdon 2025) assemblies with hifiasm (asm20) - GRCh38 - Human trios",
+      "path": "/path/to/pav/vk-asm20/hg38",
+      "include": [
+        "HG00733", "HG00731", "HG00732",
+        "HG00514", "HG00512", "HG00513",
+        "NA19240", "NA19238", "NA19239"
+      ]
+    },
+
+    {
+      "name": "hgsvc-vk-asm5-humantrio-hs1",
+      "eval": "true",
+      "comment": "HGSVC3 (Logsdon 2025) assemblies with hifiasm (asm5) - T2T-CHM13v2.0 - Human trios",
+      "path": "/path/to/pav/vk-asm5/hs1",
+      "include": [
+        "HG00733", "HG00731", "HG00732",
+        "HG00514", "HG00512", "HG00513",
+        "NA19240", "NA19238", "NA19239"
+      ]
+    },
+    {
+      "name": "hgsvc-vk-asm5-humantrio-hg38",
+      "eval": "true",
+      "comment": "HGSVC3 (Logsdon 2025) assemblies with hifiasm (asm5) - GRCh38 - Human trios",
+      "path": "/path/to/pav/vk-asm5/hg38",
+      "include": [
+        "HG00733", "HG00731", "HG00732",
+        "HG00514", "HG00512", "HG00513",
+        "NA19240", "NA19238", "NA19239"
+      ]
+    },
+
+    {
+      "name": "hgsvc-vk-asm20-nhpdiv-hs1",
+      "eval": "true",
+      "comment": "NHP T2T (Yoo 2025) assemblies with hifiasm (asm20) - T2T-CHM13v2.0 - Diverged non-human primates (> 12 mya)",
+      "path": "/path/to/pav/vk-asm20/hs1",
+      "include": ["PonAbe", "PonPyg", "SymSyn"]
+    },
+    {
+      "name": "hgsvc-vk-asm20-nhpdiv-hg38",
+      "eval": "true",
+      "comment": "NHP T2T (Yoo 2025) assemblies with hifiasm (asm20) - GRCh38 - Diverged non-human primates (> 12 mya)",
+      "path": "/path/to/pav/vk-asm20/hg38",
+      "include": ["PonAbe", "PonPyg", "SymSyn"]
+    }
+  ]
+}

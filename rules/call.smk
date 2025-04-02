@@ -201,7 +201,8 @@ rule call_callable_regions:
         bed_align='results/{asm_name}/align/trim-qryref/align_qry_{hap}.bed.gz',
         bed_lg_del='results/{asm_name}/lgsv/svindel_del_{hap}.bed.gz',
         bed_lg_ins='results/{asm_name}/lgsv/svindel_ins_{hap}.bed.gz',
-        bed_lg_inv='results/{asm_name}/lgsv/sv_inv_{hap}.bed.gz'
+        bed_lg_inv='results/{asm_name}/lgsv/sv_inv_{hap}.bed.gz',
+        bed_lg_cpx='results/{asm_name}/lgsv/sv_cpx_{hap}.bed.gz'
     output:
         bed='results/{asm_name}/callable/callable_regions_{hap}_{flank}.bed.gz'
     run:
@@ -219,7 +220,8 @@ rule call_callable_regions:
                 input.bed_align,
                 input.bed_lg_del,
                 input.bed_lg_ins,
-                input.bed_lg_inv
+                input.bed_lg_inv,
+                input.bed_lg_cpx
             ],
             pad=flank
         )

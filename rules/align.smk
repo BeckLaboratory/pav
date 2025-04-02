@@ -43,7 +43,23 @@ rule align_all:
             trim=('none', 'qry', 'qryref')
         )
 
-# Create a depth BED file for alignments.
+# Create a BED file of low-confidence alignment regions
+# rule align_lowconf_bed:
+#     input:
+#         bed_qry='results/{asm_name}/align/trim-qry/align_qry_{hap}.bed.gz',
+#         bed_none='results/{asm_name}/align/trim-none/align_qry_{hap}.bed.gz'
+#     output:
+#         bed_qry='results/{asm_name}/align/lowconf/align_qry_{hap}_lowconf_qry-coord.bed.gz',
+#         bed_ref='results/{asm_name}/align/lowconf/align_qry_{hap}_lowconf_ref-coord.bed.gz'
+#     run:
+#
+#         # Read
+#         df_qry = pd.read_csv(input.bed_qry, sep='\t', dtype={'#CHROM': str, 'QRY_ID': str})
+#         df_none = pd.read_csv(input.bed_none, sep='\t', dtype={'#CHROM': str, 'QRY_ID': str})
+#
+
+
+# Create a depth BED file for alignments.f
 rule align_depth_bed:
     input:
         bed='results/{asm_name}/align/trim-{trim}/align_qry_{hap}.bed.gz'
@@ -121,68 +137,30 @@ rule align_trim_qry:
         df.to_csv(output.bed, sep='\t', index=False, compression='gzip')
 
 # Get alignment BED for one part (one aligned cell or split BAM) in one assembly.
+#
+# Note: lcmodel training uses the alignment score model saved in the stats TSV file.
 rule align_get_bed:
     input:
         sam='temp/{asm_name}/align/trim-none/align_qry_{hap}.sam.gz',
         qry_fai='data/query/{asm_name}/query_{hap}.fa.gz.fai'
     output:
         bed='results/{asm_name}/align/trim-none/align_qry_{hap}.bed.gz',
-        align_head='results/{asm_name}/align/trim-none/align_qry_{hap}.headers.gz'
+        align_head='results/{asm_name}/align/trim-none/align_qry_{hap}.headers.gz',
+        tsv_stats='results/{asm_name}/align/trim-none/stats_qry_{hap}.tsv.gz'
     params:
-        align_score=lambda wildcards: get_config('align_score_model', wildcards)
+        align_score=lambda wildcards: get_config('align_score_model', wildcards),
+        lc_model=lambda wildcards: get_config('lc_model', wildcards)
     run:
-
-        # Write an empty file if SAM is emtpy
-        if os.stat(input.sam).st_size == 0:
-
-            pd.DataFrame(
-                [],
-                columns=[
-                    '#CHROM', 'POS', 'END',
-                    'INDEX',
-                    'QRY_ID', 'QRY_POS', 'QRY_END',
-                    'RG', 'AO',
-                    'MAPQ',
-                    'REV', 'FLAGS', 'HAP',
-                    'CIGAR', 'SCORE',
-                    'TRIM_REF_L', 'TRIM_REF_R', 'TRIM_QRY_L', 'TRIM_QRY_R'
-                ]
-            ).to_csv(
-                output.bed, sep='\t', index=False, compression='gzip'
-            )
-
-            with open(output.align_head, 'w') as out_file:
-                pass
-
-            return
 
         # Read FAI
         df_qry_fai = svpoplib.ref.get_df_fai(input.qry_fai)
         df_qry_fai.index = df_qry_fai.index.astype(str)
 
+        # Get score model
+        score_model = pavlib.align.score.get_score_model(params.align_score)
+
         # Read alignments as a BED file.
-        df = pavlib.align.util.get_align_bed(input.sam, df_qry_fai, wildcards.hap, score_model=params.align_score)
-
-        # Write SAM headers
-        with gzip.open(input.sam, 'rt') as in_file:
-            with gzip.open(output.align_head, 'wt') as out_file:
-
-                line = next(in_file)
-
-                while True:
-
-                    if not line.strip():
-                        continue
-
-                    if not line.startswith('@'):
-                        break
-
-                    out_file.write(line)
-
-                    try:
-                        line = next(in_file)
-                    except StopIteration:
-                        break
+        df = pavlib.align.util.get_align_bed(input.sam, df_qry_fai, wildcards.hap, score_model=score_model)
 
         # Add trimming fields
         df['TRIM_REF_L'] = 0
@@ -190,8 +168,73 @@ rule align_get_bed:
         df['TRIM_QRY_L'] = 0
         df['TRIM_QRY_R'] = 0
 
+        # Write SAM headers
+        if os.stat(input.sam).st_size > 0:
+            with gzip.open(input.sam, 'rt') as in_file:
+                with gzip.open(output.align_head, 'wt') as out_file:
+
+                    line = next(in_file)
+
+                    while True:
+
+                        if not line.strip():
+                            continue
+
+                        if not line.startswith('@'):
+                            break
+
+                        out_file.write(line)
+
+                        try:
+                            line = next(in_file)
+                        except StopIteration:
+                            break
+
+        # Apply alignment LC (low-confidence) model
+        lc_model = pavlib.align.lcmodel.get_model(
+            params.lc_model,
+            os.path.join(PIPELINE_DIR, pavlib.const.PAV_LC_MODEL_SUBDIR)
+        )
+
+        df['FILTER'] = np.where(
+            lc_model(
+                df, existing_score_model=score_model, qry_fai=df_qry_fai
+            ), 'LCALIGN', df['FILTER']
+        )
+
         # Write
         df.to_csv(output.bed, sep='\t', index=False, compression='gzip')
+
+        # Create stats
+        df_pass = df[df['FILTER'] == 'PASS']
+        df_fail = df[df['FILTER'] != 'PASS']
+
+        prop_n_pass = (df_pass.shape[0] / df.shape[0]) if df.shape[0] > 0 else 0.0
+        prop_n_fail = (df_fail.shape[0] / df.shape[0]) if df.shape[0] > 0 else 0.0
+
+        bp_pass = (df_pass['QRY_END'] - df_pass['QRY_POS']).sum()
+        bp_fail = (df_fail['QRY_END'] - df_fail['QRY_POS']).sum()
+        bp_all = (df['END'] - df['POS']).sum()
+
+        prop_bp_pass = bp_pass / bp_all if bp_all > 0 else 0.0
+        prop_bp_fail = bp_fail / bp_all if bp_all > 0 else 0.0
+
+        df_stats = pd.Series(
+            [
+                df.shape[0],
+                df_pass.shape[0], prop_n_pass, bp_pass, prop_bp_pass,
+                df_fail.shape[0], prop_n_fail, bp_fail, prop_bp_fail,
+                params.align_score
+            ],
+            index=[
+                'N',
+                'PASS_N', 'PASS_PROP', 'PASS_BP', 'PASS_BP_PROP',
+                'FAIL_N', 'FAIL_PROP', 'FAIL_BP', 'FAIL_BP_PROP',
+                'SCORE_MODEL'
+            ]
+        )
+
+        df_stats.to_csv(output.tsv_stats, sep='\t', index=True, header=False, compression='gzip')
 
 
 # Map query as SAM. Pull read information from the SAM before sorting and writing CRAM since tool tend to change
