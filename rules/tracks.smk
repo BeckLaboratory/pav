@@ -32,30 +32,71 @@ ALIGN_COLORMAP = 'viridis'
 VAR_BED_PREMERGE_PATTERN = 'results/{{asm_name}}/bed_hap/{filter}/{{hap}}/{vartype}_{svtype}.bed.gz'
 
 CPX_COLOR_DICT = {
-    'INS': '64,64,255',
-    'DEL': '255,64,64',
-    'INV': '96,255,96',
+    'INS': (0.2510, 0.2510, 1.0000),
+    'DEL': (1.0000, 0.2510, 0.2510),
+    'INV': (0.3765, 1.0000, 0.3765),
 
-    'DUP': '255,64,255',
-    'TRP': '217,54,217',
-    'QUAD': '179,45,179',
-    'HDUP': '96,32,96',
+    'DUP': (1.0000, 0.2510, 1.0000),
+    'TRP': (0.8510, 0.2118, 0.8510),
+    'QUAD': (0.7020, 0.1765, 0.7020),
+    'HDUP': (0.3765, 0.1255, 0.3765),
 
-    'INVDUP': '82,217,94',
-    'INVTRP': '70,179,70',
-    'INVQUAD': '55,140,55',
-    'INVHDUP': '40,102,40',
+    'INVDUP': (0.3216, 0.8510, 0.3686),
+    'INVTRP': (0.2745, 0.7020, 0.2745),
+    'INVQUAD': (0.2157, 0.5490, 0.2157),
+    'INVHDUP': (0.1569, 0.4000, 0.1569),
 
-    'MIXDUP': '217, 133, 37',
-    'MIXTRP': '179, 109, 30',
-    'MIXQUAD': '139, 85, 24',
-    'MIXHDUP': '102, 63, 18',
+    'MIXDUP': (0.8510, 0.5216, 0.1451),
+    'MIXTRP': (0.7020, 0.4275, 0.1176),
+    'MIXQUAD': (0.5451, 0.3333, 0.0941),
+    'MIXHDUP': (0.4000, 0.2471, 0.0706),
 
-    'NML': '51,51,51',
+    'NML': (0.2000, 0.2000, 0.2000),
 
-    'UNMAPPED': '115, 115, 115'
+    'UNMAPPED': (0.4510, 0.4510, 0.4510)
 }
 
+def get_colors_pass_fail(color_dict, lighten_amt=0.25):
+    """
+    Get a dictionary of colors for PASS/FAIL records. Takes a dictionary of colors with keys describing the color
+    (arbitrary string) and values of (R, G, B) tuples (0.0-1.0 values). Returns a dictionary with tuple keys with
+    the original name and "True" for PASS and "False" for FAIL. For example, if the input dict has color "COLOR1",
+    the output dict has keys ("COLOR1", True) and ("COLOR1", False) where "True" is the original color and "False"
+    is an altered version of the color (lightened).
+
+    :param color_dict: Input color dictionary.
+    :param lighten_amt: Lightend FAIL coloors by this amount (0.0-1.0).
+
+    :return: Output color dictionary with tuple keys ("COLOR", True) for PASS records and ("COLOR", False) for FAIL
+        records for each "COLOR" in `color_dict`.
+    """
+
+    color_dict_out = {
+        (key, True): color for key, color in color_dict.items()
+    }
+
+    for key, color in color_dict.items():
+        color_dict_out[(key, False)] = pavlib.fig.util.lighten_color(color, lighten_amt)
+
+    return color_dict_out
+
+def color_to_ucsc_string(color):
+    """
+    Convert a matplotlib color to a UCSC color string.
+
+    :param color: Tuple of RGB values (0.0-1.0) or a dict with tuples of RGB values.
+
+    :return: Color string (if `color` is a tuple) or color dictionary of strings (if `color` is a dictionary of
+        tuple values).
+    """
+
+    if isinstance(color, dict):
+        return {
+            key: ','.join((str(int(color_val * 255)) for color_val in color_val_tup))
+                for key, color_val_tup in color.items()
+        }
+
+    return ','.join((str(int(color_val * 255)) for color_val in color))
 
 def _track_get_input_bed(wildcards):
     """
@@ -469,6 +510,18 @@ rule tracks_lgsv_cpx_bed:
         df_cpx = pd.read_csv(input.bed_cpx, sep='\t', dtype={'#CHROM': str}, low_memory=False)
         df_cpx.sort_values(['#CHROM', 'POS', 'END'], inplace=True)
 
+        if 'FILTER' not in df_cpx.columns:
+            df_cpx['FILTER'] = 'PASS'
+        else:
+            df_cpx['FILTER'] = df_cpx['FILTER'].fillna('PASS').astype(str)
+
+        # # Set colors
+        # if df_cpx.shape[0] > 0:
+        #     color_dict = get_colors_pass_fail(CPX_COLOR_DICT)
+        #     df_cpx['COL'] = df_cpx.apply(lambda row: color_dict[(row['TYPE'], row['FILTER'] == 'PASS')], axis=1)
+        # else:
+        #     df_cpx['COL'] = np.nan
+
         # Read structure tables
         df_rt_all = pd.read_csv(
             input.bed_cpx_ref, sep='\t', low_memory=False,
@@ -487,9 +540,6 @@ rule tracks_lgsv_cpx_bed:
 
             df_rt = df_rt_all.loc[df_rt_all['ID'] == row['ID']].copy()
             df_seg = df_seg_all.loc[df_seg_all['ID'] == row['ID']]
-
-            # if df_rt.shape[0] == 0:
-            #     raise RuntimeError(f'Variant {row["ID"]} not found in the CPX reference trace table')
 
             if df_seg.shape[0] == 0:
                 raise RuntimeError(f'Variant {row["ID"]} not found in the CPX segment table')
@@ -519,7 +569,7 @@ rule tracks_lgsv_cpx_bed:
             if len(trace_list) > 0:
                 df_rt = pd.concat([df_rt, pd.concat(trace_list, axis=1).T], axis=0)
 
-            for col in ('QRY_REGION', 'QRY_STRAND', 'SEG_N', 'STRUCT_REF', 'STRUCT_QRY', 'VAR_SCORE', 'ANCHOR_SCORE_MIN', 'ANCHOR_SCORE_MAX'):
+            for col in ('FILTER', 'QRY_REGION', 'QRY_STRAND', 'SEG_N', 'STRUCT_REF', 'STRUCT_QRY', 'VAR_SCORE', 'ANCHOR_SCORE_MIN', 'ANCHOR_SCORE_MAX'):
                 df_rt[col] = row[col]
 
             df_rt.reset_index(drop=True, inplace=True)
@@ -543,19 +593,21 @@ rule tracks_lgsv_cpx_bed:
 
             df['END'] = df.apply(lambda row: np.min([row['END'], df_fai.loc[row['#CHROM']]]), axis=1)
 
+        # Set colors
+        if df.shape[0] > 0:
+            color_dict = color_to_ucsc_string(get_colors_pass_fail(CPX_COLOR_DICT))
+            df['COL'] = df.apply(lambda row: color_dict[(row['TYPE'], row['FILTER'] == 'PASS')], axis=1)
+        else:
+            df['COL'] = np.nan
+
         # Add bed track fields
         df['SCORE'] = 1000
         df['STRAND'] = '.'
         df['POS_THICK'] = df['POS']
         df['END_THICK'] = df['END']
 
-        if df.shape[0] > 0:
-            df['COL'] = df.apply(lambda row: CPX_COLOR_DICT[row['TYPE']], axis=1)
-        else:
-            df['COL'] = np.nan
-
         # Arrange columns
-        head_cols = ['#CHROM', 'POS', 'END', 'ID', 'SCORE', 'STRAND', 'POS_THICK', 'END_THICK', 'COL']
+        head_cols = ['#CHROM', 'POS', 'END', 'ID', 'SCORE', 'STRAND', 'POS_THICK', 'END_THICK', 'COL', 'FILTER']
         tail_cols = [col for col in df.columns if col not in head_cols]
 
         df = df.loc[:, head_cols + tail_cols]

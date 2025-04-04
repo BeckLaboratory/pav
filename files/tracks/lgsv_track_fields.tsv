@@ -10,6 +10,7 @@ END_THICK	uint	thickEnd	Coding region end	Coding region end
 COL	uint	reserved	"Blue (insertion), red (deletion), green (inversion)"	"Blue (insertion), red (deletion), green (inversion)"
 SVTYPE	string	svType	SV type	Variant type
 SVLEN	uint	svLen	SV length	Variant size
+FILTER	string	filter	Filter	Variant filter (PASS or a comma-separated list of fail keywords).
 HAP	string	haplotype	Haplotype	Haplotype variant was discovered on.
 QRY_REGION	lstring	qryRegion	Query region	Query region
 QRY_STRAND	char[1]	qryStrand	Query orientation	Orientation vs reference of lead contig

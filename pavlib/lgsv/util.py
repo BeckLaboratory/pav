@@ -26,14 +26,11 @@ class CallerResources(object):
         * k_util: K-mer utility.
         * inv_params: Inversion parameters.
         * kde: KDE model.
-
         * align_lift: Object for lifting alignment coordinates between query and reference through the alignment.
         * cache_qry_upper: Query sequence cache used for homology searches. Caches the last query sequence in
             upper-case.
         * cache_ref_upper: Reference sequence cache used for homology searches. Caches the last reference sequence in
             upper-case.
-        * off_gap_mult: Off-target gap multiplier (e.g. reference gap for an insertion or query gap for a deletion).
-        *
     """
 
     def __init__(self,

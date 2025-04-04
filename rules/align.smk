@@ -159,8 +159,18 @@ rule align_get_bed:
         # Get score model
         score_model = pavlib.align.score.get_score_model(params.align_score)
 
+        # Get LC model
+        lc_model = pavlib.align.lcmodel.get_model(
+            params.lc_model,
+            os.path.join(PIPELINE_DIR, pavlib.const.PAV_LC_MODEL_SUBDIR)
+        )
+
         # Read alignments as a BED file.
-        df = pavlib.align.util.get_align_bed(input.sam, df_qry_fai, wildcards.hap, score_model=score_model)
+        df = pavlib.align.util.get_align_bed(
+            input.sam, df_qry_fai, wildcards.hap,
+            score_model=score_model,
+            lc_model=lc_model
+        )
 
         # Add trimming fields
         df['TRIM_REF_L'] = 0
@@ -189,18 +199,6 @@ rule align_get_bed:
                             line = next(in_file)
                         except StopIteration:
                             break
-
-        # Apply alignment LC (low-confidence) model
-        lc_model = pavlib.align.lcmodel.get_model(
-            params.lc_model,
-            os.path.join(PIPELINE_DIR, pavlib.const.PAV_LC_MODEL_SUBDIR)
-        )
-
-        df['FILTER'] = np.where(
-            lc_model(
-                df, existing_score_model=score_model, qry_fai=df_qry_fai
-            ), 'LCALIGN', df['FILTER']
-        )
 
         # Write
         df.to_csv(output.bed, sep='\t', index=False, compression='gzip')

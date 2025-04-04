@@ -8,6 +8,7 @@ import pavlib
 
 SEGMENT_TABLE_FIELDS = [  # Fields for creating an empty table
     '#CHROM', 'POS', 'END',
+    'FILTER_PASS',
     'IS_ANCHOR', 'IS_ALIGNED', 'IS_REV',
     'QRY_ID', 'QRY_POS', 'QRY_END',
     'LEN_REF', 'LEN_QRY',
@@ -62,6 +63,11 @@ class AnchoredInterval:
         # Get segment table
         self.df_segment = get_segment_table(chain_node.start_index, chain_node.end_index, df_align, caller_resources)
 
+        # Get filters
+        self.align_filters = ','.join(sorted(
+            {val for val_list in df_align.iloc[np.arange(chain_node.start_index, chain_node.end_index + 1)]['FILTER'] for val in val_list.split(',')} - {'PASS'}
+        ))
+
         # Get query and reference regions
         if self.is_rev:
             qry_pos = self.df_segment.iloc[-1]['QRY_END']
@@ -92,6 +98,17 @@ class AnchoredInterval:
 
         self.len_qry = len(self.region_qry)
 
+        # Check for filtered intervals
+        self.is_anchor_pass = np.all(self.df_segment.loc[self.df_segment['IS_ANCHOR'], 'FILTER_PASS'])
+        self.is_aligned_pass = np.all(self.df_segment.loc[self.df_segment['IS_ALIGNED'], 'FILTER_PASS'])
+
+        self.aligned_pass_bp = self.df_segment.loc[
+            self.df_segment['IS_ALIGNED'] & ~ self.df_segment['IS_ANCHOR'],
+            'LEN_QRY'
+        ].sum()
+
+        self.aligned_pass_prop = self.aligned_pass_bp / self.len_qry if self.len_qry > 0 else 0.0
+
         # Test invariants
         if self.len_qry < 0:
             raise ValueError(f'Qry region length is negative: {self.region_qry}')
@@ -119,6 +136,15 @@ def get_segment_table(start_index, end_index, df_align, caller_resources):
 
     score_model = caller_resources.score_model
 
+    # Check alignment FILTER column
+    if 'FILTER' not in df_align.columns:
+        df_align = df_align.copy()
+        df_align['FILTER'] = 'PASS'
+
+    elif np.any(df_align['FILTER'].isnull()):
+        df_align = df_align.copy()
+        df_align['FILTER'] = df_align['FILTER'].fillna('PASS')
+
     # Create templated and untemplated insertions for each aligned segment and transition.
     # Save row_l outside the loop, row_r may be transformed inside the loop and should be preserved for the next round
     # as row_r.
@@ -142,6 +168,7 @@ def get_segment_table(start_index, end_index, df_align, caller_resources):
         pd.Series(
             [
                 head_row['#CHROM'], head_row['POS'], head_row['END'],
+                head_row['FILTER'] == 'PASS',
                 True, True, head_row['REV'],
                 qry_id, head_row['QRY_POS'], head_row['QRY_END'],
                 head_row['END'] - head_row['POS'], head_row['QRY_END'] - head_row['QRY_POS'],
@@ -152,6 +179,7 @@ def get_segment_table(start_index, end_index, df_align, caller_resources):
             ],
             index=[
                 '#CHROM', 'POS', 'END',
+                'FILTER_PASS',
                 'IS_ANCHOR', 'IS_ALIGNED', 'IS_REV',
                 'QRY_ID', 'QRY_POS', 'QRY_END',
                 'LEN_REF', 'LEN_QRY',
@@ -200,6 +228,7 @@ def get_segment_table(start_index, end_index, df_align, caller_resources):
                 pd.Series(
                     [
                         np.nan, -1, -1,
+                        False,
                         False, False, False,
                         qry_id, gap_qry_pos, gap_qry_end,
                         0, gap_len_qry,
@@ -210,6 +239,7 @@ def get_segment_table(start_index, end_index, df_align, caller_resources):
                     ],
                     index=[
                         '#CHROM', 'POS', 'END',
+                        'FILTER_PASS',
                         'IS_ANCHOR', 'IS_ALIGNED', 'IS_REV',
                         'QRY_ID', 'QRY_POS', 'QRY_END',
                         'LEN_REF', 'LEN_QRY',
@@ -229,6 +259,7 @@ def get_segment_table(start_index, end_index, df_align, caller_resources):
                 pd.Series(
                     [
                         row_r['#CHROM'], row_r['POS'], row_r['END'],
+                        row_r['FILTER'] == 'PASS',
                         False, True, row_r['REV'],
                         qry_id, row_r['QRY_POS'], row_r['QRY_END'],
                         row_r['END'] - row_r['POS'], row_r['QRY_END'] - row_r['QRY_POS'],
@@ -239,6 +270,7 @@ def get_segment_table(start_index, end_index, df_align, caller_resources):
                     ],
                     index=[
                         '#CHROM', 'POS', 'END',
+                        'FILTER_PASS',
                         'IS_ANCHOR', 'IS_ALIGNED', 'IS_REV',
                         'QRY_ID', 'QRY_POS', 'QRY_END',
                         'LEN_REF', 'LEN_QRY',
@@ -263,6 +295,7 @@ def get_segment_table(start_index, end_index, df_align, caller_resources):
         pd.Series(
             [
                 tail_row['#CHROM'], tail_row['POS'], tail_row['END'],
+                tail_row['FILTER'] == 'PASS',
                 True, True, tail_row['REV'],
                 qry_id, tail_row['QRY_POS'], tail_row['QRY_END'],
                 tail_row['END'] - tail_row['POS'], tail_row['QRY_END'] - tail_row['QRY_POS'],
@@ -273,6 +306,7 @@ def get_segment_table(start_index, end_index, df_align, caller_resources):
             ],
             index=[
                 '#CHROM', 'POS', 'END',
+                'FILTER_PASS',
                 'IS_ANCHOR', 'IS_ALIGNED', 'IS_REV',
                 'QRY_ID', 'QRY_POS', 'QRY_END',
                 'LEN_REF', 'LEN_QRY',
@@ -292,6 +326,7 @@ def get_segment_table(start_index, end_index, df_align, caller_resources):
         segment_list, axis=1
     ).T.astype({
         '#CHROM': str, 'POS': int, 'END': int,
+        'FILTER_PASS': bool,
         'IS_ANCHOR': bool, 'IS_ALIGNED': bool, 'IS_REV': bool,
         'QRY_ID': str, 'QRY_POS': int, 'QRY_END': int,
         'LEN_REF': int, 'LEN_QRY': int,

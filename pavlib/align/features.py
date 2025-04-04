@@ -94,6 +94,26 @@ def score_mm_prop(df, score_model):
 
     return mm_prop
 
+def mismatch_prop(df):
+    """
+    Compute the proportion of mismatches alignment records.
+
+    The mismatch proportion is defined as the number of mismatches divided by the number of aligned bases. Unlike
+    the mismatch score proportion, this mismatch proportion is not based on an alignment score model where matches and
+    mismatches are typically weighted differently.
+
+    :param df: DataFrame of alignment records.
+
+    :return: A Series of alignment record mismatch proportions.
+    """
+
+    cigar_tuples = df['CIGAR'].apply(pavlib.align.util.cigar_str_to_tuples)
+
+
+
+    df['CIGAR'].apply(svpoplib.align.util.count_mismatches)
+
+
 def anchor_proportion(df, score_prop_conf):
     """
     Determine if an alignment record is between high-confidence alignment records along the query sequence. Values

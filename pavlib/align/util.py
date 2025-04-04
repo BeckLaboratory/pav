@@ -7,6 +7,9 @@ import pysam
 
 import pavlib.seq
 
+# Filter definitions
+FILTER_LCALIGN = 'LCALIGN'
+
 # CIGAR operations
 _INT_STR_SET = {'0', '1', '2', '3', '4', '5', '6', '7', '8', '9'}
 _CIGAR_OP_SET = {'M', 'I', 'D', 'N', 'S', 'H', 'P', '=', 'X'}
@@ -353,6 +356,41 @@ def count_aligned_bases(record):
     """
     return sum([cigar_len for cigar_len, cigar_op in cigar_str_to_tuples(record) if cigar_op in {'M', '=', 'X'}])
 
+def mismatch_prop(record):
+    """
+    Get the proportion of mismatches in an alignment record defined as the number of mismatches (CIGAR "X") divided by
+    the number of aligned bases (CIGAR "=" and CIGAR "X"). Gaps are ignored. CIGAR "M' operations throw ValueError.
+
+    :param record: Alignment record or a CIGAR string. If the type is a pandas Series, the "CIGAR" column is used. If
+        it is a string, then it is assumed to be a CIGAR string. Otherwise, it is assumed to be a list of cigar
+        operations (i.e. from cigar_str_to_tuples()).
+
+    :return: Mismatch proportion (float) or `np.nan` if there are no aligned bases.
+    """
+
+    if isinstance(record, (pd.Series, str)):
+        record = cigar_str_to_tuples(record['CIGAR'])
+
+    match_bp = 0
+    mismatch_bp = 0
+
+    for cigar_len, cigar_op in record:
+        if cigar_op == CIGAR_EQ:
+            match_bp += cigar_len
+
+        elif cigar_op == CIGAR_X:
+            mismatch_bp += cigar_len
+
+        elif cigar_op == CIGAR_M:
+            raise ValueError('Cannot compute mismatch prop for CIGAR "M" operations')
+
+    align_bp = match_bp + mismatch_bp
+
+    if align_bp == 0:
+        return np.nan
+
+    return mismatch_bp / align_bp
+
 def match_bp(record, right_end):
     """
     Get the number of matching bases at the end of an alignment. Used by variant callers to left-align SVs through
@@ -628,7 +666,7 @@ def count_cigar(row, allow_m=False):
     return ref_bp, qry_bp, clip_h_l, clip_s_l, clip_h_r, clip_s_r
 
 
-def get_align_bed(align_file, df_qry_fai, hap, min_mapq=0, score_model=None):
+def get_align_bed(align_file, df_qry_fai, hap, min_mapq=0, score_model=None, lc_model=None):
     """
     Read alignment file as a BED file that PAV can process. Drops any records marked as unaligned by the SAM flag.
 
@@ -769,7 +807,14 @@ def get_align_bed(align_file, df_qry_fai, hap, min_mapq=0, score_model=None):
     df['QRY_PROP'] = pavlib.align.features.query_proportion(df, df_qry_fai)
 
     # Set filter
-    df['FILTER'] = 'PASS'
+    if lc_model is not None:
+        df['FILTER'] = np.where(
+            lc_model(
+                df, existing_score_model=score_model, qry_fai=df_qry_fai
+            ), FILTER_LCALIGN, 'PASS'
+        )
+    else:
+        df['FILTER'] = 'PASS'
 
     # Assign order per query sequence
     df.sort_values(['QRY_ID', 'QRY_POS', 'QRY_END'], inplace=True)

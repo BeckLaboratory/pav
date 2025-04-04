@@ -533,13 +533,18 @@ class InversionVariant(Variant):
             # No more than 10% aligned outside of the inversion site (allow for small alignments)
             return
 
-        if not var_region_kde.kde_inv and np.sum(df_int.loc[is_prox & (df_int['IS_REV'] == interval.is_rev), 'LEN_QRY']) > np.sum(df_int.loc[is_prox & (df_int['IS_REV'] != interval.is_rev), 'LEN_QRY']):
+        if not var_region_kde.try_inv and \
+                np.sum(
+                    df_int.loc[is_prox & (df_int['IS_REV'] == interval.is_rev), 'LEN_QRY']
+                ) > np.sum(
+                    df_int.loc[is_prox & (df_int['IS_REV'] != interval.is_rev), 'LEN_QRY']
+                ):
             # Inveted by KDE, or Inverted segment lengths should outweigh the non-inverted segments if the inversion is called by alignment.
 
             return
 
         # Call variant by KDE
-        if var_region_kde is not None and var_region_kde.kde_inv:
+        if var_region_kde is not None and var_region_kde.try_inv:
 
             # Set region boundaries
             self.region_ref_inner = interval.region_ref
