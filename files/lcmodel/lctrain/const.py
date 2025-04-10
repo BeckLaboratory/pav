@@ -26,11 +26,20 @@ DEFAULT_SCORE_MM_PROP_CONF = None
 # Default alignment score mismatch proportion for rescuing alignments from low-confidence clusters (must also match the rescue length).
 DEFAULT_SCORE_MM_PROP_RESCUE = None
 
+# Default mismatch proportion for initially confident alignments for feature development.
+DEFAULT_MATCH_PROP_CONF = 0.95
+
+# Default mismatch proportion for rescuing alignments from low-confidence clusters (must also match the rescue length).
+DEFAULT_MATCH_PROP_RESCUE = 0.99
+
 # Default length for rescuing alignments from low-confidence clusters (must also match score proportion)
 DEFAULT_RESCUE_LENGTH = 10000
 
 # Default flank for merging adjacent low-confidence alignments
 DEFAULT_MERGE_FLANK = 2000
+
+# Default features
+DEFAULT_FEATURES = ['SCORE_PROP', 'MATCH_PROP', 'ANCHOR_PROP', 'QRY_PROP']
 
 # Default score model definition (saved here so the features stage can find it)
 DEFAULT_SCORE_MODEL = pavlib.align.score.DEFAULT_ALIGN_SCORE_MODEL

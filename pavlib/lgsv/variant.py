@@ -5,9 +5,11 @@ Large variant discovery call methods
 import abc
 import numpy as np
 import pandas as pd
-import scipy.stats
 
-import pavlib
+from .. import align
+from .. import const
+from .. import seq
+
 
 #
 # Variant call objects
@@ -205,10 +207,10 @@ class Variant(object, metaclass=abc.ABCMeta):
             return self.interval.chain_node.end_index if not self.is_null() else '*'
 
         elif name == 'region_ref':
-            return self.interval.region_ref if not self.is_null() else pavlib.seq.Region('*', 0, 1)
+            return self.interval.region_ref if not self.is_null() else seq.Region('*', 0, 1)
 
         elif name == 'QRY_REGION':
-            return self.interval.region_qry if not self.is_null() else pavlib.seq.Region('*', 0, 1)
+            return self.interval.region_qry if not self.is_null() else seq.Region('*', 0, 1)
 
         elif name == 'seg_n':
             return self.interval.df_segment.shape[0] if not self.is_null() else 0
@@ -778,7 +780,7 @@ class VariantMatchError(Exception):
 # Reference and query structure routines
 #
 
-def collapse_segments(variant_call, smooth_factor=pavlib.const.DEFAULT_LG_SMOOTH_SEGMENTS):
+def collapse_segments(variant_call, smooth_factor=const.DEFAULT_LG_SMOOTH_SEGMENTS):
     """
     Smooth over segments in the variant call. Alignment records over a template are often broken by the alignment. These
     may contain real variants or not, but do create noise in the complex call structure (i.e. a single large
@@ -980,7 +982,7 @@ def get_reference_trace(interval, df_segment=None, smooth_factor=0.0, svlen=None
     ])
 
     # Make depth table
-    df_depth = pavlib.align.util.align_bed_to_depth_bed(df_segment.loc[df_segment['IS_ALIGNED']], df_fai=None, index_sep=';')
+    df_depth = align.util.align_bed_to_depth_bed(df_segment.loc[df_segment['IS_ALIGNED']], df_fai=None, index_sep=';')
 
     del df_depth['QRY_ID']
 
@@ -1179,7 +1181,7 @@ def get_ref_struct_str(df_ref_trace, len_ref, len_qry):
 
     return ':'.join(df_ref_trace.apply(lambda row: f'{row["TYPE"]}({row["LEN"]})', axis=1))
 
-def smooth_ref_trace(df_ref_trace, smooth_factor=pavlib.const.DEFAULT_LG_SMOOTH_SEGMENTS, svlen=None):
+def smooth_ref_trace(df_ref_trace, smooth_factor=const.DEFAULT_LG_SMOOTH_SEGMENTS, svlen=None):
     """
     Smooth a reference trace table.
 

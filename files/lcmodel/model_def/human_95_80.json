@@ -3,15 +3,15 @@
   "type": "logistic",
   "description": "Low-confidence alignment model trained on HGSVC assemblies (Logsdon 2025)",
   "features": [
-    "SCORE_PROP", "SCORE_MM_PROP", "ANCHOR_PROP", "QRY_PROP"
+    "SCORE_PROP", "MATCH_PROP", "ANCHOR_PROP", "QRY_PROP"
   ],
   "threshold": 0.5,
   "epochs": 16,
   "test_size": 50000,
   "k_fold": 4,
   "batch_size": 512,
-  "score_mm_prop_conf": 0.95,
-  "score_mm_prop_rescue": 0.99,
+  "match_prop_conf": 0.95,
+  "match_prop_rescue": 0.99,
   "score_prop_conf": 0.8,
   "score_prop_rescue": 0.95
 }

@@ -6,7 +6,7 @@ import json
 import os
 import re
 
-import pavlib
+from .lcmodel_null import LCAlignModelNull
 
 def get_model(lc_model_path=None, search_dir=None, alias_filename_list=None):
     """
@@ -34,12 +34,14 @@ def get_model(lc_model_path=None, search_dir=None, alias_filename_list=None):
     :return: LC alignment model.
     """
 
+    import pavlib.align.lcmodel
+
     if alias_filename_list is None:
         alias_filename_list = list()
 
     # Check path and null-model cases
     if lc_model_path is None:
-        return pavlib.align.lcmodel.LCAlignModelNull()
+        return LCAlignModelNull()
 
     if not isinstance(lc_model_path, str):
         raise RuntimeError(f'LC align model path is not a string: {type(lc_model_path)}')
@@ -47,7 +49,7 @@ def get_model(lc_model_path=None, search_dir=None, alias_filename_list=None):
     lc_model_path = lc_model_path.strip()
 
     if lc_model_path.lower() == 'none' or lc_model_path == '':
-        return pavlib.align.lcmodel.LCAlignModelNull()
+        return LCAlignModelNull()
 
     if not isinstance(lc_model_path, str):
         raise RuntimeError(f'LC align model path is not a string: {type(lc_model_path)}')

@@ -15,6 +15,13 @@ import uuid
 logger = logging.getLogger(__name__)
 
 class Stage(object, metaclass=abc.ABCMeta):
+    model_name: str
+    stage_name: str
+    lctrain_config: dict
+    workdir_root: str
+    workdir: str
+    stage_cache_filename: str
+    outdir: str
 
     STAGE_CACHE_FILENAME_BASE = 'stage_cache.json.gz'
 

@@ -52,7 +52,7 @@ class StageTrain(Stage):
         # Get training config (Ignore data split arguments handled the feature extraction stage)
         train_params = {
             key: val for key, val in self.lctrain_config.items()
-                 if key not in {'data'} | StageFeatures.FEATURE_PARAMS | StageFeatures.SPLIT_PARAMS
+                 if key not in {'data',} | StageFeatures.FEATURE_PARAMS - {'features'} | StageFeatures.SPLIT_PARAMS
         }
 
         # Check cached UUID for previous stages

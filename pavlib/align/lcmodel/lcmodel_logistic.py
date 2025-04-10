@@ -4,7 +4,10 @@ Logistic model implementation.
 
 import numpy as np
 import os
+import pandas as pd
 import scipy.special
+
+from . import score
 
 from .lcmodel import LCAlignModel
 
@@ -56,7 +59,12 @@ class LCAlignModelLogistic(LCAlignModel):
         self.check_known_attributes()
 
 
-    def __call__(self, df, existing_score_model=None, qry_fai=None):
+    def __call__(self,
+                 df: pd.DataFrame,
+                 existing_score_model: score.ScoreModel=None,
+                 op_arr_list: list[np.ndarray[int, int]]=None,
+                 qry_fai: pd.Series=None
+        ) -> np.ndarray:
         """
         Predict low-confidence alignments.
 
@@ -64,6 +72,9 @@ class LCAlignModelLogistic(LCAlignModel):
         :param existing_score_model: Existing score model used to compute features already in the alignment table (df).
             If this alignment score model matches the alignment score model used to train this LC model, then features
             are re-used instead of re-computed.
+        :param op_arr_list: A list of operation matrices (op_code: first column, op_len: second column) for each query
+            record in `df`. If `None` and alignment operations are needed, they are generated from the CIGAR column of
+            `df`.
         :param qry_fai: Query FASTA index. Needed if features need to be computed using the full query sequence size
             (i.e. QRY_PROP).
 
@@ -71,5 +82,10 @@ class LCAlignModelLogistic(LCAlignModel):
         """
 
         return self.activation(
-            self.get_feature_table(df, existing_score_model, qry_fai).values.astype(float) @ self.w + self.b
+            self.get_feature_table(
+                df=df,
+                existing_score_model=existing_score_model,
+                op_arr_list=op_arr_list,
+                qry_fai=qry_fai
+            ).values.astype(float) @ self.w + self.b
         ).reshape(-1) >= self.threshold

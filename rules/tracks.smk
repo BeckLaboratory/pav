@@ -13,7 +13,6 @@ import svpoplib
 global ASM_TABLE
 global PIPELINE_DIR
 global REF_FAI
-global get_config
 global temp
 
 
@@ -222,11 +221,13 @@ rule tracks_hap_call:
         field_table_file_name = os.path.join(PIPELINE_DIR, 'files/tracks/variant_track_fields.tsv')
 
         # Read variants
+        # noinspection PyTypeChecker
         df = pd.concat(
             [pd.read_csv(file_name, sep='\t', dtype={'#CHROM': str}, low_memory=False) for file_name in input.bed],
             axis=0
         ).reset_index(drop=True)
 
+        # noinspection PyUnresolvedReferences
         if wildcards.vartype == 'sv':
             df = df.loc[df['SVLEN'] >= 50].copy()
         elif wildcards.vartype == 'indel':
@@ -283,6 +284,7 @@ rule tracks_align_all:
 
 # Alignment tracks.
 rule tracks_align:
+    # noinspection PyUnresolvedReferences
     input:
         bed=lambda wildcards: [
             f'results/{wildcards.asm_name}/align/trim-{wildcards.trim}/align_qry_{hap}.bed.gz'
@@ -294,6 +296,7 @@ rule tracks_align:
     run:
 
         # Get track description
+        # noinspection PyUnresolvedReferences
         if wildcards.trim == 'none':
             track_desc_short = f'PavAlignNone'
             track_description = f'PAV Align (Trim NONE)'
@@ -307,6 +310,7 @@ rule tracks_align:
             track_description = f'PAV Align (Trim QRY/REF)'
 
         else:
+            # noinspection PyUnresolvedReferences
             raise RuntimeError('Unknown trim wildcard: '.format(wildcards.trim))
 
         # Read field table
@@ -316,6 +320,7 @@ rule tracks_align:
         ).set_index('FIELD')
 
         # Read alignments
+        # noinspection PyTypeChecker
         df = pd.concat(
             [pd.read_csv(file_name, sep='\t', dtype={'#CHROM': str, 'QRY_ID': str}) for file_name in input.bed],
             axis=0
@@ -352,6 +357,7 @@ rule tracks_align:
         df['STRAND'] = df['REV'].apply(lambda val: '-' if val else '+')
 
         # Set Color
+        # noinspection PyUnresolvedReferences
         hap_list = pavlib.pipeline.get_hap_list(wildcards.asm_name, ASM_TABLE)
         colormap_index = np.linspace(0, 0.9999, len(hap_list))
         colormap = mpl.colormaps[ALIGN_COLORMAP]
@@ -436,9 +442,10 @@ rule tracks_invflag_bb:
 
 # Tracks for one variant set.
 rule tracks_invflag_bed:
+    # noinspection PyUnresolvedReferences
     input:
         bed=lambda wildcards: 'results/{asm_name}/inv_caller/flagged_regions_{hap}_parts-{part_count}.bed.gz'.format(
-            part_count=get_config('inv_sig_part_count', wildcards), **wildcards
+            part_count=pavlib.pavconfig.ConfigParams(wildcards.asm_name, config, ASM_TABLE, verbose=False).inv_sig_part_count, **wildcards
         ),
         fai=REF_FAI
     output:
@@ -454,6 +461,7 @@ rule tracks_invflag_bed:
         }
 
         # Read variants
+        # noinspection PyTypeChecker
         df = pd.read_csv(input.bed, sep='\t')
 
         df.sort_values(['#CHROM', 'POS', 'END'], inplace=True)

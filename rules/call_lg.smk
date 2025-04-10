@@ -50,17 +50,17 @@ rule call_lg_discover:
         log='log/{asm_name}/lgsv/lgsv_call_{hap}.log'
     run:
 
-        config_params = pavlib.config.get_config_dict(wildcards.asm_name, config, ASM_TABLE)
+        pav_params = pavlib.pavconfig.ConfigParams(wildcards.asm_name, config, ASM_TABLE)
 
         # Set graph file output
         dot_dirname = f'temp/{wildcards.asm_name}/lgsv/graph_{wildcards.hap}'
         os.makedirs(dot_dirname, exist_ok=True)
 
         # Get score model
-        score_model = pavlib.align.score.get_score_model(config_params.align_score_model)
+        score_model = pavlib.align.score.get_score_model(pav_params.align_score_model)
 
         # Get minimum anchor score
-        min_anchor_score = pavlib.lgsv.util.get_min_anchor_score(config_params.min_anchor_score, score_model)
+        min_anchor_score = pavlib.lgsv.util.get_min_anchor_score(pav_params.min_anchor_score, score_model)
 
         # Read alignments - Trim QRY
         df_align_qry = pd.read_csv(
@@ -89,14 +89,14 @@ rule call_lg_discover:
         )
 
         # Get KDE for inversions
-        kde = pavlib.kde.KdeTruncNorm(
-            config_params.inv_kde_bandwidth, config_params.inv_kde_trunc_z, config_params.inv_kde_func
+        kde_model = pavlib.kde.KdeTruncNorm(
+            pav_params.inv_kde_bandwidth, pav_params.inv_kde_trunc_z, pav_params.inv_kde_func
         )
 
         with open(log.log, 'w') as log_file:
 
             # Set caller resources
-            caller_resources = pavlib.lgsv.util.CallerResources(
+            caller_resources = pavlib.lgsv.CallerResources(
                 df_align_qry=df_align_qry,
                 df_align_qryref=df_align_qryref,
                 df_align_none=df_align_none,
@@ -104,11 +104,11 @@ rule call_lg_discover:
                 ref_fa_name=input.fa_ref,
                 hap=wildcards.hap,
                 score_model=score_model,
-                k_util=kanapy.util.kmer.KmerUtil(config_params.inv_k_size),
-                kde=kde,
+                k_util=kanapy.util.kmer.KmerUtil(pav_params.inv_k_size),
+                kde_model=kde_model,
                 log_file=log_file,
                 verbose=True,
-                config_params=config_params
+                pav_params=pav_params
             )
 
             # Call

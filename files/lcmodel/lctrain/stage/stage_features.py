@@ -17,6 +17,8 @@ from .stage_init import StageInit
 logger = logging.getLogger(__name__)
 
 class StageFeatures(Stage):
+    feature_filename: str
+    split_filename: str
     """Extract features and create test/train/cv splits."""
 
     STAGE_FILE_NAMES = {
@@ -24,19 +26,22 @@ class StageFeatures(Stage):
         'split_filename': 'test_cv_sets.npz'
     }
 
-    FEATURE_PARAMS = {
+    FEATURE_PARAMS = {  # Feature-specific parameters
         'score_model',
         'score_prop_conf',
         'score_prop_rescue',
         'score_mm_prop_conf',
         'score_mm_prop_rescue',
+        'match_prop_conf',
+        'match_prop_rescue',
         'rescue_length',
         'merge_flank',
         'test_size'  # Note: test_size affects both sets
     }
 
-    SPLIT_PARAMS = {
-        'test_size', 'k_fold'
+    SPLIT_PARAMS = {  # Split-specific parameters
+        'test_size',
+        'k_fold'
     }
 
     def __init__(self, lctrain_config: dict, workdir_root: str, outdir: str):
@@ -91,10 +96,24 @@ class StageFeatures(Stage):
                 for key in self.FEATURE_PARAMS
         }
 
+        feature_params['features'] = self.lctrain_config['features']
+
         split_params = {
             key: self.lctrain_config.get(key, getattr(lctrain.const, f'DEFAULT_{key.upper()}'))
                 for key in self.SPLIT_PARAMS
         }
+
+        # Add features to feature parameters
+        if 'features' not in feature_params:
+            raise RuntimeError(f'Stage Features: Feature list in config is missing')
+
+        if not isinstance(feature_params['features'], list):
+            raise RuntimeError(f'Stage Features: Feature list in config is not a list')
+
+        if len(feature_params['features']) == 0:
+            raise RuntimeError(f'Stage Features: Feature list in config is empty')
+
+        feature_params['features'] = self.lctrain_config['features']
 
         # Load init stage uuid
         stage_version_uuids = self.get_stage_version_uuids('init')
@@ -142,18 +161,17 @@ class StageFeatures(Stage):
             if not pretend:
                 uuid_features_features = uuid.uuid4().hex
 
-                df_features = self.extract_features(feature_params)
+                df = self.extract_features(feature_params)
 
                 os.makedirs(self.workdir, exist_ok=True)
 
                 np.savez_compressed(
                     self.features_filename,
-                    X=df_features[self.lctrain_config['features']].values,
-                    y=df_features['LC'].astype(int).values,
-                    datasource_index=df_features['DATASOURCE_INDEX'].values,
-                    align_index=df_features['INDEX'].values
+                    X=df[self.lctrain_config['features']].values,
+                    y=df['LC'].astype(int).values,
+                    datasource_index=df['DATASOURCE_INDEX'].values,
+                    align_index=df['INDEX'].values
                 )
-
 
         # Create splits
         if not split_is_complete:
@@ -225,12 +243,12 @@ class StageFeatures(Stage):
             raise RuntimeError(f'Error loading score model: {e}')
 
         # Create lc model
-        lc_model = pavlib.align.lcmodel.LCAlignModelNull({
-            'type': 'null',
-            'features': self.lctrain_config['features'],
-            'score_model': score_model,
-            'score_prop_conf': feature_params['score_prop_conf']
-        })
+        # lc_model = pavlib.align.lcmodel.LCAlignModelNull({
+        #     'type': 'null',
+        #     'features': self.lctrain_config['features'],
+        #     'score_model': score_model,
+        #     'score_prop_conf': feature_params['score_prop_conf']
+        # })
 
         # Generate features
         df_features_list = list()
@@ -245,40 +263,15 @@ class StageFeatures(Stage):
 
             logger.debug('Extracting features for data source (name=%s, assembly=%s, hap=%s)', row_datasource['name'], row_datasource['asm_name'], row_datasource['hap'])
 
-            # Read alignments
-            df_align = pd.read_csv(
-                row_datasource['align_trim_none'], sep='\t',
-                dtype={'#CHROM': str}
-            )
-
-            index_set_trim_qry = set(
-                pd.read_csv(
-                    row_datasource['align_trim_qry'], sep='\t',
-                    usecols=['INDEX']
-                )['INDEX']
-            )
-
             # Predict features and LC
-            df_features = lctrain.features.get_feature_table(df_align, lc_model, row_datasource)
-
-            df_lc = lctrain.features.lc_heuristics(
-                df_align, df_features, index_set_trim_qry,
-                score_model,
-                score_prop_conf=feature_params['score_prop_conf'],
-                score_prop_rescue=feature_params['score_prop_rescue'],
-                score_mm_prop_conf=feature_params['score_mm_prop_conf'],
-                score_mm_prop_rescue=feature_params['score_mm_prop_rescue'],
-                rescue_length=feature_params['rescue_length'],
-                merge_flank=feature_params['merge_flank']
+            df = lctrain.features.get_features_and_lc_heuristics(
+                row_datasource, score_model, feature_params
             )
 
-            df_features = pd.concat([df_features, df_lc], axis=1)
+            df.insert(0, 'NAME', row_datasource['name'])
+            df.insert(1, 'DATASOURCE_INDEX', index)
 
-            df_features.insert(0, 'NAME', row_datasource['name'])
-            df_features.insert(1, 'DATASOURCE_INDEX', index)
-            df_features.insert(2, 'INDEX', df_align['INDEX'])
-
-            df_features_list.append(df_features)
+            df_features_list.append(df)
 
         return pd.concat(df_features_list, axis=0)
 

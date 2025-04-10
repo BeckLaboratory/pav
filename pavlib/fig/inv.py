@@ -3,13 +3,13 @@ Inversion figures
 """
 
 import numpy as np
-import pandas as pd
 
 import matplotlib as mpl
 import matplotlib.pyplot as plt
 
-import pavlib
 import kanapy
+
+from .. import seq
 
 
 def kde_density_base(df_kde, region_qry, width=7, height=4, dpi=300, flank_whiskers=False):
@@ -137,6 +137,7 @@ def kde_density_base(df_kde, region_qry, width=7, height=4, dpi=300, flank_whisk
         label.set_rotation(30)
         label.set_ha('right')
 
+    fig.tight_layout()
 
     ## Return plot and axes ##
     return fig
@@ -169,7 +170,7 @@ def dotplot_inv_call(
         region_qry = inv_call.region_qry
 
     # Get reference sequence
-    seq_ref = pavlib.seq.region_seq_fasta(region_ref, ref_fa, False)
+    seq_ref = seq.region_seq_fasta(region_ref, ref_fa, False)
 
     # Get contig sequence
     if seq_qry is None:
@@ -177,7 +178,7 @@ def dotplot_inv_call(
         if qry_fa is None:
             raise RuntimeError('Cannot get contig sequence: tig_fa is None')
 
-        seq_qry = pavlib.seq.region_seq_fasta(region_qry, qry_fa)
+        seq_qry = seq.region_seq_fasta(region_qry, qry_fa)
 
     # Create plot config
     plot_config = {

@@ -1,10 +1,10 @@
 {
-    "name": "prim_85_50",
+    "name": "primdiv_85_50",
     "type": "logistic",
     "description": "Low-confidence alignment model trained on HGSVC assemblies (Logsdon 2025)",
     "features": [
         "SCORE_PROP",
-        "SCORE_MM_PROP",
+        "MATCH_PROP",
         "ANCHOR_PROP",
         "QRY_PROP"
     ],

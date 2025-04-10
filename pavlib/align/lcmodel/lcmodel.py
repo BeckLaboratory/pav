@@ -3,11 +3,13 @@ A model for flagging low-confidence (LC) alignment records.
 """
 
 import abc
+import numpy as np
 import pandas as pd
 
-import pavlib.align.score
-
 import svpoplib
+
+from .. import score
+from .. import features
 
 
 """
@@ -73,19 +75,19 @@ class LCAlignModel(object, metaclass=abc.ABCMeta):
         if len(lc_model_def.get('features', [])) == 0 and self.model_type != 'null':
             raise RuntimeError(f'LCAlignModel is missing features in the "features" attribute: {self.name}')
 
-        self.features = lc_model_def.get('features', [])
+        self.feature_list = lc_model_def.get('features', [])
 
-        if not isinstance(self.features, list):
+        if not isinstance(self.feature_list, list):
             raise RuntimeError(f'LCAlignModel features must be a list ("features" attribute): {self.name}')
 
-        self.features = [str(feature).strip() for feature in self.features]
+        self.feature_list = [str(feature).strip() for feature in self.feature_list]
 
-        if any([feature == '' for feature in self.features]):
+        if any([feature == '' for feature in self.feature_list]):
             raise RuntimeError(f'LCAlignModel features cannot be empty strings ("features" attribute): {self.name}')
 
-        self.feature_count = len(self.features)
+        self.feature_count = len(self.feature_list)
 
-        if len(set(self.features)) != self.feature_count:
+        if len(set(self.feature_list)) != self.feature_count:
             raise RuntimeError(f'LCAlignModel features must be unique ("features" attribute): {self.name}')
 
         self.known_attr.add('features')
@@ -95,14 +97,14 @@ class LCAlignModel(object, metaclass=abc.ABCMeta):
 
         if isinstance(self.score_model, str):
             try:
-                self.score_model = pavlib.align.score.get_score_model(self.score_model.strip())
+                self.score_model = score.get_score_model(self.score_model.strip())
             except Exception as e:
                 raise RuntimeError(f'Bad score model definition for LCAlignModel {self.name}: {e}')
 
         elif self.score_model is None:
             pass
 
-        elif not isinstance(self.score_model, pavlib.align.score.ScoreModel):
+        elif not isinstance(self.score_model, score.ScoreModel):
             raise RuntimeError(f'Bad score model definition for LCAlignModel {self.name}: expected a score model or a string specification: Unknown type "{type(self.score_model)}"')
 
         self.known_attr.add('score_model')
@@ -129,7 +131,12 @@ class LCAlignModel(object, metaclass=abc.ABCMeta):
 
         self.known_attr.add('allow_unknown_attributes')
 
-    def get_feature_table(self, df, existing_score_model=None, qry_fai=None):
+    def get_feature_table(self,
+                          df: pd.DataFrame | pd.Series,
+                          existing_score_model: str | score.ScoreModel | bool=None,
+                          op_arr_list: np.ndarray[int, int]=None,
+                          qry_fai: pd.Series=None
+                          ):
         """
         Get a table of alignment features for a model.
 
@@ -150,95 +157,30 @@ class LCAlignModel(object, metaclass=abc.ABCMeta):
 
         :param df: DataFrame or Series of alignment records. If a Series is given, then it is converted to a single-row
             DataFrame.
-        :param score_model: The alignment score model or string specification for an alignment score model that a
-            feature model was trained on.
-        :param existing_score_model: The alignment score model or sting specification for the feature model that was
-            used to generate features existing in `df`. If this score model does not match `score_model` or if this
-            parameter is None, then features requiring a score model are recomputed.
-        :param qry_fai: Fasta index for the query sequence.
-
-        :return: A Pandas DataFrame of features ordered by the feature list defined in the LC score model definition
-            JSON. No additional columns are retained from `df`.
+        :param existing_score_model: The score model used to compute features already in `df`. If this is not None and
+            `score_model` is not compatible with it, then scores are recomputed. If None, assume existing scores do not
+            need to be recomputed. As a special case, a boolean value of `True` forces re-computation, and `False` skips it.
+            Value may be a string specification for a score model.
+        :param op_arr_list: A list of operation matrices (op_code: first column, op_len: second column) for each query
+            record in `df`. If `None` and alignment operations are needed, they are generated from the CIGAR column of
+            `df`.
+        :param qry_fai: FAI file for query sequences (optional). Needed if features require the query length (i.e.
+            proportion of a query in an alignment record).
         """
 
-        # Check DataFrame
-        if isinstance(df, pd.Series):
-            df = pd.DataFrame([df])
-
-        elif df is None or not isinstance(df, pd.DataFrame):
-            raise RuntimeError(f'Alignment DataFrame is not a Pandas DataFrame or Series: {type(df)}')
-
-        # Get score models
-        if isinstance(existing_score_model, str):
-            existing_score_model = pavlib.align.score.get_score_model(existing_score_model)
-
-        rescore = (
-            self.score_model != existing_score_model
-        ) if (
-            self.score_model is not None and existing_score_model is not None
-        ) else True
-
-        # Check for unknown features
-        feature_set = set(self.features)
-
-        unknown_features = feature_set - {
-            'SCORE', 'SCORE_PROP', 'SCORE_MM', 'SCORE_MM_PROP', 'ANCHOR_PROP', 'QRY_PROP'
-        }
-
-        if unknown_features:
-            n = len(unknown_features)
-            s = ', '.join(sorted(unknown_features)[:3]) + (f'...' if n > 3 else '')
-            raise RuntimeError(f'Found {n:,d} unknown features in LCAlignModel definition: {self.name}: {s}')
-
-        # Compute or update features
-        df = df.copy()
-
-        if feature_set & {'SCORE',  'SCORE_PROP', 'ANCHOR_PROP'}:
-
-            if rescore or 'SCORE' not in df.columns:
-                try:
-                    df['SCORE'] = pavlib.align.features.score(df, self.score_model)
-                except Exception as e:
-                    raise RuntimeError(f'Failed to compute alignment scores ("SCORE") for LC align model {self.name}: {e}')
-
-        if 'SCORE_PROP' in feature_set:
-            if rescore or 'SCORE' not in df.columns:
-                try:
-                    df['SCORE_PROP'] = pavlib.align.features.score_prop(df, self.score_model)
-                except Exception as e:
-                    raise RuntimeError(f'Failed to compute alignment score proportions ("SCORE_PROP") for LC align model {self.name}: {e}')
-
-        if feature_set & {'SCORE_MM', 'SCORE_MM_PROP'}:
-            if rescore or 'SCORE' not in df.columns:
-                try:
-                    df['SCORE'] = pavlib.align.features.score_mm(df, self.score_model)
-                except Exception as e:
-                    raise RuntimeError(f'Failed to compute alignment scores ("SCORE_MM") for LC align model {self.name}: {e}')
-
-        if 'SCORE_MM_PROP' in feature_set:
-            if rescore or 'SCORE_MM_PROP' not in df.columns:
-                try:
-                    df['SCORE_MM_PROP'] = pavlib.align.features.score_mm_prop(df, self.score_model)
-                except Exception as e:
-                    raise RuntimeError(f'Failed to compute alignment score proportions ("SCORE_MM_PROP") for LC align model {self.name}: {e}')
-
-        if 'ANCHOR_PROP' in feature_set:
-            if self.score_prop_conf is None:
-                raise RuntimeError(f'Missing "score_prop_conf" in LC align model {self.name} to compute alignment anchor proportions ("ANCHOR_PROP")')
-
-            try:
-                df['ANCHOR_PROP'] = pavlib.align.features.anchor_proportion(df, self.score_prop_conf)
-            except Exception as e:
-                raise RuntimeError(f'Failed to compute alignment anchor proportions ("ANCHOR_PROP") for LC align model {self.name}: {e}')
-
-        if 'QRY_PROP' in feature_set:
-            try:
-                df['QRY_PROP'] = pavlib.align.features.query_proportion(df, qry_fai)
-            except Exception as e:
-                raise RuntimeError(f'Failed to compute alignment query proportions ("QRY_PROP") for LC align model {self.name}: {e}')
-
-        # Return feature table
-        return df[self.features]
+        try:
+            return features.get_features(
+                df=df,
+                feature_list=self.feature_list,
+                score_model=self.score_model,
+                op_arr_list=op_arr_list,
+                existing_score_model=existing_score_model,
+                score_prop_conf=self.score_prop_conf,
+                qry_fai=qry_fai,
+                inplace=False
+            )
+        except Exception as e:
+            raise RuntimeError(f'Failed to get feature table for LCAlignModel {self.name}: {e}')
 
     def _get_full_qry_len(self, full_qry_len, df, qry_fai):
         """
@@ -299,7 +241,12 @@ class LCAlignModel(object, metaclass=abc.ABCMeta):
             raise RuntimeError(f'Found {n} unknown attributes in the LC align model definition "{self.name}": {attr_list}')
 
     @abc.abstractmethod
-    def __call__(self, df, existing_score_model=None, qry_fai=None):
+    def __call__(self,
+                 df: pd.DataFrame,
+                 existing_score_model: score.ScoreModel=None,
+                 op_arr_list: list[np.ndarray[int, int]]=None,
+                 qry_fai: pd.Series=None
+        ) -> np.ndarray:
         """
         Predict low-confidence alignments.
 
@@ -307,6 +254,9 @@ class LCAlignModel(object, metaclass=abc.ABCMeta):
         :param existing_score_model: Existing score model used to compute features already in the alignment table (df).
             If this alignment score model matches the alignment score model used to train this LC model, then features
             are re-used instead of re-computed.
+        :param op_arr_list: A list of operation matrices (op_code: first column, op_len: second column) for each query
+            record in `df`. If `None` and alignment operations are needed, they are generated from the CIGAR column of
+            `df`.
         :param qry_fai: Query FASTA index. Needed if features need to be computed using the full query sequence size
             (i.e. QRY_PROP).
 

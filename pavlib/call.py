@@ -10,7 +10,10 @@ import pandas as pd
 import re
 
 import svpoplib
-import pavlib
+
+from . import const
+from . import seq
+
 
 # Explanations for filter codes
 FILTER_REASON = {
@@ -71,7 +74,7 @@ def version_variant_bed_id(df, re_version=False):
     df_re['FILTER'].fillna('')
     df_re['FILTER'] = df_re['FILTER'].apply(lambda val: ('a' if val == 'PASS' else 'b') + val)  # Force PASS to sort
 
-    qry_region = df_re['QRY_REGION'].apply(pavlib.seq.region_from_string)
+    qry_region = df_re['QRY_REGION'].apply(seq.region_from_string)
     df_re['QRY_ID'] = qry_region.apply(lambda val: val.chrom)
     df_re['QRY_POS'] = qry_region.apply(lambda val: val.pos)
 
@@ -127,8 +130,7 @@ def val_per_hap(df, df_dict, col_name, delim=';'):
     Function returns a Pandas Series keyed by the `df` index.
 
     :param df: Merged DataFrame of variants.
-    :param df_h1: Pre-merged DataFrame of variants from h1. Index must be variant IDs for the original unmerged calls.
-    :param df_h2: Pre-merged DataFrame of variants from h2. Index must be variant IDs for the original unmerged calls.
+    :param df_dict: Dictionary of pre-merged DataFrames keyed by haplotype name.
     :param col_name: Get this column name from `df_h1` and `df_h2`.
     :param delim: Separate values by this delimiter.
 
@@ -435,7 +437,7 @@ class DepthContainer:
 
             step_index += 1
 
-        assert svlen == row['END'] - row['POS'], f'Record length for "{row["ID"] if "ID" in row.index else "<UNKNOWN>"}" after scanning a variant spanning multiple records does not match the expected variant length: Found {record_len}, expected {svlen}: Scanned depth table from index {self.index} to {step_index - 1} (inclusive)'
+            assert svlen == row['END'] - row['POS'], f'Record length for "{row["ID"] if "ID" in row.index else "<UNKNOWN>"}" after scanning a variant spanning multiple records does not match the expected variant length: Found {record_len}, expected {svlen}: Scanned depth table from index {self.index} to {step_index - 1} (inclusive)'
 
         return (
             sum_depth / svlen,
@@ -515,7 +517,7 @@ def apply_compound_filter(df, compound_filter_tree, filter_dict, compound_dict, 
             if update and index not in filter_dict.keys():
                 if row['SVTYPE'] == 'INV' and row['CALL_SOURCE'].split(':', 1)[0] == 'FLAG':
                     # Filter by inner INV regions
-                    inner_region = pavlib.seq.region_from_string(row['RGN_REF_INNER'])
+                    inner_region = seq.region_from_string(row['RGN_REF_INNER'])
                     compound_filter_tree[inner_region.chrom][inner_region.pos:inner_region.end] = row['ID']
 
                 else:
@@ -536,7 +538,7 @@ def apply_qry_filter_tree(df, qry_filter_tree, filter_dict):
 
     if qry_filter_tree is not None:
 
-        filter_set = df.apply(lambda row: pavlib.seq.region_from_string(row['QRY_REGION']), axis=1).apply(
+        filter_set = df.apply(lambda row: seq.region_from_string(row['QRY_REGION']), axis=1).apply(
             lambda region: len(qry_filter_tree[region.chrom][region.pos:region.end]) > 0
         )
 
@@ -662,7 +664,6 @@ def merge_haplotypes(bed_list, callable_list, hap_list, config_def, threads=1, s
     :param config_def: Merge definition.
     :param threads: Number of threads for each merge.
     :param subset_chrom: Chromosome or set of chromosome names to merge, or `None` to merge all chromosomes in one step.
-    :param is_inv: Add inversion columns if `True`, autodetect if `None`.
 
     :return: A dataframe of variant calls.
     """
@@ -709,7 +710,7 @@ def merge_haplotypes(bed_list, callable_list, hap_list, config_def, threads=1, s
     if df.shape[0] > 0:
         for col in ('QRY_REGION', 'QRY_STRAND', 'CI', 'ALIGN_INDEX', 'CALL_SOURCE', 'RGN_REF_INNER', 'RGN_QRY_INNER', 'COV_MEAN', 'COV_PROP', 'COV_QRY'):
             if col in df.columns:
-                df[col] = pavlib.call.val_per_hap(df, df_dict, col)
+                df[col] = val_per_hap(df, df_dict, col)
 
     # Load mapped regions
     map_tree_list = list()
@@ -726,7 +727,7 @@ def merge_haplotypes(bed_list, callable_list, hap_list, config_def, threads=1, s
     if df.shape[0] > 0:
         df['GT'] = pd.concat(
             [
-                df.apply(pavlib.call.get_gt, hap=hap_list[index], map_tree=map_tree_list[index], axis=1)
+                df.apply(get_gt, hap=hap_list[index], map_tree=map_tree_list[index], axis=1)
                     for index in range(n_hap)
             ],
             axis=1
@@ -766,7 +767,7 @@ def get_merge_params(wildcards, config):
         config_def = config['merge_snv']
 
     if config_def is None:  # Get default
-        config_def = pavlib.constants.MERGE_PARAM_DEFAULT.get(svtype, None)
+        config_def = const.MERGE_PARAM_DEFAULT.get(svtype, None)
 
     if config_def is None:
         raise RuntimeError(f'No merge parameters for svtype: {svtype}')

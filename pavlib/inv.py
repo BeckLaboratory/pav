@@ -4,11 +4,14 @@ Routines for calling inversions.
 
 import numpy as np
 import pandas as pd
-
-import kanapy
-import pavlib
 import scipy.stats
+
 import svpoplib
+import kanapy
+
+from . import const
+from . import kde
+from . import seq
 
 
 #
@@ -47,6 +50,15 @@ WALK_STATE_COL = {
 
 
 class InvCall:
+    region_ref: seq.Region
+    region_qry: seq.Region
+    is_rev: bool
+    svlen: int
+    id: str
+    score: float
+    region_ref_outer: seq.Region
+    region_qry_outer: seq.Region
+
     """
     Describes an inversion call with data supporting the call.
 
@@ -112,8 +124,8 @@ def get_inv_from_record(row):
     if missing_col:
         raise RuntimeError(f'Missing columns in row: {", ".join(missing_col)}')
 
-    region_ref = pavlib.seq.Region(row['#CHROM'], row['POS'], row['END'])
-    region_qry = pavlib.seq.region_from_string(row['QRY_REGION'], is_rev=row['QRY_STRAND'] == '-')
+    region_ref = seq.Region(row['#CHROM'], row['POS'], row['END'])
+    region_qry = seq.region_from_string(row['QRY_REGION'], is_rev=row['QRY_STRAND'] == '-')
 
     return InvCall(
         region_ref=region_ref,
@@ -123,8 +135,8 @@ def get_inv_from_record(row):
         id=row['ID'] if 'ID' in row else None,
         score=row['SCORE'] if 'SCORE' in row else np.nan,
 
-        region_ref_outer=pavlib.seq.region_from_string(row['REGION_REF_OUTER']) if 'REGION_REF_OUTER' in row else None,
-        region_qry_outer=pavlib.seq.region_from_string(row['REGION_QRY_OUTER'], is_rev=region_qry.is_rev) if 'REGION_QRY_OUTER' in row else None
+        region_ref_outer=seq.region_from_string(row['REGION_REF_OUTER']) if 'REGION_REF_OUTER' in row else None,
+        region_qry_outer=seq.region_from_string(row['REGION_QRY_OUTER'], is_rev=region_qry.is_rev) if 'REGION_QRY_OUTER' in row else None
     )
 
 
@@ -141,15 +153,15 @@ def scan_for_inv(
         stop_on_lift_fail=True,
         kde=None,
         log=None,
-        region_limit=pavlib.const.INV_REGION_LIMIT,
-        min_expand=pavlib.const.INV_MIN_EXPAND_COUNT,
+        region_limit=const.INV_REGION_LIMIT,
+        min_expand=const.INV_MIN_EXPAND_COUNT,
         max_expand=np.inf,
-        init_expand=pavlib.const.INV_INIT_EXPAND,
-        min_kmers=pavlib.const.INV_MIN_KMERS,
-        max_ref_kmer_count=pavlib.const.INV_MAX_REF_KMER_COUNT,
-        repeat_match_prop=pavlib.const.INV_REPEAT_MATCH_PROP,
-        min_inv_kmer_run=pavlib.const.INV_MIN_INV_KMER_RUN,
-        min_qry_ref_prop=pavlib.const.INV_MIN_QRY_REF_PROP
+        init_expand=const.INV_INIT_EXPAND,
+        min_kmers=const.INV_MIN_KMERS,
+        max_ref_kmer_count=const.INV_MAX_REF_KMER_COUNT,
+        repeat_match_prop=const.INV_REPEAT_MATCH_PROP,
+        min_inv_kmer_run=const.INV_MIN_INV_KMER_RUN,
+        min_qry_ref_prop=const.INV_MIN_QRY_REF_PROP
     ):
     """
     Scan region for inversions. Start with a flagged region (`region_flag`) where variants indicated that an inversion
@@ -203,10 +215,10 @@ def scan_for_inv(
     """
 
     if k_util is None:
-        k_util = kanapy.util.kmer.KmerUtil(pavlib.const.INV_K_SIZE)
+        k_util = kanapy.util.kmer.KmerUtil(const.INV_K_SIZE)
 
     if kde is None:
-        kde = pavlib.kde.KdeTruncNorm()
+        kde = kde.KdeTruncNorm()
 
     # Init
     _write_log(
@@ -315,7 +327,7 @@ def scan_for_inv(
             continue
 
         # Get run-length encoded states (list of (state, count) tuples).
-        df_rl = pavlib.kde.rl_encoder(df_kde)
+        df_rl = kde.rl_encoder(df_kde)
 
         # Done if reference oriented k-mers (state == 0) found on both sides
         if df_rl.shape[0] > 2 and df_rl.iloc[0]['STATE'] == 0 and df_rl.iloc[-1]['STATE'] == 0:
@@ -404,8 +416,8 @@ def get_state_table(
         ref_fai, qry_fai,
         is_rev=None,
         k_util=None,
-        kde=None,
-        max_ref_kmer_count=pavlib.const.INV_MAX_REF_KMER_COUNT,
+        kde_model=None,
+        max_ref_kmer_count=const.INV_MAX_REF_KMER_COUNT,
         expand_bound=True,
         force_norm=False,
         log=None
@@ -421,7 +433,7 @@ def get_state_table(
     :param is_rev: Set to `True` if the query is reverse-complemented relative to the reference. Reference k-mers are
         reverse-complemented to match the query sequence. If `None`, get from `region_qry`
     :param k_util: K-mer utility.
-    :param kde: KDE object for kernel density estimates. If `None`, KDE is not applied.
+    :param kde_model: KDE model for kernel density estimates. If `None`, KDE is not applied.
     :param max_ref_kmer_count: Remove high-count kmers greater than this value.
     :param force_norm: Normalize across states so that the sum of KDE_FWD, KDE_FWDREV, and KDE_REV is always 1.0. This
         is not needed for most KDE models.
@@ -434,13 +446,13 @@ def get_state_table(
     """
 
     if k_util is None:
-        k_util = kanapy.util.kmer.KmerUtil(pavlib.const.INV_K_SIZE)
+        k_util = kanapy.util.kmer.KmerUtil(const.INV_K_SIZE)
 
     if is_rev is None:
         is_rev = region_qry.is_rev
 
     # Expand regions by band_bound
-    if expand_bound and kde is not None:
+    if expand_bound and kde_model is not None:
 
         if ref_fai is None or qry_fai is None:
             raise RuntimeError('Expanding regions by KDE band-bounds requires both reference and query FAIs to be defined')
@@ -452,7 +464,7 @@ def get_state_table(
         region_qry_exp = region_qry
 
     # Get reference k-mer counts
-    ref_kmer_count = pavlib.seq.ref_kmers(region_ref_exp, ref_fa_name, k_util)
+    ref_kmer_count = seq.ref_kmers(region_ref_exp, ref_fa_name, k_util)
 
     if ref_kmer_count is None or len(ref_kmer_count) == 0:
         _write_log(f'No reference k-mers for region {region_ref_exp}', log)
@@ -495,7 +507,7 @@ def get_state_table(
 
     ## Get contig k-mers as list ##
 
-    seq_qry = pavlib.seq.region_seq_fasta(region_qry_exp, qry_fa_name, rev_compl=False)
+    seq_qry = seq.region_seq_fasta(region_qry_exp, qry_fa_name, rev_compl=False)
 
     df = pd.DataFrame(
         list(kanapy.util.kmer.stream(seq_qry, k_util, index=True)),
@@ -506,7 +518,7 @@ def get_state_table(
 
     # Assign state
     df['STATE_MER'] = df['KMER'].apply(lambda kmer:
-       pavlib.kde.KMER_ORIENTATION_STATE[
+       kde.KMER_ORIENTATION_STATE[
            int(kmer in ref_kmer_set),
            int(k_util.rev_complement(kmer) in ref_kmer_set)
        ]
@@ -519,10 +531,10 @@ def get_state_table(
     df.reset_index(inplace=True, drop=True)
 
     # Apply KDE
-    if kde is not None:
-        df['KDE_FWD'] = kde(df.loc[df['STATE_MER'] == 0].index, df.shape[0])
-        df['KDE_FWDREV'] = kde(df.loc[df['STATE_MER'] == 1].index, df.shape[0])
-        df['KDE_REV'] = kde(df.loc[df['STATE_MER'] == 2].index, df.shape[0])
+    if kde_model is not None:
+        df['KDE_FWD'] = kde_model(df.loc[df['STATE_MER'] == 0].index, df.shape[0])
+        df['KDE_FWDREV'] = kde_model(df.loc[df['STATE_MER'] == 1].index, df.shape[0])
+        df['KDE_REV'] = kde_model(df.loc[df['STATE_MER'] == 2].index, df.shape[0])
 
         if force_norm:
             kde_sum = df[['KDE_FWD', 'KDE_FWDREV', 'KDE_REV']].apply(np.sum, axis=1)
@@ -650,7 +662,7 @@ class InvWalkState(object):
         return f'InvWalkState(walk_state={self.walk_state}, rl_index={self.rl_index}, walk_score={self.walk_score}, l_rep_len={self.l_rep_len}, l_rep_score={self.l_rep_score} trace_list=[{trace_str}])'
 
 
-def resolve_inv_from_rl(df_rl, df, repeat_match_prop=0.2, min_inv_kmer_run=pavlib.const.INV_MIN_INV_KMER_RUN, final_state_node_list=None):
+def resolve_inv_from_rl(df_rl, df, repeat_match_prop=0.2, min_inv_kmer_run=const.INV_MIN_INV_KMER_RUN, final_state_node_list=None):
     """
     Resolve the optimal walk along run-length (RL) encoded states. This walk sets the inversion breakpoints.
 
@@ -811,14 +823,14 @@ def walk_to_regions(inv_walk, df_rl, region_qry, k_size=0):
     i_outer_l = state_dict.get(WS_REP_L, i_inner_l)
     i_outer_r = state_dict[WS_FLANK_R]
 
-    region_qry_outer = pavlib.seq.Region(
+    region_qry_outer = seq.Region(
         region_qry.chrom,
         df_rl.loc[i_outer_l, 'POS_QRY'] + region_qry.pos,
         df_rl.loc[i_outer_r, 'POS_QRY'] + region_qry.pos + k_size,
         is_rev=region_qry.is_rev
     )
 
-    region_qry_inner = pavlib.seq.Region(
+    region_qry_inner = seq.Region(
         region_qry.chrom,
         df_rl.loc[i_inner_l, 'POS_QRY'] + region_qry.pos,
         df_rl.loc[i_inner_r, 'POS_QRY'] + region_qry.pos + k_size,
@@ -891,7 +903,7 @@ def lift_ref_to_qry(region_ref, align_lift, index_set=None, match_index=True):
     if best_lift is None:
         return None
 
-    return pavlib.seq.Region(
+    return seq.Region(
         best_lift[0][0], best_lift[0][1], best_lift[1][1], is_rev=best_lift[0][2]
     )
 
@@ -905,7 +917,7 @@ def expand_region(region_ref, df_rl, df_fai):
     :param df_fai: Reference sequence index.
 
     """
-    expand_bp = np.int32(len(region_ref) * pavlib.const.INV_EXPAND_FACTOR)
+    expand_bp = np.int32(len(region_ref) * const.INV_EXPAND_FACTOR)
 
     if df_rl is not None and df_rl.shape[0] > 2:
         # More than one state. Expand disproportionately if reference was found up or downstream.
@@ -946,17 +958,17 @@ def test_kde(df_rl, binom_prob=0.5, two_sided=True, trim_fwd=True):
 
     # Trim forward-oriented flanking sequence
     if trim_fwd:
-        if df_rl.shape[0] > 0 and df_rl.iloc[0]['STATE'] == pavlib.inv.KDE_STATE_FWD:
+        if df_rl.shape[0] > 0 and df_rl.iloc[0]['STATE'] == KDE_STATE_FWD:
             df_rl = df_rl.iloc[1:]
 
-        if df_rl.shape[0] > 0 and df_rl.iloc[-1]['STATE'] == pavlib.inv.KDE_STATE_FWD:
+        if df_rl.shape[0] > 0 and df_rl.iloc[-1]['STATE'] == KDE_STATE_FWD:
             df_rl = df_rl.iloc[:-1]
 
     df_rl = df_rl.reset_index(drop=True)
 
     # Get probability of inverted states based on a bionmial test of equal frequency of forward and reverse states
-    state_fwd_n = np.sum(df_rl.loc[df_rl['STATE'] == pavlib.inv.KDE_STATE_FWD, 'LEN_KDE'])
-    state_rev_n = np.sum(df_rl.loc[df_rl['STATE'] == pavlib.inv.KDE_STATE_REV, 'LEN_KDE'])
+    state_fwd_n = np.sum(df_rl.loc[df_rl['STATE'] == KDE_STATE_FWD, 'LEN_KDE'])
+    state_rev_n = np.sum(df_rl.loc[df_rl['STATE'] == KDE_STATE_REV, 'LEN_KDE'])
 
     p_null = (1 - scipy.stats.binom.cdf(state_rev_n, state_rev_n + state_fwd_n, binom_prob)) * (2 if two_sided else 1)
 

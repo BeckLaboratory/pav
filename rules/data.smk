@@ -14,8 +14,6 @@ import pavlib
 import svpoplib
 
 global ASM_TABLE
-global get_config
-global get_override_config
 global shell
 
 
@@ -39,21 +37,12 @@ def data_init_targets(wildcards=None):
     # Get a set of aligners and partitions
     for asm_name in ASM_TABLE.index:
 
-        local_config = pavlib.config.get_override_config(asm_name, config, ASM_TABLE)
+        local_config = pavlib.pavconfig.ConfigParams(asm_name, config, ASM_TABLE, verbose=False)
 
-        aligner_set.add(pavlib.config.get_aligner(asm_name, config, ASM_TABLE))
+        aligner_set.add(local_config.get_aligner(asm_name, config, ASM_TABLE))
 
-        part_set.add(
-            pavlib.config.CONFIG_PARAM_DICT['cigar_partitions'].get_value(
-                local_config['cigar_partitions'] if 'cigar_partitions'in local_config else None
-            )
-        )
-
-        part_set.add(
-            pavlib.config.CONFIG_PARAM_DICT['merge_partitions'].get_value(
-                local_config['merge_partitions'] if 'cigar_partitions'in local_config else None
-            )
-        )
+        part_set.add(local_config.cigar_partitions)
+        part_set.add(local_config.merge_partitions)
 
     # Construct target list
     target_list = [
@@ -96,21 +85,23 @@ rule data_init:
 # Get FASTA files.
 rule align_get_qry_fa:
     input:
-        fa=lambda wildcards: pavlib.pipeline.get_rule_input_list(wildcards.asm_name, wildcards.hap, ASM_TABLE, get_override_config(wildcards.asm_name))
+        fa=lambda wildcards: pavlib.pipeline.get_rule_input_list(
+            wildcards.asm_name, wildcards.hap, ASM_TABLE
+        )
     output:
         fa='data/query/{asm_name}/query_{hap}.fa.gz',
         fai='data/query/{asm_name}/query_{hap}.fa.gz.fai',
         gzi='data/query/{asm_name}/query_{hap}.fa.gz.gzi'
-    params:
-        no_link_qry=lambda wildcards: get_config('no_link_qry', wildcards)
     run:
+
+        pav_params = pavlib.pavconfig.ConfigParams(wildcards.asm_name, config, ASM_TABLE)
 
         # Get input files
         # noinspection PyUnresolvedReferences
         input_list = input.fa if 'fa' in input.keys() else []
 
         input_tuples, fofn_list = pavlib.pipeline.expand_input(
-            pavlib.pipeline.get_asm_input_list(wildcards.asm_name, wildcards.hap, ASM_TABLE, config)
+            pavlib.pipeline.get_asm_input_list(wildcards.asm_name, wildcards.hap, ASM_TABLE)
         )
 
         # Report input sources
@@ -123,7 +114,7 @@ rule align_get_qry_fa:
         # Link or generate FASTA
         is_link = False
 
-        if len(input_tuples) == 1 and input_tuples[0][1] == 'fasta' and input_tuples[0][0].lower().endswith('.gz') and not params.no_link_qry:
+        if len(input_tuples) == 1 and input_tuples[0][1] == 'fasta' and input_tuples[0][0].lower().endswith('.gz') and not pav_params.no_link_qry:
             os.symlink(os.path.abspath(input_tuples[0][0]), output.fa)
             is_link = True
 

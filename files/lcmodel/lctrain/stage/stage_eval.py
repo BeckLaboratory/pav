@@ -7,6 +7,7 @@ import numpy as np
 import pandas as pd
 
 import pavlib
+import svpoplib
 
 import lctrain.util
 
@@ -197,7 +198,9 @@ class StageEval(Stage):
 
                 # Model predictions
                 y_hat = lc_model(
-                    df_align, lctrain.features.get_existing_score_model_name(row_datasource), row_datasource['fai_path']
+                    df=df_align,
+                    existing_score_model=lctrain.features.get_existing_score_model_name(row_datasource),
+                    qry_fai=svpoplib.ref.get_df_fai(row_datasource['fai_path'])
                 )
 
                 # Get stats

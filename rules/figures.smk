@@ -100,7 +100,7 @@ rule figures_inv_den:  # Replacing with one rule per dot or density
         qry_fa='data/query/{asm_name}/query_{hap}.fa.gz',
         bed_inv='results/{asm_name}/bed_hap/{filter}/{hap}/sv_inv.bed.gz'
     output:
-        fig_den='figures/inv/{asm_name}/{filter}/{inv_id}_{hap}_den.{ext}'
+        fig_kde='figures/inv/{asm_name}/{filter}/{inv_id}_{hap}_den.{ext}'
     run:
 
         # Read inversion calls and get record
@@ -124,10 +124,10 @@ rule figures_inv_den:  # Replacing with one rule per dot or density
             )
 
         if call_source == 'FLAG':
-            density_table_file_name = f'results/{wildcards.asm_name}/inv_caller/density_table/density_{wildcards.inv_id}_{wildcards.hap}.tsv.gz'
+            kde_table_file_name = f'results/{wildcards.asm_name}/inv_caller/density_table/density_{wildcards.inv_id}_{wildcards.hap}.tsv.gz'
 
         elif call_source == 'ALNTRUNC':
-            density_table_file_name = f'results/{wildcards.asm_name}/inv_caller/density_table_lg/density_{wildcards.inv_id}_{wildcards.hap}.tsv.gz'
+            kde_table_file_name = f'results/{wildcards.asm_name}/inv_caller/density_table_lg/density_{wildcards.inv_id}_{wildcards.hap}.tsv.gz'
 
         else:
             raise RuntimeError(
@@ -135,33 +135,31 @@ rule figures_inv_den:  # Replacing with one rule per dot or density
                 f'assembly={wildcards.asm_name}, hap={wildcards.hap}, call source={inv_row["CALL_SOURCE"]}'
             )
 
-        if not os.path.isfile(density_table_file_name):
+        if not os.path.isfile(kde_table_file_name):
             raise RuntimeError(
-                'Missing density table: '
-                f'assembly={wildcards.asm_name}, hap={wildcards.hap}, call source={inv_row["CALL_SOURCE"]}: '
-                + density_table_file_name
+                f'Missing KDE table: assembly={wildcards.asm_name}, hap={wildcards.hap}, call source={inv_row["CALL_SOURCE"]}: {kde_table_file_name}'
             )
 
-        df_density = pd.read_csv(density_table_file_name, sep='\t')
+        df_kde = pd.read_csv(kde_table_file_name, sep='\t')
 
         # Get inversion call
-        inv_call = pavlib.inv.get_inv_from_record(inv_row, df_density)
+        inv_call = pavlib.inv.get_inv_from_record(inv_row)
 
         # Get contig sequence
         with pysam.FastaFile(input.qry_fa) as fa_file:
-            seq_tig = fa_file.fetch(
+            seq_qry = fa_file.fetch(
                 inv_call.region_tig_discovery.chrom,
                 inv_call.region_tig_discovery.pos,
                 inv_call.region_tig_discovery.end
             )
 
         # Make plots
-        fig_density = pavlib.plot.kmer_density_plot(
-            inv_call, hap=wildcards.hap, flank_whiskers=False
+        fig_kde = pavlib.fig.kde_density_base(
+            df_kde, inv_call.region_qry_outer
         )
 
         # Write plots
-        fig_density.savefig(output.fig_den, bbox_inches='tight')
+        fig_kde.savefig(output.fig_kde)
 
 
 # Inversion dotplot.
@@ -192,7 +190,7 @@ rule figures_inv_dot:
         tig_fai = svpoplib.ref.get_df_fai(input.qry_fai)
 
         # Get inversion call object
-        inv_call = pavlib.inv.get_inv_from_record(inv_row, None)
+        inv_call = pavlib.inv.get_inv_from_record(inv_row)
 
         # Get contig and reference region
         tig_outer_len = inv_call.region_tig_outer.end - inv_call.region_tig_outer.pos
@@ -261,7 +259,7 @@ rule figures_inv_dot:
             )
 
         # Create figure
-        fig_dot = pavlib.plot.dotplot_inv_call(
+        fig_dot = pavlib.fig.dotplot_inv_call(
             inv_call, REF_FA, seq_qry=seq_tig,
             region_qry=region_tig, region_ref=region_ref
         )

@@ -1,18 +1,21 @@
 # VCF writing procedures
 
+import Bio.SeqIO
+import Bio.bgzf
 import gzip
 import numpy as np
 import os
 import pandas as pd
 import pysam
 
-import Bio.bgzf
-
-import pavlib
 import svpoplib
 
+from . import call
+from . import const
 
-def write_merged_vcf(asm_name, input_dict, output_filename, reference_filename, ref_tsv, symbolic_alt=('sv_inv'), symbolic_seq=None):
+from typing import Iterable
+
+def write_merged_vcf(asm_name, input_dict, output_filename, reference_filename, ref_tsv, symbolic_alt=('sv_inv'), symbolic_seq: Iterable[str] | str=None):
     """
     Write a merged VCF file.
 
@@ -67,7 +70,7 @@ def write_merged_vcf(asm_name, input_dict, output_filename, reference_filename, 
         raise RuntimeError(f'Assembly name conflicts with a VCF header column name: {asm_name}')
 
     # Set of known filters
-    known_filter_set = set(pavlib.call.FILTER_REASON.keys())
+    known_filter_set = set(call.FILTER_REASON.keys())
 
     # Read reference TSV
     if isinstance(ref_tsv, str):
@@ -264,7 +267,7 @@ def write_merged_vcf(asm_name, input_dict, output_filename, reference_filename, 
     # FILTER headers
     filter_header_list = [
         (filter, reason)
-            for filter, reason in pavlib.call.FILTER_REASON.items()
+            for filter, reason in call.FILTER_REASON.items()
     ]
 
     # INFO headers
@@ -328,7 +331,7 @@ def write_merged_vcf(asm_name, input_dict, output_filename, reference_filename, 
             format_header_list,
             alt_header_list,
             filter_header_list,
-            variant_source='PAV {}'.format(pavlib.constants.get_version_string()),
+            variant_source='PAV {}'.format(const.get_version_string()),
             ref_filename=os.path.basename(reference_filename)
         ):
             out_file.write(line)

@@ -6,7 +6,7 @@ import abc
 import numpy as np
 import re
 
-import pavlib
+from . import op
 
 AFFINE_SCORE_MATCH = 2.0
 AFFINE_SCORE_MISMATCH = 4.0
@@ -60,7 +60,7 @@ class ScoreModel(object, metaclass=abc.ABCMeta):
 
         raise NotImplementedError
 
-    def score(self, op_len, op_code):
+    def score(self, op_code, op_len):
         """
         Score a CIGAR operation and return 0 if the operation is not scored (S, H, N, and P CIGAR operations). The
         CIGAR operations may be a capital letter or symbol (e.g. "=", "X", "I", etc.) on the numeric CIGAR operation
@@ -70,54 +70,39 @@ class ScoreModel(object, metaclass=abc.ABCMeta):
         :param op_code: CIGAR operation code, must be capitalized.
         """
 
-        if op_code in {'=', pavlib.align.util.CIGAR_EQ}:
+        if op_code in {'=', op.EQ}:
             return self.match(op_len)
 
-        elif op_code in {'X', pavlib.align.util.CIGAR_X}:
+        elif op_code in {'X', op.X}:
             return self.mismatch(op_len)
 
-        elif op_code in {'I', 'D', pavlib.align.util.CIGAR_I, pavlib.align.util.CIGAR_D}:
+        elif op_code in {'I', 'D', op.I, op.D}:
             return self.gap(op_len)
 
-        elif op_code in {'S', 'H', pavlib.align.util.CIGAR_S, pavlib.align.util.CIGAR_H}:
+        elif op_code in {'S', 'H', op.S, op.H}:
             return 0
 
-        elif op_code in {'M', pavlib.align.util.CIGAR_M}:
+        elif op_code in {'M', op.M}:
             raise RuntimeError('Cannot score alignments with match ("M") in CIGAR string (requires "=" and "X")')
 
-        elif op_code in {'N', 'P', pavlib.align.util.CIGAR_N, pavlib.align.util.CIGAR_P}:
+        elif op_code in {'N', 'P', op.N, op.P}:
             return 0
 
         else:
             raise RuntimeError(f'Unrecognized CIGAR op code: {op_code}')
 
-    def score_cigar_tuples(self, cigar_tuples, rev=False):
+    def score_operations(self,
+                         op_arr: np.ndarray[int, int],
+                         ):
         """
-        Sum the scores for each operation over a list of CIGAR operations. The CIGAR operations may be a capital
-        letter or symbol (e.g. "=", "X", "I", etc.) on the numeric CIGAR operation code (defined in
-        `pavlib.align.util`).
+        A vectorized implementation of summing scores for affine models.
 
-        :param cigar_tuples: List of tuples of (op_len, op_code). If string, then assume this is a list of CIGAR
-            operations and convert to tuples.
-        :param rev: If True, each tuple is "(CIGAR op, CIGAR length)" (pysam) instead of the default order "(CIGAR
-            length, CIGAR op)" (CIGAR-string order).
+        :param op_arr: Array of alignment operations (op_code: first column, op_len: second column).
 
         :return: Sum of scores for each CIGAR operation.
         """
 
-        if cigar_tuples is None:
-            raise RuntimeError('CIGAR list is None')
-
-        if isinstance(cigar_tuples, str):
-            if len(cigar_tuples.strip()) == 0:
-                raise RuntimeError('CIGAR string is empty')
-
-            cigar_tuples = pavlib.align.util.cigar_str_to_tuples(cigar_tuples)
-
-        if rev:
-            cigar_tuples = list(cigar_tuples)[::-1]
-
-        return np.sum([self.score(op_len, op_code) for op_len, op_code in cigar_tuples])
+        return np.sum(np.vectorize(self.score)(op_arr[:, 0], op_arr[:, 1]))
 
     @abc.abstractmethod
     def mismatch_model(self):
@@ -224,44 +209,22 @@ class AffineScoreModel(ScoreModel):
             template_switch=self.score_template_switch
         )
 
-    def score_cigar_tuples(self, cigar_tuples, rev=False):
+    def score_operations(self,
+                         op_arr: np.ndarray[int, int]
+                         ):
         """
         A vectorized implementation of summing scores for affine models.
 
-        :param cigar_tuples: List of tuples of (op_len, op_code). If string, then assume this is a list of CIGAR
-            operations and convert to tuples.
-        :param rev: If True, each tuple is "(CIGAR op, CIGAR length)" (pysam) instead of the default order "(CIGAR
-            length, CIGAR op)" (CIGAR-string order).
+        :param op_arr: Array of alignment operations (op_code: first column, op_len: second column).
 
         :return: Sum of scores for each CIGAR operation.
         """
 
-        if cigar_tuples is None:
-            raise RuntimeError('CIGAR list is None')
-
-        if isinstance(cigar_tuples, str):
-            if len(cigar_tuples.strip()) == 0:
-                raise RuntimeError('CIGAR string is empty')
-
-            cigar_tuples = list(pavlib.align.util.cigar_str_to_tuples(cigar_tuples))
-        else:
-            cigar_tuples = list(cigar_tuples)
-
-        if rev:
-            cigar_tuples = cigar_tuples[::-1]
-
-        # Convert to arrays of numeric types
-        op_len = np.array([op_len for op_len, op_code in cigar_tuples])
-        op_code = np.array([op_code for op_len, op_code in cigar_tuples])
-
-        if not np.issubdtype(op_code.dtype, int):
-            op_code = np.vectorize(pavlib.align.util.CIGAR_CHAR_TO_CODE.get)(op_code)
-
-        if np.any(op_code == pavlib.align.util.CIGAR_M):
+        if np.any(op_arr[:, 0] == op.M):
             raise RuntimeError('Cannot score alignments with match ("M") in CIGAR string (requires "=" and "X")')
 
         # Score gaps
-        gap_arr = op_len[(op_code == pavlib.align.util.CIGAR_D) | (op_code == pavlib.align.util.CIGAR_I)]
+        gap_arr = op_arr[(op_arr[:, 0] == op.D) | (op_arr[:, 0] == op.I), 1]
 
         gap_score = np.full((gap_arr.shape[0], 2), -np.inf)
 
@@ -270,9 +233,9 @@ class AffineScoreModel(ScoreModel):
             gap_score[:, 0] = np.max(gap_score, axis=1)
 
         return \
-                (op_len[op_code == pavlib.align.util.CIGAR_EQ] * self.score_match).sum() + \
-                (op_len[op_code == pavlib.align.util.CIGAR_X] * self.score_mismatch).sum() + \
-                gap_score[:, 0].sum()
+                np.sum(op_arr[:, 1] * (op_arr[:, 0] == op.EQ) * self.score_match) + \
+                np.sum(op_arr[:, 1] * (op_arr[:, 0] == op.X) * self.score_mismatch) + \
+                np.nan_to_num(gap_score[:, 0], neginf=0.0).sum()  # If no gap penalties (i.e. mismatch model), then gap_score is -inf (set to 0.0)
 
     def model_param_string(self):
         return f'affine::match={self.score_match},mismatch={self.score_mismatch},gap={";".join([f"{gap_open}:{gap_extend}" for gap_open, gap_extend in self.score_affine_gap])}'

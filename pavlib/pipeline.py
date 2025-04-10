@@ -11,12 +11,10 @@ import os
 import pandas as pd
 import re
 
-import pavlib
-import svpoplib
-
 import Bio.SeqIO
 import Bio.bgzf
 
+import svpoplib
 
 def expand_pattern(pattern, asm_table, config, **kwargs):
 
@@ -104,18 +102,16 @@ def get_hap_list(asm_name, asm_table):
 
     return hap_list
 
-
-def get_asm_config(asm_name, hap, asm_table, config):
+def get_asm_config(asm_name, hap, asm_table):
     """
     Get a dictionary of parameters and paths for one assembly.
 
     :param asm_name: Assembly name.
     :param hap: Haplotype name (e.g. "h1", "h2").
     :param asm_table: Assembly table.
-    :param config: Pipeline config dictionary.
-    """
 
-    config = config.copy()  # Altered by overridden configuration options
+    :return: A dictionary of parameters and paths.
+    """
 
     # Check values
     if hap is None or hap.strip() == '':
@@ -135,19 +131,6 @@ def get_asm_config(asm_name, hap, asm_table, config):
 
     # Get assembly table entry
     asm_table_entry = asm_table.loc[asm_name]
-
-    # Get config override
-    config_string = asm_table_entry['CONFIG']
-
-    if not pd.isnull(config_string):
-        config_string = config_string.strip()
-    else:
-        config_string = ''
-
-    if not config_string:
-        config_string = None
-
-    config_override = pavlib.config.get_config_override_dict(config_string)
 
     # Get filename pattern
     assembly_input = asm_table_entry[f'HAP_{hap}']
@@ -180,26 +163,23 @@ def get_asm_config(asm_name, hap, asm_table, config):
         'asm_name': asm_name,
         'hap': hap,
         'assembly_input': assembly_input,
-        'filter_input': filter_input,
-        'config_override_string': config_string,
-        'config_override': config_override
+        'filter_input': filter_input
     }
 
 
-def get_asm_input_list(asm_name, hap, asm_table, config):
+def get_asm_input_list(asm_name, hap, asm_table):
     """
     Get a list of input files.
 
     :param asm_name: Assembly name.
     :param hap: Haplotype.
     :param asm_table: Assembly table (assemblies.tsv).
-    :param config: Pipeline config.
 
     :return: A list of input files.
     """
 
     # Get config
-    asm_config = get_asm_config(asm_name, hap, asm_table, config)
+    asm_config = get_asm_config(asm_name, hap, asm_table)
 
     assembly_input = asm_config['assembly_input']
 
@@ -310,20 +290,19 @@ def expand_input(file_name_list):
     return file_name_tuples, fofn_list
 
 
-def get_rule_input_list(asm_name, hap, asm_table, config):
+def get_rule_input_list(asm_name, hap, asm_table):
     """
     Get a full list of input files.
 
     :param asm_name: Assembly name.
     :param hap: Haplotype.
     :param asm_table: Assembly table (assemblies.tsv).
-    :param config: Pipeline config.
 
     :return: A list of all files that may affect input. This includes both sequence data files and FOFN files. This
         rule is designed to be called by a Snakemake input rule.
     """
 
-    input_list = get_asm_input_list(asm_name, hap, asm_table, config)
+    input_list = get_asm_input_list(asm_name, hap, asm_table)
 
     file_name_tuples, fofn_list = expand_input(input_list)
 

@@ -4,12 +4,13 @@ K-mer density estimation.
 
 import importlib.util
 import inspect
-import multiprocessing as mp
 import numpy as np
 import pandas as pd
 import scipy.stats
 
-import pavlib
+
+from . import const
+
 
 # K-mer orientation matrix: Tig k-mer against forward (vertical axis)
 # and reverse (horizontal axis) k-mers in the reference
@@ -35,9 +36,9 @@ class KdeTruncNorm(object):
     """
 
     def __init__(self,
-                 bandwidth=pavlib.const.INV_KDE_BANDWIDTH,
-                 trunc_z=pavlib.const.INV_KDE_TRUNC_Z,
-                 conv=pavlib.const.INV_KDE_FUNC):
+                 bandwidth=const.INV_KDE_BANDWIDTH,
+                 trunc_z=const.INV_KDE_TRUNC_Z,
+                 conv=const.INV_KDE_FUNC):
 
         # Check parameters
         if bandwidth <= 0:
@@ -149,7 +150,6 @@ def rl_encoder(df):
     * MAX_GAIN: Maximum difference between the highest value and the middle (next highest) value in the KDE values.
 
     :param df: Dataframe of states.
-    :param pos_qry: Query position at the start of the table (first query base is 'INDEX' + pos_qry).
 
     :return: DataFrame with STATE, POS_KDE, LEN_KDE, POS_QRY, LEN_QRY, and MAX_GAIN columns.
     """

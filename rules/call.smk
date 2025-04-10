@@ -2,14 +2,14 @@
 Call variants from aligned contigs.
 """
 
+import Bio.bgzf
+import Bio.SeqIO
 import collections
+import intervaltree
 import numpy as np
 import os
 import pandas as pd
 import sys
-
-import Bio.bgzf
-import Bio.SeqIO
 
 import pavlib
 import svpoplib
@@ -19,7 +19,6 @@ global REF_FA
 global get_config
 
 global expand
-global intervaltree
 global temp
 
 
@@ -326,8 +325,7 @@ rule call_integrate_filter_redundant:
         # Split variants and write
         df_nr = df.loc[df['ID'].isin(id_set)]
 
-        index_set = set(df_nr.index)
-        df_red = df.loc[[index not in index_set for index in df.index]]
+        df_red = df.loc[~ df.index.isin(set(df_nr.index))]
 
         df_nr.to_csv(output.bed_nr, sep='\t', index=False, compression='gzip')
         df_red.to_csv(output.bed_red, sep='\t', index=False, compression='gzip')
@@ -525,20 +523,17 @@ rule call_integrate_sources:
         fa_ins_fail=temp('temp/{asm_name}/bed_hap/fail/{hap}/fa/svindel_ins.fa.gz'),
         fa_del_fail=temp('temp/{asm_name}/bed_hap/fail/{hap}/fa/svindel_del.fa.gz'),
         fa_inv_fail=temp('temp/{asm_name}/bed_hap/fail/{hap}/fa/sv_inv.fa.gz')
-    params:
-        inv_min=lambda wildcards: get_config('inv_min', wildcards),
-        inv_max=lambda wildcards: get_config('inv_max', wildcards),
-        query_filter=lambda wildcards: get_config('query_filter', wildcards),
-        redundant_callset=lambda wildcards: get_config('redundant_callset', wildcards)
     run:
+
+        pav_params = pavlib.pavconfig.ConfigParams(wildcards.asm_name, config, ASM_TABLE)
 
         # Read query filter (if present)
         qry_filter_tree = None
 
         qry_filter_list = []
 
-        if params.query_filter is not None:
-            qry_filter_list = [file_name.strip() for file_name in params.query_filter.split(';') if file_name.strip()]
+        if pav_params.query_filter is not None:
+            qry_filter_list = [file_name.strip() for file_name in pav_params.query_filter.split(';') if file_name.strip()]
 
         if len(qry_filter_list) > 0:
 
@@ -606,7 +601,7 @@ rule call_integrate_sources:
                 assert False, f'vartype in control loop does not match a known value: {vartype}'
 
             # Override add_compound
-            if params.redundant_callset:
+            if pav_params.redundant_callset:
                 filter_compound = False
                 add_compound = False
 
@@ -652,6 +647,7 @@ rule call_integrate_sources:
             df['COV_PROP'] = np.nan
             df['COV_QRY'] = ''
 
+            # noinspection SmkUndeclaredSection
             depth_container = pavlib.call.DepthContainer(pd.read_csv(input.bed_depth_qry, sep='\t', dtype={'#CHROM': str}))
 
             for index, row in df.iterrows():
@@ -769,6 +765,7 @@ rule call_cigar_gather:
     run:
 
         # INS/DEL
+        # noinspection PyTypeChecker
         df_insdel = pd.concat(
             [pd.read_csv(file_name, sep='\t', keep_default_na=False) for file_name in input.bed_insdel],
             axis=0
@@ -781,6 +778,7 @@ rule call_cigar_gather:
         )
 
         # SNV
+        # noinspection PyTypeChecker
         df_snv = pd.concat(
             [pd.read_csv(file_name, sep='\t', keep_default_na=False) for file_name in input.bed_snv],
             axis=0
@@ -807,6 +805,7 @@ rule call_cigar:
         bed_snv=temp('temp/{asm_name}/cigar/partition/snv_{hap}_{part}-of-{part_count}.bed.gz')
     run:
 
+        # noinspection PyUnresolvedReferences
         partition = int(wildcards.part)
 
         # Get chromosome set

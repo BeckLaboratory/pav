@@ -7,8 +7,14 @@ import pandas as pd
 import sys
 
 import Bio.Seq
-import pavlib
+
+import kanapy
 import svpoplib
+
+from .. import align
+from .. import pavconfig
+from .. import kde
+from .. import seq
 
 
 class CallerResources(object):
@@ -25,7 +31,7 @@ class CallerResources(object):
         * score_model: Alignemnt score model.
         * k_util: K-mer utility.
         * inv_params: Inversion parameters.
-        * kde: KDE model.
+        * kde_model: KDE model.
         * align_lift: Object for lifting alignment coordinates between query and reference through the alignment.
         * cache_qry_upper: Query sequence cache used for homology searches. Caches the last query sequence in
             upper-case.
@@ -41,14 +47,14 @@ class CallerResources(object):
                  hap,
                  score_model=None, k_util=None,
                  inv_params=None,
-                 kde=None,
+                 kde_model=None,
                  log_file=None,
                  verbose=True,
-                 config_params=None
+                 pav_params=None
                  ):
 
-        if config_params is None:
-            config_params = pavlib.config.get_config_dict()
+        if pav_params is None:
+            pav_params = pavconfig.ConfigParams()
 
         self.df_align_qry = df_align_qry
         self.df_align_qryref = df_align_qryref
@@ -66,24 +72,24 @@ class CallerResources(object):
         self.hap = hap
 
         if k_util is None:
-            k_util = pavlib.kmer.KmerUtil(config_params.inv_k_size)
+            k_util = kanapy.util.kmer.KmerUtil(pav_params.inv_k_size)
 
         self.k_util = k_util
 
         if score_model is None:
-            score_model = pavlib.align.score.get_score_model()
+            score_model = align.score.get_score_model()
 
         self.score_model = score_model
 
-        self.align_lift = pavlib.align.lift.AlignLift(self.df_align_qry, self.qry_fai)
+        self.align_lift = align.lift.AlignLift(self.df_align_qry, self.qry_fai)
 
-        self.cache_qry_upper = pavlib.lgsv.util.SeqCache(self.qry_fa_name, uppercase=True)  # uppercase for homology searches
-        self.cache_ref_upper = pavlib.lgsv.util.SeqCache(self.ref_fa_name, uppercase=True)
+        self.cache_qry_upper = SeqCache(self.qry_fa_name, uppercase=True)  # uppercase for homology searches
+        self.cache_ref_upper = SeqCache(self.ref_fa_name, uppercase=True)
 
-        if kde is None:
-            kde = pavlib.kde.KdeTruncNorm()
+        if kde_model is None:
+            kde_model = kde.KdeTruncNorm()
 
-        self.kde = kde
+        self.kde_model = kde_model
 
         if inv_params is None:
             inv_params = dict()
@@ -103,7 +109,7 @@ class CallerResources(object):
         self.log_file = log_file
         self.verbose=verbose
 
-        self.config_params = config_params
+        self.pav_params = pav_params
 
 
 def record_to_paf(row_seg, ref_fai, qry_fai, mapq_summary='max'):
@@ -126,37 +132,37 @@ def record_to_paf(row_seg, ref_fai, qry_fai, mapq_summary='max'):
     align_len = 0
     cigar_index = -1
 
-    cigar_list = list(pavlib.align.util.cigar_str_to_tuples(row_seg['CIGAR']))
+    cigar_list = list(align.op.as_tuples(row_seg['CIGAR']))
 
     # Remove clipping and adjust coordinates
-    if cigar_list[0][1] == 'H':
+    if cigar_list[0][0] == align.op.H:
         cigar_list = cigar_list[1:]
         cigar_index += 1
 
-    if cigar_list[0][1] == 'S':
+    if cigar_list[0][0] == align.op.S:
         cigar_list = cigar_list[1:]
         cigar_index += 1
 
-    if cigar_list[-1][1] == 'H':
+    if cigar_list[-1][0] == align.op.H:
         cigar_list = cigar_list[:-1]
 
-    if cigar_list[-1][1] == 'S':
+    if cigar_list[-1][0] == align.op.S:
         cigar_list = cigar_list[:-1]
 
-    cigar = ''.join([f'{op_len}{op_code}' for op_len, op_code in cigar_list])
+    cigar = ''.join([f'{op_len}{op_code}' for op_code, op_len in cigar_list])
 
     # Process CIGAR operations
-    for op_len, op_code in cigar_list:
+    for op_code, op_len in cigar_list:
         cigar_index += 1
 
         if op_code == '=':
             match_n += op_len
             align_len += op_len
 
-        elif op_code in {'X', 'I', 'D'}:
+        elif op_code in {align.op.X, align.op.I, align.op.D}:
             align_len += op_len
 
-        elif op_code in {'H', 'S'}:
+        elif op_code in {align.op.H, align.op.S}:
             raise RuntimeError(f'Unhandled clipping in CIGAR string: {op_code} at CIGAR index {cigar_index}: Expected clipped bases at the beginning and end of the CIGAR string only.')
 
         else:
@@ -221,7 +227,6 @@ def record_to_paf(row_seg, ref_fai, qry_fai, mapq_summary='max'):
         ]
     )
 
-
 class SeqCache:
     """
     Keep a cache of a sequence string in upper-case. Stores the last instance of the sequence and the ID. When a
@@ -256,7 +261,7 @@ class SeqCache:
         """
 
         if self.id != sequence_id or self.is_rev != is_rev:
-            new_seq = pavlib.seq.region_seq_fasta(
+            new_seq = seq.region_seq_fasta(
                 sequence_id, self.fa_filename
             )
 

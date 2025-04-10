@@ -8,9 +8,10 @@ import numpy as np
 import pandas as pd
 import pysam
 
-import pavlib
 import svpoplib
 
+from . import align
+from . import call as pav_call
 
 #
 # Definitions
@@ -18,8 +19,6 @@ import svpoplib
 
 # Tag variants called with this source
 CALL_SOURCE = 'CIGAR'
-
-
 
 
 def make_insdel_snv_calls(df_align, ref_fa_name, tig_fa_name, hap, version_id=True):
@@ -84,7 +83,7 @@ def make_insdel_snv_calls(df_align, ref_fa_name, tig_fa_name, hap, version_id=Tr
         last_op = None
         last_oplen = 0
 
-        for oplen, op in pavlib.align.util.cigar_str_to_tuples(row):
+        for oplen, op in align.op.as_tuples(row):
             # NOTE: break/continue in this look will not advance last_op and last_oplen (end of loop)
 
             cigar_index += 1
@@ -150,7 +149,7 @@ def make_insdel_snv_calls(df_align, ref_fa_name, tig_fa_name, hap, version_id=Tr
                 if last_op == '=':
                     left_shift = np.min([
                         last_oplen,
-                        pavlib.call.left_homology(pos_ref - 1, seq_ref_upper, seq_upper)  # SV/breakpoint upstream homology
+                        pav_call.left_homology(pos_ref - 1, seq_ref_upper, seq_upper)  # SV/breakpoint upstream homology
                     ])
                 else:
                     left_shift = 0
@@ -176,11 +175,11 @@ def make_insdel_snv_calls(df_align, ref_fa_name, tig_fa_name, hap, version_id=Tr
                 # Find breakpoint homology
                 seq_upper = seq.upper()
 
-                hom_ref_l = pavlib.call.left_homology(sv_pos_ref - 1, seq_ref_upper, seq_upper)
-                hom_ref_r = pavlib.call.right_homology(sv_pos_ref, seq_ref_upper, seq_upper)
+                hom_ref_l = pav_call.left_homology(sv_pos_ref - 1, seq_ref_upper, seq_upper)
+                hom_ref_r = pav_call.right_homology(sv_pos_ref, seq_ref_upper, seq_upper)
 
-                hom_tig_l = pavlib.call.left_homology(sv_pos_tig - 1, seq_tig_upper, seq_upper)
-                hom_tig_r = pavlib.call.right_homology(sv_end_tig, seq_tig_upper, seq_upper)
+                hom_tig_l = pav_call.left_homology(sv_pos_tig - 1, seq_tig_upper, seq_upper)
+                hom_tig_r = pav_call.right_homology(sv_end_tig, seq_tig_upper, seq_upper)
 
                 # Add variant
                 var_id = f'{seq_ref_name}-{sv_pos_ref + 1}-INS-{oplen}'
@@ -226,7 +225,7 @@ def make_insdel_snv_calls(df_align, ref_fa_name, tig_fa_name, hap, version_id=Tr
                 if last_op == '=':
                     left_shift = np.min([
                         last_oplen,
-                        pavlib.call.left_homology(pos_ref - 1, seq_ref_upper, seq_upper)  # SV/breakpoint upstream homology
+                        pav_call.left_homology(pos_ref - 1, seq_ref_upper, seq_upper)  # SV/breakpoint upstream homology
                     ])
                 else:
                     left_shift = 0
@@ -245,11 +244,11 @@ def make_insdel_snv_calls(df_align, ref_fa_name, tig_fa_name, hap, version_id=Tr
                 # Find breakpoint homology
                 seq_upper = seq.upper()
 
-                hom_ref_l = pavlib.call.left_homology(sv_pos_ref - 1, seq_ref_upper, seq_upper)
-                hom_ref_r = pavlib.call.right_homology(sv_end_ref, seq_ref_upper, seq_upper)
+                hom_ref_l = pav_call.left_homology(sv_pos_ref - 1, seq_ref_upper, seq_upper)
+                hom_ref_r = pav_call.right_homology(sv_end_ref, seq_ref_upper, seq_upper)
 
-                hom_tig_l = pavlib.call.left_homology(sv_pos_tig - 1, seq_tig_upper, seq_upper)
-                hom_tig_r = pavlib.call.right_homology(sv_pos_tig, seq_tig_upper, seq_upper)
+                hom_tig_l = pav_call.left_homology(sv_pos_tig - 1, seq_tig_upper, seq_upper)
+                hom_tig_r = pav_call.right_homology(sv_pos_tig, seq_tig_upper, seq_upper)
 
                 # Add variant
                 var_id = f'{seq_ref_name}-{pos_ref + 1}-DEL-{oplen}'

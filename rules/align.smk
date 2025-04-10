@@ -5,13 +5,11 @@ Process alignments and alignment tiling paths.
 
 import Bio.bgzf
 import gzip
-import numpy as np
 import os
 import pandas as pd
 
 import pavlib
 import svpoplib
-
 
 global config
 global expand
@@ -43,6 +41,13 @@ rule align_all:
             trim=('none', 'qry', 'qryref')
         )
 
+localrules: align_notrim_all
+rule align_notrim_all:
+    input:
+        bed=lambda wildcards: pavlib.pipeline.expand_pattern(
+            'results/{asm_name}/align/trim-none/align_qry_{hap}.bed.gz', ASM_TABLE, config
+        )
+
 # Create a BED file of low-confidence alignment regions
 # rule align_lowconf_bed:
 #     input:
@@ -67,7 +72,7 @@ rule align_depth_bed:
         bed='results/{asm_name}/align/trim-{trim}/depth_ref_{hap}.bed.gz'
     run:
 
-        pavlib.align.util.align_bed_to_depth_bed(
+        pavlib.align.tables.align_bed_to_depth_bed(
             pd.read_csv(input.bed, sep='\t', dtype={'#CHROM': str, 'QRY_ID': str}),
             svpoplib.ref.get_df_fai(REF_FAI)
         ).to_csv(
@@ -81,18 +86,17 @@ rule align_trim_qryref:
         qry_fai='data/query/{asm_name}/query_{hap}.fa.gz.fai'
     output:
         bed='results/{asm_name}/align/trim-qryref/align_qry_{hap}.bed.gz'
-    params:
-        align_score=lambda wildcards: get_config('align_score_model', wildcards),
-        redundant_callset=lambda wildcards: get_config('redundant_callset', wildcards)
     run:
+
+        pav_params = pavlib.pavconfig.ConfigParams(wildcards.asm_name, config, ASM_TABLE)
 
         # Trim alignments
         df = pavlib.align.trim.trim_alignments(
             pd.read_csv(input.bed, sep='\t', dtype={'#CHROM': str, 'QRY_ID': str}),  # Untrimmed alignment BED
             input.qry_fai,  # Path to query FASTA FAI
-            match_qry=params.redundant_callset,  # Redundant callset, trim reference space only for records with matching IDs
+            match_qry=pav_params.redundant_callset,  # Redundant callset, trim reference space only for records with matching IDs
             mode='ref',
-            score_model=params.align_score
+            score_model=pav_params.align_score
         )
 
         # Write
@@ -105,13 +109,11 @@ rule align_trim_qry:
         qry_fai='data/query/{asm_name}/query_{hap}.fa.gz.fai'
     output:
         bed='results/{asm_name}/align/trim-qry/align_qry_{hap}.bed.gz'
-    params:
-        align_score_model=lambda wildcards: get_config('align_score_model', wildcards),
-        align_agg_min_score=lambda wildcards: get_config('align_agg_min_score', wildcards),
-        align_agg_colinear_penalty=lambda wildcards: get_config('align_agg_colinear_penalty', wildcards)
     run:
 
-        score_model = pavlib.align.score.get_score_model(params.align_score_model)
+        pav_params = pavlib.pavconfig.ConfigParams(wildcards.asm_name, config, ASM_TABLE)
+
+        score_model = pavlib.align.score.get_score_model(pav_params.align_score_model)
         df_qry_fai = svpoplib.ref.get_df_fai(input.qry_fai)
 
         # Trim alignments
@@ -122,14 +124,14 @@ rule align_trim_qry:
             score_model=score_model
         )
 
-        if params.align_agg_min_score < 0.0:
+        if pav_params.align_agg_min_score < 0.0:
             df_qry_fai = svpoplib.ref.get_df_fai(input.qry_fai)
 
-            df = pavlib.align.util.aggregate_alignment_records(
+            df = pavlib.align.tables.aggregate_alignment_records(
                 df, df_qry_fai,
                 score_model=score_model,
-                min_score=params.align_agg_min_score,
-                colinear_penalty=params.align_agg_colinear_penalty,
+                min_score=pav_params.align_agg_min_score,
+                noncolinear_penalty=pav_params.align_agg_noncolinear_penalty,
                 assign_order=True
             )
 
@@ -147,26 +149,25 @@ rule align_get_bed:
         bed='results/{asm_name}/align/trim-none/align_qry_{hap}.bed.gz',
         align_head='results/{asm_name}/align/trim-none/align_qry_{hap}.headers.gz',
         tsv_stats='results/{asm_name}/align/trim-none/stats_qry_{hap}.tsv.gz'
-    params:
-        align_score=lambda wildcards: get_config('align_score_model', wildcards),
-        lc_model=lambda wildcards: get_config('lc_model', wildcards)
     run:
+
+        pav_params = pavlib.pavconfig.ConfigParams(wildcards.asm_name, config, ASM_TABLE)
 
         # Read FAI
         df_qry_fai = svpoplib.ref.get_df_fai(input.qry_fai)
         df_qry_fai.index = df_qry_fai.index.astype(str)
 
         # Get score model
-        score_model = pavlib.align.score.get_score_model(params.align_score)
+        score_model = pavlib.align.score.get_score_model(pav_params.align_score_model)
 
         # Get LC model
         lc_model = pavlib.align.lcmodel.get_model(
-            params.lc_model,
+            pav_params.lc_model,
             os.path.join(PIPELINE_DIR, pavlib.const.PAV_LC_MODEL_SUBDIR)
         )
 
         # Read alignments as a BED file.
-        df = pavlib.align.util.get_align_bed(
+        df = pavlib.align.tables.get_align_bed(
             input.sam, df_qry_fai, wildcards.hap,
             score_model=score_model,
             lc_model=lc_model
@@ -222,7 +223,7 @@ rule align_get_bed:
                 df.shape[0],
                 df_pass.shape[0], prop_n_pass, bp_pass, prop_bp_pass,
                 df_fail.shape[0], prop_n_fail, bp_fail, prop_bp_fail,
-                params.align_score
+                pav_params.align_score_model
             ],
             index=[
                 'N',
@@ -240,32 +241,33 @@ rule align_get_bed:
 rule align_map:
     input:
         ref_fa='data/ref/ref.fa.gz',
-        seq_files=lambda wildcards: pavlib.config.get_aligner_input(wildcards, config, ASM_TABLE)
+        seq_files=lambda wildcards: pavlib.pavconfig.ConfigParams(wildcards.asm_name, config, ASM_TABLE).get_aligner_input()
     output:
         sam=temp('temp/{asm_name}/align/trim-none/align_qry_{hap}.sam.gz')
-    params:
-        aligner=lambda wildcards: pavlib.config.get_aligner(wildcards, config, ASM_TABLE),
-        aligner_params=lambda wildcards: pavlib.config.get_aligner_params(wildcards, config, ASM_TABLE)
     threads: 4
     run:
 
+        pav_params = pavlib.pavconfig.ConfigParams(wildcards.asm_name, config, ASM_TABLE)
+
+        aligner = pav_params.aligner
+
         # Get alignment command
-        if params.aligner == 'minimap2':
+        if aligner == 'minimap2':
             align_cmd = (
                 f"""minimap2 """
-                    f"""{params.aligner_params} """
+                    f"""{pav_params.align_params} """
                     f"""--secondary=no -a -t {threads} --eqx -Y """
                     f"""{input.ref_fa} {input.seq_files[0]}"""
             )
 
-        elif params.aligner == 'lra':
+        elif aligner == 'lra':
             align_cmd = (
                 f"""lra align {input.ref_fa} {input.seq_files[0]} -CONTIG -p s -t {threads}"""
-                f"""{params.aligner_params}"""
+                f"""{pav_params.aligner_params}"""
             )
 
         else:
-            raise RuntimeError(f'Unknown alignment program (aligner parameter): {params.aligner}')
+            raise RuntimeError(f'Unknown alignment program (aligner parameter): {pav_params.aligner}')
 
         # Run alignment
         if os.stat(input.seq_files[0]).st_size > 0:
@@ -356,9 +358,9 @@ rule align_export:
         ref_fa='data/ref/ref.fa.gz'
     output:
         align='results/{asm_name}/align/export/pav_align_trim-{trim}_{hap}.{ext}'
-    params:
-        sam_tag=lambda wildcards: fr'@PG\tID:PAV-{wildcards.trim}\tPN:PAV\tVN:{pavlib.const.get_version_string()}\tDS:PAV Alignment trimming {pavlib.align.util.TRIM_DESC[wildcards.trim]}'
     run:
+
+        SAM_TAG = fr'@PG\tID:PAV-{wildcards.trim}\tPN:PAV\tVN:{pavlib.const.get_version_string()}\tDS:PAV Alignment trimming {pavlib.align.trim.TRIM_DESC[wildcards.trim]}'
 
         if wildcards.ext == 'cram':
             out_fmt = 'CRAM'
@@ -386,13 +388,13 @@ rule align_export:
         if not do_bgzip:
             shell(
                 """python3 {PIPELINE_DIR}/scripts/reconstruct_sam.py """
-                    """--bed {input.bed} --fasta {input.fa} --headers {input.align_head} --tag "{params.sam_tag}" | """
+                    """--bed {input.bed} --fasta {input.fa} --headers {input.align_head} --tag "{SAM_TAG}" | """
                 """samtools view -T {input.ref_fa} -O {out_fmt} -o {output.align}"""
             )
         else:
             shell(
                 """python3 {PIPELINE_DIR}/scripts/reconstruct_sam.py """
-                    """--bed {input.bed} --fasta {input.fa} --headers {input.align_head} --tag "{params.sam_tag}" | """
+                    """--bed {input.bed} --fasta {input.fa} --headers {input.align_head} --tag "{SAM_TAG}" | """
                 """samtools view -T {input.ref_fa} -O {out_fmt} | """
                 """bgzip > {output.align}"""
             )

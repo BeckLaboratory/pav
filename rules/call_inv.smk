@@ -10,7 +10,6 @@ Inversion calling has two key steps:
 import collections
 import intervaltree
 import numpy as np
-import os
 import pandas as pd
 
 import pavlib
@@ -67,7 +66,7 @@ def _input_call_inv_cluster(wildcards):
         wildcards.vartype
     ))
 
-def _call_inv_accept_flagged_region(row, allow_single_cluster=False, match_any=set()):
+def _call_inv_accept_flagged_region(row, allow_single_cluster=False, match_any=None):
     """
     Annotate which flagged regions are "accepted" (will try to call INV).
 
@@ -83,6 +82,9 @@ def _call_inv_accept_flagged_region(row, allow_single_cluster=False, match_any=s
 
     :return: `True` if the inversion caller should try the region.
     """
+
+    if match_any is None:
+        match_any = set()
 
     if not allow_single_cluster and (row['TYPE'] == {'CLUSTER_SNV'} or row['TYPE'] == {'CLUSTER_INDEL'}):
         return False
@@ -120,6 +122,7 @@ rule call_inv_sig_all:
 # Gather partitions.
 # noinspection PyTypeChecker
 rule call_inv_gather:
+    # noinspection PyUnresolvedReferences
     input:
         bed=lambda wildcards: [
             f'temp/{wildcards.asm_name}/inv_caller/part/{wildcards.hap}/inv_call_{part}-of-{part_count}.bed.gz'
@@ -177,22 +180,10 @@ rule call_inv_part:
         bed=temp('temp/{asm_name}/inv_caller/part/{hap}/inv_call_{part}-of-{part_count}.bed.gz')
     log:
         log='log/{asm_name}/inv_caller/log/{hap}/inv_call_{part}-of-{part_count}.log'
-    params:
-        align_score=lambda wildcards: get_config('align_score_model', wildcards),
-        k_size=lambda wildcards: get_config('inv_k_size', wildcards),
-        region_limit=lambda wildcards: get_config('inv_region_limit', wildcards),
-        kde_func=lambda wildcards: get_config('inv_kde_func', wildcards),
-        kde_bandwidth=lambda wildcards: get_config('inv_kde_bandwidth', wildcards),
-        kde_trunc_z=lambda wildcards: get_config('inv_kde_trunc_z', wildcards),
-        min_expand=lambda wildcards: get_config('inv_min_expand', wildcards),
-        init_expand=lambda wildcards: get_config('inv_init_expand', wildcards),
-        min_kmers=lambda wildcards: get_config('inv_min_kmers', wildcards),
-        max_ref_kmer_count=lambda wildcards: get_config('inv_max_ref_kmer_count', wildcards),
-        repeat_match_prop=lambda wildcards: get_config('inv_repeat_match_prop', wildcards),
-        min_inv_kmer_run=lambda wildcards: get_config('inv_min_inv_kmer_run', wildcards),
-        min_qry_ref_prop=lambda wildcards: get_config('inv_min_qry_ref_prop', wildcards)
     threads: 1
     run:
+
+        pav_params = pavlib.pavconfig.ConfigParams(wildcards.asm_name, config, ASM_TABLE)
 
         call_source = 'FLAG-DEN'
 
@@ -212,7 +203,7 @@ rule call_inv_part:
             return
 
         # Init
-        k_util = kanapy.util.kmer.KmerUtil(params.k_size)
+        k_util = kanapy.util.kmer.KmerUtil(pav_params.inv_k_size)
 
         align_lift = pavlib.align.lift.AlignLift(
             pd.read_csv(input.bed_aln, sep='\t'),
@@ -220,7 +211,7 @@ rule call_inv_part:
         )
 
         kde = pavlib.kde.KdeTruncNorm(
-            params.kde_bandwidth, params.kde_trunc_z, params.kde_func
+            pav_params.inv_kde_bandwidth, pav_params.inv_kde_trunc_z, pav_params.inv_kde_func
         )
 
         # Call inversions
@@ -239,11 +230,11 @@ rule call_inv_part:
                         k_util=k_util,
                         nc_ref=None,
                         nc_qry=None,
-                        region_limit=params.region_limit,
-                        min_expand=params.min_expand,
-                        init_expand=params.init_expand,
-                        min_kmers=params.min_kmers,
-                        max_ref_kmer_count=params.max_ref_kmer_count,
+                        region_limit=pav_params.inv_region_limit,
+                        min_expand=pav_params.inv_min_expand,
+                        init_expand=pav_params.inv_init_expand,
+                        min_kmers=pav_params.inv_min_kmers,
+                        max_ref_kmer_count=pav_params.inv_max_ref_kmer_count,
                         kde=kde,
                         log=log_file
                     )
@@ -352,28 +343,27 @@ rule call_inv_merge_flagged_loci:
         bed_cluster_snv='temp/{asm_name}/inv_caller/flag/cluster_snv_{hap}.bed.gz'
     output:
         bed='results/{asm_name}/inv_caller/flagged_regions_{hap}_parts-{part_count}.bed.gz'
-    params:
-        flank=lambda wildcards: get_config('inv_sig_merge_flank', wildcards),  # Merge windows within this many bp
-        inv_sig_filter=lambda wildcards: get_config('inv_sig_filter', wildcards)   # Filter flagged regions
     run:
+
+        pav_params = pavlib.pavconfig.ConfigParams(wildcards.asm_name, config, ASM_TABLE)
 
         # Get region filter parameters
         allow_single_cluster = False
         match_any = set()
 
-        if params.inv_sig_filter is not None:
-            if params.inv_sig_filter == 'single_cluster':
+        if pav_params.inv_sig_filter is not None:
+            if pav_params.inv_sig_filter == 'single_cluster':
                 allow_single_cluster = True
 
-            elif params.inv_sig_filter == 'svindel':
+            elif pav_params.inv_sig_filter == 'svindel':
                 match_any.add('MATCH_SV')
                 match_any.add('MATCH_INDEL')
 
-            elif params.inv_sig_filter == 'sv':
+            elif pav_params.inv_sig_filter == 'sv':
                 match_any.add('MATCH_SV')
 
             else:
-                raise RuntimeError(f'Unrecognized region filter: {params.inv_sig_filter} (must be "single_cluster", "svindel", or "sv")')
+                raise RuntimeError(f'Unrecognized region filter: {pav_params.inv_sig_filter} (must be "single_cluster", "svindel", or "sv")')
 
         # Read
         df_insdel_sv = pd.read_csv(input.bed_insdel_sv, sep='\t')
@@ -422,7 +412,7 @@ rule call_inv_merge_flagged_loci:
 
         for index, row in df.iterrows():
 
-            if (row['POS'] < end + params.flank) and (row['#CHROM'] == chrom):
+            if (row['POS'] < end + pav_params.inv_sig_merge_flank) and (row['#CHROM'] == chrom):
 
                 # Add to existing region
                 type_set |= row['TYPE']
@@ -634,23 +624,21 @@ rule call_inv_cluster:
         bed=_input_call_inv_cluster
     output:
         bed=temp('temp/{asm_name}/inv_caller/flag/cluster_{vartype}_{hap}.bed.gz')
-    params:
-        cluster_win=lambda wildcards: get_config( 'inv_sig_cluster_win', wildcards),            # Cluster variants within this many bases
-        cluster_win_min=lambda wildcards: get_config('inv_sig_cluster_win_min', wildcards),    # Window must reach this size
-        cluster_min_snv=lambda wildcards: get_config('inv_sig_cluster_snv_min', wildcards),     # Minimum number if SNVs in window (if vartype == snv)
-        cluster_min_indel=lambda wildcards: get_config('inv_sig_cluster_indel_min', wildcards)  # Minimum number of indels in window (if vartype == indel)
     wildcard_constraints:
         vartype='indel|snv'
     run:
 
+        # noinspection PyUnresolvedReferences
+        pav_params = pavlib.pavconfig.ConfigParams(wildcards.asm_name, config, ASM_TABLE)
+
         # Params
-        cluster_win = params.cluster_win
-        cluster_win_min = params.cluster_win
+        cluster_win = pav_params.inv_sig_cluster_win
+        cluster_win_min = pav_params.inv_sig_cluster_win
 
         if wildcards.vartype == 'indel':
-            cluster_min = params.cluster_min_indel
+            cluster_min = pav_params.inv_sig_cluster_min_indel
         elif wildcards.vartype == 'snv':
-            cluster_min = params.cluster_min_snv
+            cluster_min = pav_params.inv_sig_cluster_min_snv
         else:
             raise RuntimeError('Bad variant type {}: Expected "indel" or "snv"')
 

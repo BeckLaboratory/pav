@@ -4,8 +4,9 @@ import collections
 import intervaltree
 import numpy as np
 
-import pavlib
+from .. import seq
 
+from . import op
 
 class AlignLift:
     """
@@ -320,7 +321,7 @@ class AlignLift:
                     return None
 
         # Return region
-        return pavlib.seq.Region(
+        return seq.Region(
             ref_pos[0], ref_pos[1], ref_end[1],
             is_rev=is_rev,
             pos_min=ref_pos[3], pos_max=ref_pos[4],
@@ -353,7 +354,7 @@ class AlignLift:
             return None
 
         # Return
-        return pavlib.seq.Region(
+        return seq.Region(
             query_pos[0], query_pos[1], query_end[1],
             is_rev=query_pos[2],
             pos_min=query_pos[3], pos_max=query_pos[4],
@@ -441,20 +442,20 @@ class AlignLift:
         itree_qry = intervaltree.IntervalTree()
 
         # Get CIGAR and check query start position
-        cigar_op_list = list(pavlib.align.util.cigar_str_to_tuples(self.df.loc[index]))
+        cigar_op_list = list(op.as_tuples(self.df.loc[index]))
 
         clipped_bp = 0
 
         cigar_index = 0
 
-        while cigar_index < len(cigar_op_list) and cigar_op_list[cigar_index][1] in {'S', 'H'}:
-            clipped_bp += cigar_op_list[cigar_index][0]
+        while cigar_index < len(cigar_op_list) and cigar_op_list[cigar_index][0] in op.CLIP_SET:
+            clipped_bp += cigar_op_list[cigar_index][1]
             cigar_index += 1
 
         # Build trees
-        for cigar_len, cigar_op in cigar_op_list:
+        for cigar_op, cigar_len in cigar_op_list:
 
-            if cigar_op in {'=', 'X', 'M'}:
+            if cigar_op in op.ALIGN_SET:
 
                 itree_ref[ref_bp:(ref_bp + cigar_len)] = (qry_bp, qry_bp + cigar_len)
                 itree_qry[qry_bp:(qry_bp + cigar_len)] = (ref_bp, ref_bp + cigar_len)
@@ -462,19 +463,19 @@ class AlignLift:
                 ref_bp += cigar_len
                 qry_bp += cigar_len
 
-            elif cigar_op == 'I':
+            elif cigar_op == op.I:
 
                 itree_qry[qry_bp:(qry_bp + cigar_len)] = (ref_bp, ref_bp + 1)
 
                 qry_bp += cigar_len
 
-            elif cigar_op == 'D':
+            elif cigar_op == op.D:
 
                 itree_ref[ref_bp:(ref_bp + cigar_len)] = (qry_bp, qry_bp + 1)
 
                 ref_bp += cigar_len
 
-            elif cigar_op in {'S', 'H'}:
+            elif cigar_op in op.CLIP_SET:
 
                 qry_bp += cigar_len
 
@@ -486,10 +487,6 @@ class AlignLift:
                 raise RuntimeError('Unhandled CIGAR operation: {}: Alignment {}:{} ({})'.format(
                     cigar_op, row['#CHROM'], row['POS'], row['QRY_ID']
                 ))
-
-                # raise RuntimeError('Unhandled CIGAR operation: {}: Alignment {}:{} ({}:{})'.format(
-                #     cigar_op, row['#CHROM'], row['POS'], row['QRY_ID'], qry_map_rgn.pos
-                # ))
 
         # Cache trees
         self.ref_cache[index] = itree_ref

@@ -14,6 +14,12 @@ from .stage import *
 logger = logging.getLogger(__name__)
 
 class StageInit(Stage):
+    train_runpath_filename: str
+    train_datasource_filename: str
+    eval_runpath_filename: str
+    eval_datasource_filename: str
+    check_files_train: list[str]
+    check_files_eval: list[str]
     """Locate data sources."""
 
     STAGE_FILE_NAMES = {

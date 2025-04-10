@@ -4,7 +4,8 @@ Variant anchor.
 
 import numpy as np
 import pandas as pd
-import pavlib
+
+from .. import seq
 
 SEGMENT_TABLE_FIELDS = [  # Fields for creating an empty table
     '#CHROM', 'POS', 'END',
@@ -87,14 +88,14 @@ class AnchoredInterval:
         self.len_ref = ref_end - ref_pos
 
         if ref_end - ref_pos < 0:
-            self.region_ref = pavlib.seq.Region(self.chrom, ref_end, ref_pos)
+            self.region_ref = seq.Region(self.chrom, ref_end, ref_pos)
             # ref_pos, ref_end = ref_end, ref_pos
         else:
-            self.region_ref = pavlib.seq.Region(self.chrom, ref_pos, ref_end)
+            self.region_ref = seq.Region(self.chrom, ref_pos, ref_end)
 
         # Get query region
-        self.region_qry = pavlib.seq.Region(self.qry_id, qry_pos, qry_end, self.is_rev)
-        self.region_ref = pavlib.seq.Region(self.chrom, ref_pos, ref_end)
+        self.region_qry = seq.Region(self.qry_id, qry_pos, qry_end, self.is_rev)
+        self.region_ref = seq.Region(self.chrom, ref_pos, ref_end)
 
         self.len_qry = len(self.region_qry)
 

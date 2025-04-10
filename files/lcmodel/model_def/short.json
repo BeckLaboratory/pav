@@ -3,7 +3,7 @@
   "type": "logistic",
   "description": "Short test model",
   "features": [
-    "SCORE_PROP", "SCORE_MM_PROP", "ANCHOR_PROP", "QRY_PROP"
+    "SCORE_PROP", "MATCH_PROP", "ANCHOR_PROP", "QRY_PROP"
   ],
   "threshold": 0.5,
   "epochs": 8,

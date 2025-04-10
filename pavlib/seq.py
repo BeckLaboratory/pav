@@ -2,21 +2,19 @@
 Routines for aligned contigs.
 """
 
-import Bio.SeqIO
 import Bio.Seq
+import Bio.SeqIO
+import Bio.SeqRecord
 import collections
-import gzip
 import numpy as np
 import os
 import pandas as pd
 import pysam
 import re
-import shutil
 
-import svpoplib
 import kanapy
 
-import pavlib
+from . import io
 
 
 class Region(object):
@@ -170,7 +168,7 @@ class Region(object):
 
         # Shift end
         if max_end is not None:
-            if isinstance(max_end, pd.core.series.Series):
+            if isinstance(max_end, pd.Series):
                 if new_region.chrom not in max_end.index:
                     raise RuntimeError(f'Cannot expand with max_end Series: Sequence ID is not in max_end: {new_region.chrom}')
 
@@ -433,7 +431,7 @@ def variant_seq_from_region(df, fa_file_name, region_col='QRY_REGION', strand_co
         dup_ids = ', '.join(dup_ids[3:]) + (', ...' if n_dup > 3 else '')
         raise RuntimeError(f'Found {n_dup} duplicate IDs in DataFrame: "{id_col}": {dup_ids}')
 
-    with pavlib.io.FastaReader(fa_file_name) as fa_file:
+    with io.FastaReader(fa_file_name) as fa_file:
 
         for index, row in df.iterrows():
 

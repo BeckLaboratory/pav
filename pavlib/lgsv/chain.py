@@ -1,8 +1,10 @@
 """
-Alignment chainging functions
+Alignment chaining functions
 """
 
-import pavlib
+from .. import const
+
+from .util import get_min_anchor_score
 
 class AnchorChainNode:
     """
@@ -52,7 +54,7 @@ def get_chain_set(df_align, caller_resources, min_anchor_score=None):
     qryref_index_set = set(caller_resources.df_align_qryref.index)
 
     if min_anchor_score is None:
-        min_anchor_score = pavlib.lgsv.util.get_min_anchor_score(min_anchor_score, caller_resources.score_model)
+        min_anchor_score = get_min_anchor_score(min_anchor_score, caller_resources.score_model)
 
     # Traverse interval setting each position to the left-most anchor candidate.
     while start_index < last_index:
@@ -66,9 +68,9 @@ def get_chain_set(df_align, caller_resources, min_anchor_score=None):
         end_index = start_index + 1
 
         # Traverse each interval after the start for right-most anchor candidates. Limit search by contig distance
-        while end_index < last_index and pavlib.lgsv.chain.can_reach_anchor(start_row, df_align.loc[end_index], caller_resources.score_model):
+        while end_index < last_index and can_reach_anchor(start_row, df_align.loc[end_index], caller_resources.score_model):
 
-            if df_align.loc[end_index]['INDEX'] in qryref_index_set and pavlib.lgsv.chain.can_anchor(
+            if df_align.loc[end_index]['INDEX'] in qryref_index_set and can_anchor(
                     start_row, df_align.loc[end_index], caller_resources.score_model, min_anchor_score,
                     gap_scale=caller_resources.config_params.lg_gap_scale
             ):
@@ -81,7 +83,7 @@ def get_chain_set(df_align, caller_resources, min_anchor_score=None):
     return chain_set
 
 
-def can_anchor(row_a, row_b, score_model, min_score=100, gap_scale=pavlib.const.DEFAULT_LG_GAP_SCALE):
+def can_anchor(row_a, row_b, score_model, min_score=100, gap_scale=const.DEFAULT_LG_GAP_SCALE):
     """
     Determine if two alignment rows can anchor a rearrangement. Requires the "SCORE" column is added to the alignment
     rows.

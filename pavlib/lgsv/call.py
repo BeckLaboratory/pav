@@ -1,11 +1,37 @@
-# Variant calling
+"""
+Large alignment-truncating variant calling.
+"""
 
 import collections
 import numpy as np
 import os
 
-import pavlib
 import svpoplib
+
+from .. import align
+from .. import const
+from .. import inv
+from .. import io
+from .. import kde
+
+from .chain import AnchorChainNode
+from .chain import get_chain_set
+
+from .interval import AnchoredInterval
+from .interval import get_segment_table
+
+from .util import dot_graph_writer
+from .util import get_min_anchor_score
+
+from .variant import DeletionVariant
+from .variant import ComplexVariant
+from .variant import InsertionVariant
+from .variant import InversionVariant
+from .variant import NullVariant
+from .variant import PatchVariant
+from .variant import TandemDuplicationVariant
+from .variant import score_segment_transitions
+from .variant import try_variant
 
 class VarRegionKde:
     def __init__(self,
@@ -27,8 +53,8 @@ class VarRegionKde:
             (i.e. min / max >= qry_ref_max_ident).
         :param max_seg_n: If the number of segments is this value or greater, do not try a variant call. No limit if
             None.
-        :param max_qry_len: If the query sequence length is this value or greater, do not try a variant call. No limit
-            if None.
+        :param max_qry_len_kde: If the query sequence length is this value or greater, do not try a variant call. No
+            limit if None.
         """
 
         # Default values
@@ -56,7 +82,7 @@ class VarRegionKde:
         if interval.len_qry <= max_qry_len_kde:
 
             # Match complex sequence to the gap region
-            self.df_kde = pavlib.inv.get_state_table(
+            self.df_kde = inv.get_state_table(
                 region_ref=interval.region_ref,
                 region_qry=interval.region_qry,
                 ref_fa_name=caller_resources.ref_fa_name,
@@ -65,7 +91,7 @@ class VarRegionKde:
                 qry_fai=caller_resources.qry_fai,
                 is_rev=interval.region_qry.is_rev,
                 k_util=caller_resources.k_util,
-                kde=caller_resources.kde,
+                kde_model=caller_resources.kde_model,
                 max_ref_kmer_count=caller_resources.config_params.inv_max_ref_kmer_count,
                 expand_bound=True,
                 log=caller_resources.log_file
@@ -81,14 +107,14 @@ class VarRegionKde:
 
                 kmer_n_kde = self.df_kde.shape[0]  # Number of k-mers not dropped by KDE (found in both query and ref in either orientation)
 
-                self.df_rl = pavlib.kde.rl_encoder(self.df_kde)
+                self.df_rl = kde.rl_encoder(self.df_kde)
 
                 qry_len_rl = np.sum(self.df_rl['LEN_QRY'])
 
                 if qry_len_rl > 0:
-                    prop_rev = np.sum(self.df_rl.loc[self.df_rl['STATE'] == pavlib.inv.KDE_STATE_REV, 'LEN_KDE']) / qry_len_rl
-                    prop_fwdrev = np.sum(self.df_rl.loc[self.df_rl['STATE'] == pavlib.inv.KDE_STATE_FWDREV, 'LEN_KDE']) / qry_len_rl
-                    prop_fwd = np.sum(self.df_rl.loc[self.df_rl['STATE'] == pavlib.inv.KDE_STATE_FWD, 'LEN_KDE']) / qry_len_rl
+                    prop_rev = np.sum(self.df_rl.loc[self.df_rl['STATE'] == inv.KDE_STATE_REV, 'LEN_KDE']) / qry_len_rl
+                    prop_fwdrev = np.sum(self.df_rl.loc[self.df_rl['STATE'] == inv.KDE_STATE_FWDREV, 'LEN_KDE']) / qry_len_rl
+                    prop_fwd = np.sum(self.df_rl.loc[self.df_rl['STATE'] == inv.KDE_STATE_FWD, 'LEN_KDE']) / qry_len_rl
                 else:
                     prop_rev = 0.0
                     prop_fwdrev = 0.0
@@ -109,8 +135,8 @@ class VarRegionKde:
                 )
 
                 # Test states for inverted or reference states
-                if np.any(self.df_rl['STATE'] == pavlib.inv.KDE_STATE_REV):
-                    p_binom = pavlib.inv.test_kde(self.df_rl)  # Test KDE for inverted state significance
+                if np.any(self.df_rl['STATE'] == inv.KDE_STATE_REV):
+                    p_binom = inv.test_kde(self.df_rl)  # Test KDE for inverted state significance
 
                     self.try_inv = p_binom < 0.01 and prop_rev >= 0.5
 
@@ -125,7 +151,7 @@ class VarRegionKde:
                             (self.df_kde['INDEX'] >= pos) * (self.df_kde['INDEX'] <= end)
                         ]
 
-                        df_kde_seg = df_kde_seg.loc[df_kde_seg['STATE'].isin({pavlib.inv.KDE_STATE_FWDREV, pavlib.inv.KDE_STATE_REV})]
+                        df_kde_seg = df_kde_seg.loc[df_kde_seg['STATE'].isin({inv.KDE_STATE_FWDREV, inv.KDE_STATE_REV})]
 
                         prop_mer = df_kde_seg.shape[0] / (end - pos - caller_resources.k_util.k_size + 1)
 
@@ -138,14 +164,14 @@ class VarRegionKde:
 
             # try variant only if k-mer Jaccard distance is within the threshold
             # if svpoplib.aligner.jaccard_distance(
-            #     pavlib.seq.region_seq_fasta(interval.region_qry, caller_resources.qry_fa_name),
-            #     pavlib.seq.region_seq_fasta(interval.region_ref, caller_resources.ref_fa_name),
+            #     seq.region_seq_fasta(interval.region_qry, caller_resources.qry_fa_name),
+            #     seq.region_seq_fasta(interval.region_ref, caller_resources.ref_fa_name),
             #     caller_resources.k_util.k_size
             # ) < qry_ref_max_ident:
             #     self.try_var = True
 
 
-def call_from_align(caller_resources, min_anchor_score=pavlib.const.DEFAULT_MIN_ANCHOR_SCORE, dot_dirname=None):
+def call_from_align(caller_resources, min_anchor_score=const.DEFAULT_MIN_ANCHOR_SCORE, dot_dirname=None):
     """
     Create a list of variant calls from alignment table.
 
@@ -159,7 +185,7 @@ def call_from_align(caller_resources, min_anchor_score=pavlib.const.DEFAULT_MIN_
     variant_call_list = list()
     variant_id_set = set()
 
-    min_anchor_score = pavlib.lgsv.util.get_min_anchor_score(min_anchor_score, caller_resources.score_model)
+    min_anchor_score = get_min_anchor_score(min_anchor_score, caller_resources.score_model)
 
     for query_id in caller_resources.df_align_qry['QRY_ID'].unique():
         if caller_resources.verbose:
@@ -173,7 +199,7 @@ def call_from_align(caller_resources, min_anchor_score=pavlib.const.DEFAULT_MIN_
             raise RuntimeError(f'Query {query_id} order is out of sync with QRY_ORDER (Program Bug)')
 
         # Chain alignment records
-        chain_set = pavlib.lgsv.chain.get_chain_set(df_align, caller_resources, min_anchor_score)
+        chain_set = get_chain_set(df_align, caller_resources, min_anchor_score)
 
         if caller_resources.verbose:
             n_chains = len(chain_set)
@@ -206,8 +232,8 @@ def call_from_align(caller_resources, min_anchor_score=pavlib.const.DEFAULT_MIN_
         if dot_dirname is not None:
             dot_filename = os.path.join(dot_dirname, f'lgsv_graph_{query_id}.dot.gz')
 
-            with pavlib.io.PlainOrGzFile(dot_filename, 'wt') as out_file:
-                pavlib.lgsv.util.dot_graph_writer(
+            with io.PlainOrGzFile(dot_filename, 'wt') as out_file:
+                dot_graph_writer(
                     out_file, df_align, chain_set, optimal_interval_list, sv_dict, graph_name=f'"{query_id}"', forcelabels=True
                 )
 
@@ -228,9 +254,9 @@ def call_from_interval(start_index, end_index, df_align, caller_resources, min_s
     :return: Variant call. If no variant is called, returns a `NullVariant` object.
     """
 
-    chain_node = pavlib.lgsv.chain.AnchorChainNode(start_index, end_index)
+    chain_node = AnchorChainNode(start_index, end_index)
 
-    interval = pavlib.lgsv.interval.AnchoredInterval(chain_node, df_align, caller_resources)
+    interval = AnchoredInterval(chain_node, df_align, caller_resources)
 
     if caller_resources.verbose:
         print(f'Trying interval: interval=({interval.chain_node.start_index}, {interval.chain_node.end_index}), region_qry={interval.region_qry}, region_ref={interval.region_ref}', file=caller_resources.log_file, flush=True)
@@ -239,47 +265,47 @@ def call_from_interval(start_index, end_index, df_align, caller_resources, min_s
     var_region_kde = VarRegionKde(interval, caller_resources)
 
     # Initialize to Null variant
-    variant_call = pavlib.lgsv.variant.NullVariant()
+    variant_call = NullVariant()
 
     # Try variants
     if var_region_kde.try_var:
         # Try INS
-        variant_call = pavlib.lgsv.variant.try_variant(
-            pavlib.lgsv.variant.InsertionVariant, interval, caller_resources, variant_call, var_region_kde
+        variant_call = try_variant(
+            InsertionVariant, interval, caller_resources, variant_call, var_region_kde
         )
 
         # Try DEL
-        variant_call = pavlib.lgsv.variant.try_variant(
-            pavlib.lgsv.variant.DeletionVariant, interval, caller_resources, variant_call, var_region_kde
+        variant_call = try_variant(
+            DeletionVariant, interval, caller_resources, variant_call, var_region_kde
         )
 
         # Try tandem duplication
-        variant_call = pavlib.lgsv.variant.try_variant(
-            pavlib.lgsv.variant.TandemDuplicationVariant, interval, caller_resources, variant_call, var_region_kde
+        variant_call = try_variant(
+            TandemDuplicationVariant, interval, caller_resources, variant_call, var_region_kde
         )
 
         # Try Inversion
-        variant_call = pavlib.lgsv.variant.try_variant(
-            pavlib.lgsv.variant.InversionVariant, interval, caller_resources, variant_call, var_region_kde
+        variant_call = try_variant(
+            InversionVariant, interval, caller_resources, variant_call, var_region_kde
         )
 
         # Try complex
-        variant_call = pavlib.lgsv.variant.try_variant(
-            pavlib.lgsv.variant.ComplexVariant, interval, caller_resources, variant_call, var_region_kde
+        variant_call = try_variant(
+            ComplexVariant, interval, caller_resources, variant_call, var_region_kde
         )
     else:
-        variant_call = pavlib.lgsv.variant.PatchVariant(interval)
+        variant_call = PatchVariant(interval)
 
     if not variant_call.is_null():
         if (not interval.is_anchor_pass) or interval.aligned_pass_prop < caller_resources.config_params.get('min_aligned_pass_prop', 0.8):
-            variant_call.filter = interval.align_filters if interval.align_filters else pavlib.align.util.FILTER_LCALIGN
+            variant_call.filter = interval.align_filters if interval.align_filters else align.records.FILTER_LCALIGN
 
     if caller_resources.verbose:
         print(f'Call ({variant_call.filter}): interval=({interval.chain_node.start_index}, {interval.chain_node.end_index}), var={variant_call}', file=caller_resources.log_file, flush=True)
 
     # Set to Null variant if anchors cannot support the variant call
     if not variant_call.is_null() and variant_call.score_variant + variant_call.anchor_score_min < min_sum:
-        variant_call = pavlib.lgsv.variant.NullVariant()
+        variant_call = NullVariant()
 
     return variant_call
 
@@ -346,8 +372,8 @@ def find_optimal_svs(sv_dict, chain_set, df_align, caller_resources, optimal_int
 
                 # Initial score: Template switches and gap penalties
                 score += \
-                    pavlib.lgsv.variant.score_segment_transitions(
-                        pavlib.lgsv.interval.get_segment_table(start_index, end_index, df_align, caller_resources),
+                    score_segment_transitions(
+                        get_segment_table(start_index, end_index, df_align, caller_resources),
                         caller_resources
                     )
 
