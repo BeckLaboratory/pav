@@ -161,9 +161,8 @@ def get_align_bed(
         feature_list=align_features,
         score_model=score_model,
         existing_score_model=True,
-        score_prop_conf=features.ALIGN_FEATURE_SCORE_PROP_CONF,
         op_arr_list=op_arr_list,
-        qry_fai=df_qry_fai,
+        df_qry_fai=df_qry_fai,
         inplace=True,
         only_features=False,
         force_all=True
@@ -206,8 +205,7 @@ def aggregate_alignment_records(
         df_qry_fai: pd.Series,
         score_model: bool=None,
         min_score: float=None,
-        noncolinear_penalty: bool=True,
-        assign_order: bool=True
+        noncolinear_penalty: bool=True
 ):
     """
     Aggregate colinear alignment records.
@@ -219,9 +217,6 @@ def aggregate_alignment_records(
         10 kbp gap.
     :param noncolinear_penalty: When aggregating two records, add a gap penalty equal to the difference between the
         unaligned reference and query bases between the records. This penalizes non-colinear alignments.
-    :param assign_order: Assign a unique order to each alignment record. This becomes the "QRY_ORDER" column and is
-        an increasing integer indicating the aligned segment along the query. The first aligned segment of a query is
-        0, the next is 1, and so on.
 
     :return: Table of aggregated alignment records.
     """
@@ -269,12 +264,12 @@ def aggregate_alignment_records(
             row1 = df.iloc[i]
 
             # Skip if chrom or orientation is not the same
-            if row1['#CHROM'] != row2['#CHROM'] or row1['REV'] != row2['REV']:
+            if row1['#CHROM'] != row2['#CHROM'] or row1['IS_REV'] != row2['IS_REV']:
                 align_records.append(row2)
                 continue
 
             # Get reference distance
-            if row1['REV']:
+            if row1['IS_REV']:
                 ref_dist = row2['POS'] - row1['END']
             else:
                 ref_dist = row1['POS'] - row2['END']
@@ -307,7 +302,7 @@ def aggregate_alignment_records(
                 row1['QRY_POS'] = row2['QRY_POS']
 
                 # Get rows in order
-                if row1['REV']:
+                if row1['IS_REV']:
                     row_l = row1
                     row_r = row2
 
@@ -338,36 +333,36 @@ def aggregate_alignment_records(
                     row1['AO'] = np.nan
 
                 # Merge CIGAR strings
-                cigar_l = list(op.as_tuples(row_l['CIGAR']))
-                cigar_r = list(op.as_tuples(row_r['CIGAR']))
+                op_arr_l = op.cigar_as_array(row_l['CIGAR'])
+                op_arr_r = op.cigar_as_array(row_r['CIGAR'])
 
-                while len(cigar_l) > 0 and cigar_l[-1][0] in op.CLIP_SET:  # Tail of left record
-                    cigar_l = cigar_l[:-1]
+                while op_arr_l.shape[0] > 0 and op_arr_l[-1, 0] in op.CLIP_SET:  # Tail of left record
+                    op_arr_l = op_arr_l[:-1]
 
-                while len(cigar_r) > 0 and cigar_r[0][0] in op.CLIP_SET:  # Head of right record
-                    cigar_r = cigar_r[1:]
+                while op_arr_r.shape[0] > 0 and op_arr_r[0, 0] in op.CLIP_SET:  # Head of right record
+                    op_arr_r = op_arr_r[1:]
 
                 ins_len = qry_dist
                 del_len = ref_dist
 
                 if qry_dist > 0:
-                    while len(cigar_l) > 0 and cigar_l[-1][0] == op.I:  # Concat insertions (no "...xIxI..." in CIGAR)
-                        ins_len += cigar_l[-1][1]
-                        cigar_l = cigar_l[:-1]
+                    while op_arr_l.shape[0] > 0 and op_arr_l[-1, 0] == op.I:  # Concat insertions (no "...xIxI..." in CIGAR)
+                        ins_len += op_arr_l[-1, 1]
+                        op_arr_l = op_arr_l[:-1]
 
-                    cigar_l.append((ins_len, op.I))
+                    op_arr_l = np.append(op_arr_l, np.array([[ins_len, op.I]]), axis=0)
 
                 if ref_dist > 0:
-                    while len(cigar_l) > 0 and cigar_l[-1][0] == op.D:  # Concat deletions (no "...xDxD..." in CIGAR)
-                        del_len += cigar_l[-1][1]
-                        cigar_l = cigar_l[:-1]
+                    while op_arr_l.shape[0] > 0 and op_arr_l[-1, 0] == op.D:  # Concat deletions (no "...xDxD..." in CIGAR)
+                        del_len += op_arr_l[-1, 1]
+                        op_arr_l = op_arr_l[:-1]
 
-                    cigar_l.append((del_len, op.D))
+                    op_arr_l = np.append(op_arr_l, np.array([[del_len, op.D]]), axis=0)
 
-                cigar_tuples = cigar_l + cigar_r
+                op_arr = np.append(op_arr_l, op_arr_r, axis=0)
 
-                row1['CIGAR'] = op.to_cigar_string(cigar_tuples)
-                row1['SCORE'] = score_model.score_cigar_tuples(cigar_tuples)
+                row1['CIGAR'] = op.to_cigar_string(op_arr)
+                row1['SCORE'] = score_model.score_operations(op_arr)
 
                 # Set alignment indexes
                 if row2['INDEX'] < min_agg_index:
@@ -396,13 +391,7 @@ def aggregate_alignment_records(
     df['INDEX_PREAGG'] = df['INDEX_PREAGG'].apply(lambda val: ','.join([str(v) for v in val]))
 
     # Assign order per query sequence
-    if assign_order:
-        df.sort_values(['QRY_ID', 'QRY_POS', 'QRY_END'], inplace=True)
-
-        df['QRY_ORDER'] = -1
-
-        for qry_id in df['QRY_ID'].unique():
-            df.loc[df['QRY_ID'] == qry_id, 'QRY_ORDER'] = df.loc[df['QRY_ID'] == qry_id, 'QRY_POS'].rank().astype(int) - 1
+    df['QRY_ORDER'] = get_qry_order(df)
 
     # Reference order
     df.sort_values(['#CHROM', 'POS', 'END', 'QRY_ID'], ascending=[True, True, False, True], inplace=True)
@@ -654,3 +643,25 @@ def align_bed_to_depth_bed(df, df_fai=None, index_sep=',', retain_filtered=False
     df_bed.sort_values(['#CHROM', 'POS'], inplace=True)
 
     return df_bed
+
+def get_qry_order(df):
+    """
+    Get a column describing the query order of each alignment record. For any query sequence, the first alignment
+    record in the sequence (i.e. containing the left-most aligned base relative to the query sequence) will have
+    order 0, the next alignment record 1, etc. The order is set per query sequence (i.e. the first aligned record
+    of every unique query ID will have order 0).
+
+    :param df: DataFrame of alignment records.
+
+    :return: A Series of alignment record query orders.
+    """
+
+    df_qry_id = df.sort_values(['QRY_ID', 'QRY_POS', 'QRY_END'])['QRY_ID']
+    df_qry_ord = pd.Series(range(df_qry_id.shape[0]), index=df_qry_id.index)
+
+    min_ord = pd.concat([df_qry_id, df_qry_ord], axis=1).groupby('QRY_ID').min()[0]
+
+    row_ord = pd.Series((df_qry_ord - df_qry_id.apply(min_ord.get)).reindex(df.index))
+    row_ord.name = 'QRY_ORDER'
+
+    return row_ord

@@ -112,7 +112,7 @@ class AlignLift:
 
                 # Reverse coordinates of pos if the alignment is reverse-complemented. Translates from QRY_POS-space
                 # to QUERY_POS-space.
-                if row['REV']:
+                if row['IS_REV']:
                     pos = self.df_fai[query_id] - pos
 
                 # Get match record
@@ -152,7 +152,7 @@ class AlignLift:
                     match_list.append((
                         row['#CHROM'],
                         lift_pos,
-                        row['REV'],
+                        row['IS_REV'],
                         lift_pos,
                         lift_pos,
                         row['INDEX'],
@@ -163,7 +163,7 @@ class AlignLift:
                     match_list.append((
                         row['#CHROM'],
                         match_interval.data[1],
-                        row['REV'],
+                        row['IS_REV'],
                         match_interval.data[1],
                         match_interval.data[1],
                         row['INDEX'],
@@ -260,13 +260,13 @@ class AlignLift:
                 else:  # Lift from missing bases on the target (insertion or deletion)
                     qry_pos = lift_interval.data[1]
 
-                if row['REV']:
+                if row['IS_REV']:
                     qry_pos = self.df_fai[row['QRY_ID']] - qry_pos
 
                 match_list.append((
                     row['QRY_ID'],
                     qry_pos,
-                    row['REV'],
+                    row['IS_REV'],
                     qry_pos,
                     qry_pos,
                     row['INDEX'],
@@ -403,7 +403,7 @@ class AlignLift:
             (
                 row_l['#CHROM'],
                 int((row_l['QRY_END'] + row_r['QRY_POS']) / 2),
-                row_l['REV'] if row_l['REV'] == row_r['REV'] else None,
+                row_l['IS_REV'] if row_l['IS_REV'] == row_r['IS_REV'] else None,
                 row_l['QRY_END'],
                 row_r['QRY_POS'],
                 (row_l['INDEX'], row_r['INDEX'])

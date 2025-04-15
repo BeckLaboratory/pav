@@ -23,7 +23,7 @@ def get_config(key, wildcards):
     :return: Config object. Original global config, if unmodified, or a modified copy of it.
     """
 
-    getattr(
+    return getattr(
         pavlib.pavconfig.ConfigParams(wildcards.asm_name, config, ASM_TABLE),
         key
     )

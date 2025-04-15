@@ -3,7 +3,7 @@ FIELD	TYPE	NAME	DESC	LONG_DESC
 POS	uint	chromStart	Start position	Start position
 END	uint	chromEnd	End position	End position
 ID	string	name	Variant ID	Variant ID
-SCORE	uint	score	Score	Score
+TRACK_SCORE	uint	trkScore	Track score	Score
 STRAND	char[1]	strand	Strand	Strand
 POS_THICK	uint	thickStart	Coding region start	Coding region start
 END_THICK	uint	thickEnd	Coding region end	Coding region end
@@ -17,13 +17,13 @@ QRY_ORDER	uint	qryOrd	Query order	Order of the aligned query segment from the st
 AO	string	chainOrder	Global chain order	Global chain order (LRA alignments)
 RG	string	readGroup	Read group	Read group
 MAPQ	lstring	mapQual	MAPQ	Maping quality. May be a list of alignment was aggregated.
-REV	string	isRev	Rev	Alignment was reversed if True
+IS_REV	string	isRev	Rev	Alignment was reversed if True
 FLAGS	lstring	alignFlags	Flags	Alignment flags. May be a list if alignment was aggregated.
 HAP	string	haplotype	Haplotype	Haplotype
-PAV_SCORE	float	pavScore	Score	Alignment score using PAVs scoring system.
-PAV_SCORE_PROP	float	pavScoreProp	Score prop.	Proportion of the alignment score over the maximum score.
-PAV_SCORE_MM	float	pavScoreMm	Mismatch score	Alignment score for mismatches (INS/DEL not penalized)
-PAV_SCORE_MM_PROP	float	pavScoreMmProp	Mismatch prop.	Proportion of the alignment score over all aligned based (INS/DEL not in numerator or denominator for this proportion)
+SCORE	float	score	Score	Alignment score using PAVs scoring system.
+SCORE_PROP	float	scoreProp	Score prop.	Proportion of the alignment score over the maximum score.
+MATCH_PROP	float	matchProp	Match prop.	Proportion of aligned bases that are matches.
+QRY_PROP	float	qryProp	Qry prop.	Proportion of the query sequence aligned in this record
 QRY_PROP	float	qryProp	Query prop.	Proportion of the assembled query sequence represented by this alignment.
 TRIM_REF_L	uint	trimRefL	Align trim (ref L)	Number of reference bases trimmed from the left side
 TRIM_REF_R	uint	trimRefR	Align trim (ref R)	Number of reference bases trimmed from the right side

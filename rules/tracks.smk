@@ -334,16 +334,6 @@ rule tracks_align:
 
         df['FILTER'] = df['FILTER'].fillna('PASS')
 
-        # Rename SCORE to PAV_SCORE
-        df.columns = [
-            {
-                'SCORE': 'PAV_SCORE',
-                'SCORE_PROP': 'PAV_SCORE_PROP',
-                'SCORE_MM': 'PAV_SCORE_MM',
-                'SCORE_MM_PROP': 'PAV_SCORE_MM_PROP'
-            }.get(col, col) for col in df.columns
-        ]
-
         # Sort
         df.sort_values(['#CHROM', 'POS', 'END', 'QRY_ID'], inplace=True)
 
@@ -353,8 +343,8 @@ rule tracks_align:
         df['POS_THICK'] = df['POS']
         df['END_THICK'] = df['END']
         df['ID'] = df.apply(lambda row: '{QRY_ID} - {INDEX} ({HAP}-{QRY_ORDER})'.format(**row), axis=1)
-        df['SCORE'] = 1000
-        df['STRAND'] = df['REV'].apply(lambda val: '-' if val else '+')
+        df['TRACK_SCORE'] = 1000
+        df['STRAND'] = df['IS_REV'].apply(lambda val: '-' if val else '+')
 
         # Set Color
         # noinspection PyUnresolvedReferences

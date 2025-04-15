@@ -72,7 +72,7 @@ def get_chain_set(df_align, caller_resources, min_anchor_score=None):
 
             if df_align.loc[end_index]['INDEX'] in qryref_index_set and can_anchor(
                     start_row, df_align.loc[end_index], caller_resources.score_model, min_anchor_score,
-                    gap_scale=caller_resources.config_params.lg_gap_scale
+                    gap_scale=caller_resources.pav_params.lg_gap_scale
             ):
                 chain_set.add((start_index, end_index))
 
@@ -116,9 +116,9 @@ def can_anchor(row_a, row_b, score_model, min_score=100, gap_scale=const.DEFAULT
     if row_a is None or row_b is None or row_a['#CHROM'] != row_b['#CHROM']:
         return False
 
-    is_rev = row_a['REV']
+    is_rev = row_a['IS_REV']
 
-    if is_rev != row_b['REV']:
+    if is_rev != row_b['IS_REV']:
         return False
 
     anchor_score = min([row_a['SCORE'], row_b['SCORE']])

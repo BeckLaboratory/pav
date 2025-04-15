@@ -48,6 +48,7 @@ class ConfigParams(object):
     lg_off_gap_mult: float
     lg_gap_scale: float
     lg_smooth_segments: float
+    lg_cpx_min_aligned_prop: float
     inv_sig_cluster_win: int
     inv_sig_cluster_win_min: int
     inv_sig_cluster_snv_min: int
@@ -460,6 +461,11 @@ CONFIG_PARAM_LIST = [
                             'smoothing applied.',
                 advanced=True
     ),
+    ConfigParamElement('lg_cpx_min_aligned_prop', 'float', default=0.8,
+                min=(0.0, True), max=(1.0, True),
+                description='For complex variant calls, require this proportion of the total SV length to be aligned '
+                            'to the reference sequence.',
+                advanced=True),
 
     # Inversion site flagging from variant call clusters
     ConfigParamElement('inv_sig_cluster_win', 'int', 200,

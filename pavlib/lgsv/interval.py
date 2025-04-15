@@ -54,11 +54,11 @@ class AnchoredInterval:
         head_row = df_align.loc[chain_node.start_index]
         tail_row = df_align.loc[chain_node.end_index]
 
-        self.is_rev = head_row['REV']
+        self.is_rev = head_row['IS_REV']
         self.qry_id = head_row['QRY_ID']
         self.chrom = head_row['#CHROM']
 
-        if self.is_rev != tail_row['REV'] or self.qry_id != tail_row['QRY_ID'] or self.chrom != tail_row['#CHROM']:
+        if self.is_rev != tail_row['IS_REV'] or self.qry_id != tail_row['QRY_ID'] or self.chrom != tail_row['#CHROM']:
             raise RuntimeError(f'Anchors {chain_node.start_index} (index={head_row["INDEX"]}) and {chain_node.end_index} (index={tail_row["INDEX"]}): Non-matching REV, QRY_ID, or CHROM')
 
         # Get segment table
@@ -160,7 +160,7 @@ def get_segment_table(start_index, end_index, df_align, caller_resources):
     head_row = df_align.loc[start_index]
     tail_row = df_align.loc[end_index]
 
-    is_rev = head_row['REV']
+    is_rev = head_row['IS_REV']
 
     qry_id = head_row['QRY_ID']
 
@@ -170,7 +170,7 @@ def get_segment_table(start_index, end_index, df_align, caller_resources):
             [
                 head_row['#CHROM'], head_row['POS'], head_row['END'],
                 head_row['FILTER'] == 'PASS',
-                True, True, head_row['REV'],
+                True, True, head_row['IS_REV'],
                 qry_id, head_row['QRY_POS'], head_row['QRY_END'],
                 head_row['END'] - head_row['POS'], head_row['QRY_END'] - head_row['QRY_POS'],
                 0,
@@ -261,7 +261,7 @@ def get_segment_table(start_index, end_index, df_align, caller_resources):
                     [
                         row_r['#CHROM'], row_r['POS'], row_r['END'],
                         row_r['FILTER'] == 'PASS',
-                        False, True, row_r['REV'],
+                        False, True, row_r['IS_REV'],
                         qry_id, row_r['QRY_POS'], row_r['QRY_END'],
                         row_r['END'] - row_r['POS'], row_r['QRY_END'] - row_r['QRY_POS'],
                         gap_len_ref,
@@ -297,7 +297,7 @@ def get_segment_table(start_index, end_index, df_align, caller_resources):
             [
                 tail_row['#CHROM'], tail_row['POS'], tail_row['END'],
                 tail_row['FILTER'] == 'PASS',
-                True, True, tail_row['REV'],
+                True, True, tail_row['IS_REV'],
                 qry_id, tail_row['QRY_POS'], tail_row['QRY_END'],
                 tail_row['END'] - tail_row['POS'], tail_row['QRY_END'] - tail_row['QRY_POS'],
                 0,

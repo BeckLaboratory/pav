@@ -13,17 +13,23 @@ import svpoplib
 # Features PAV saves to alignment BED files
 ALIGN_FEATURE_COLUMNS = ['SCORE', 'SCORE_PROP', 'MATCH_PROP', 'QRY_PROP']
 
+KNOWN_FEATURE_SET = {
+    'SCORE', 'SCORE_PROP',
+    'SCORE_MM', 'SCORE_MM_PROP',
+    'MATCH_PROP', 'ANCHOR_PROP', 'QRY_PROP'
+}
+
 # Use this value if ANCHOR_PROP is in the alignment features stored in BED files.
 ALIGN_FEATURE_SCORE_PROP_CONF = 0.85
 
 def get_features(
         df: pd.DataFrame | pd.Series,
-        feature_list: list[str],
-        score_model: score.ScoreModel,
+        feature_list: list[str]=None,
+        score_model: score.ScoreModel=None,
         existing_score_model: str | score.ScoreModel | bool=None,
-        score_prop_conf: float=None,
+        score_prop_conf: float=ALIGN_FEATURE_SCORE_PROP_CONF,
         op_arr_list: list[np.ndarray[int, int]]=None,
-        qry_fai: pd.Series=None,
+        df_qry_fai: pd.Series=None,
         inplace: bool=False,
         only_features: bool=True,
         force_all: bool=False
@@ -33,7 +39,7 @@ def get_features(
 
     :param df: DataFrame or Series of alignment records. If a Series is given, then it is converted to a single-row
         DataFrame.
-    :param feature_list: Features to compute.
+    :param feature_list: Features to compute. If None, recompute any features in `df`.
     :param score_model: Model to use to compute alignment scores. If None and a feature requires a score model, an
         exception is raised. May be a string specification for a score model.
     :param existing_score_model: The score model used to compute features already in `df`. If this is not None and
@@ -45,9 +51,10 @@ def get_features(
     :param op_arr_list: If set, this is a list of alignment operation arrays for each record where each array has two
         columns (op_code and op_len). If not set and a feature uses alignment operations, then it is extracted from the
         CIGAR string for each record, but this can be expensive over many alignments.
-    :param qry_fai: FAI file for query sequences (optional). Needed if features require the query length (i.e.
+    :param df_qry_fai: FAI file for query sequences (optional). Needed if features require the query length (i.e.
         proportion of a query in an alignment record).
-    :param inplace: If True, modify `df` in place.
+    :param inplace: If True, modify `df` in place. The table is still returned by the function whether or not it is
+        altered in place avoiding a copy but allowing chaining logic.
     :param only_features: If True, only return alignment features, else, return the whole table.
     :param force_all: If True, compute all features, even if they are already present.
 
@@ -55,6 +62,9 @@ def get_features(
     """
 
     is_series = False
+
+    if score_prop_conf is None:
+        score_prop_conf = ALIGN_FEATURE_SCORE_PROP_CONF
 
     # Check DataFrame
     if isinstance(df, pd.Series):
@@ -64,7 +74,6 @@ def get_features(
     elif isinstance(df, pd.DataFrame):
         if not inplace:
             df = df.copy()
-
     else:
         raise RuntimeError(f'Alignment DataFrame is not a Pandas DataFrame or Series: {type(df)}')
 
@@ -89,11 +98,12 @@ def get_features(
         rescore = True
 
     # Check for unknown features
-    feature_set = set(feature_list)
+    if feature_list is not None:
+        feature_set = set(feature_list)
+    else:
+        feature_set = set(df.columns) & KNOWN_FEATURE_SET
 
-    unknown_features = feature_set - {
-        'SCORE', 'SCORE_PROP', 'SCORE_MM', 'SCORE_MM_PROP', 'MATCH_PROP', 'ANCHOR_PROP', 'QRY_PROP'
-    }
+    unknown_features = feature_set - KNOWN_FEATURE_SET
 
     if unknown_features:
         n = len(unknown_features)
@@ -161,7 +171,7 @@ def get_features(
     if 'QRY_PROP' in feature_set:
         if force_all or 'QRY_PROP' not in df.columns:
             try:
-                df['QRY_PROP'] = feature_qry_prop(df, qry_fai)
+                df['QRY_PROP'] = feature_qry_prop(df, df_qry_fai)
             except Exception as e:
                 raise RuntimeError(f'Failed to compute alignment query proportions ("QRY_PROP"): {e}')
 

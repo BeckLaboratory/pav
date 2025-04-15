@@ -92,7 +92,7 @@ class VarRegionKde:
                 is_rev=interval.region_qry.is_rev,
                 k_util=caller_resources.k_util,
                 kde_model=caller_resources.kde_model,
-                max_ref_kmer_count=caller_resources.config_params.inv_max_ref_kmer_count,
+                max_ref_kmer_count=caller_resources.pav_params.inv_max_ref_kmer_count,
                 expand_bound=True,
                 log=caller_resources.log_file
             )
@@ -297,7 +297,7 @@ def call_from_interval(start_index, end_index, df_align, caller_resources, min_s
         variant_call = PatchVariant(interval)
 
     if not variant_call.is_null():
-        if (not interval.is_anchor_pass) or interval.aligned_pass_prop < caller_resources.config_params.get('min_aligned_pass_prop', 0.8):
+        if (not interval.is_anchor_pass) or interval.aligned_pass_prop < caller_resources.pav_params.lg_cpx_min_aligned_prop:
             variant_call.filter = interval.align_filters if interval.align_filters else align.records.FILTER_LCALIGN
 
     if caller_resources.verbose:

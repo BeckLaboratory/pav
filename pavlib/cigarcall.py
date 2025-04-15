@@ -50,7 +50,7 @@ def make_insdel_snv_calls(df_align, ref_fa_name, tig_fa_name, hap, version_id=Tr
     for index, row in df_align.iterrows():
 
         # Get strand
-        is_rev = row['REV']
+        is_rev = row['IS_REV']
         strand = '-' if is_rev else '+'
         align_index = row['INDEX']
 

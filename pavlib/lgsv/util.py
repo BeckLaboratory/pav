@@ -171,8 +171,8 @@ def record_to_paf(row_seg, ref_fai, qry_fai, mapq_summary='max'):
     # Set strand
     if 'STRAND' in row_seg:
         strand = row_seg['STRAND']
-    elif 'REV' in row_seg:
-        strand = '-' if row_seg['REV'] else '+'
+    elif 'IS_REV' in row_seg:
+        strand = '-' if row_seg['IS_REV'] else '+'
     elif 'IS_REV' in row_seg:
         strand = '-' if row_seg['IS_REV'] else '+'
     else:

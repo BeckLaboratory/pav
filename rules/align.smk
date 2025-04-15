@@ -90,13 +90,17 @@ rule align_trim_qryref:
 
         pav_params = pavlib.pavconfig.ConfigParams(wildcards.asm_name, config, ASM_TABLE)
 
+        score_model = pavlib.align.score.get_score_model(pav_params.align_score_model)
+        df_qry_fai = svpoplib.ref.get_df_fai(input.qry_fai)
+
         # Trim alignments
         df = pavlib.align.trim.trim_alignments(
-            pd.read_csv(input.bed, sep='\t', dtype={'#CHROM': str, 'QRY_ID': str}),  # Untrimmed alignment BED
-            input.qry_fai,  # Path to query FASTA FAI
+            df=pd.read_csv(input.bed, sep='\t', dtype={'#CHROM': str, 'QRY_ID': str}),  # Untrimmed alignment BED
+            df_qry_fai=df_qry_fai,  # Path to query FASTA FAI
             match_qry=pav_params.redundant_callset,  # Redundant callset, trim reference space only for records with matching IDs
             mode='ref',
-            score_model=pav_params.align_score
+            score_model=score_model,
+            pav_params=pav_params
         )
 
         # Write
@@ -118,21 +122,19 @@ rule align_trim_qry:
 
         # Trim alignments
         df = pavlib.align.trim.trim_alignments(
-            pd.read_csv(input.bed, sep='\t', dtype={'#CHROM': str, 'QRY_ID': str}),  # Untrimmed alignment BED
-            df_qry_fai,  # Path to query FASTA FAI
+            df=pd.read_csv(input.bed, sep='\t', dtype={'#CHROM': str, 'QRY_ID': str}),  # Untrimmed alignment BED
+            df_qry_fai=df_qry_fai,  # Path to query FASTA FAI
             mode='qry',
-            score_model=score_model
+            score_model=score_model,
+            pav_params=pav_params
         )
 
         if pav_params.align_agg_min_score < 0.0:
-            df_qry_fai = svpoplib.ref.get_df_fai(input.qry_fai)
-
             df = pavlib.align.tables.aggregate_alignment_records(
                 df, df_qry_fai,
                 score_model=score_model,
                 min_score=pav_params.align_agg_min_score,
-                noncolinear_penalty=pav_params.align_agg_noncolinear_penalty,
-                assign_order=True
+                noncolinear_penalty=pav_params.align_agg_noncolinear_penalty
             )
 
         # Write

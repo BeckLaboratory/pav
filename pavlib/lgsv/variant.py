@@ -327,7 +327,7 @@ class InsertionVariant(Variant):
         self.score_variant = \
             caller_resources.score_model.gap(self.svlen) + \
             caller_resources.score_model.gap(abs(len_ref)) * \
-                caller_resources.config_params.lg_off_gap_mult + \
+                caller_resources.pav_params.lg_off_gap_mult + \
             caller_resources.score_model.gap(ref_overlap)
 
         self.pos = self.region_ref.pos
@@ -441,7 +441,7 @@ class DeletionVariant(Variant):
 
         self.score_variant = caller_resources.score_model.gap(self.svlen) + \
             caller_resources.score_model.gap(abs(self.interval.len_qry)) * \
-              caller_resources.config_params.lg_off_gap_mult
+              caller_resources.pav_params.lg_off_gap_mult
 
         self.vartype = 'SV' if self.svlen > 50 else 'INDEL'
         self.svtype = 'DEL'
@@ -682,8 +682,8 @@ class ComplexVariant(Variant):
     def complete_anno_impl(self):
 
         # Get smoothed segment table
-        if self.caller_resources.config_params.lg_smooth_segments > 0.0:
-            self.df_segment_smooth = collapse_segments(self, self.caller_resources.config_params.lg_smooth_segments)
+        if self.caller_resources.pav_params.lg_smooth_segments > 0.0:
+            self.df_segment_smooth = collapse_segments(self, self.caller_resources.pav_params.lg_smooth_segments)
             df_segment = self.df_segment_smooth
         else:
             self.df_segment_smooth = None
@@ -692,7 +692,7 @@ class ComplexVariant(Variant):
         # Get reference trace
         if self.df_ref_trace is None:
             self.df_ref_trace = get_reference_trace(self.interval, df_segment, 0.01, self.svlen)
-            # self.df_ref_trace = get_reference_trace(self.interval, df_segment, self.caller_resources.config_params.lg_smooth_segments, self.svlen)
+            # self.df_ref_trace = get_reference_trace(self.interval, df_segment, self.caller_resources.pav_params.lg_smooth_segments, self.svlen)
 
         self.struct_qry = get_qry_struct_str(df_segment)
         self.struct_ref = get_ref_struct_str(self.df_ref_trace, self.interval.len_ref, self.interval.len_qry)
