@@ -5,6 +5,8 @@ import intervaltree
 import numpy as np
 import pandas as pd
 
+from typing import Any
+
 import svpoplib
 
 from .. import pavconfig
@@ -153,8 +155,17 @@ def trim_alignments(
             if pav_params.debug:
                 print(f'Trimming query: {qry_id}')
 
+            qry_index = record_order_qry_id[record_order_qry_id == qry_id].index.values\
 
-            qry_index = record_order_qry_id[record_order_qry_id == qry_id].index.values
+            depth_filter_set = set(
+                filter_depth(
+                    record_index=qry_index,
+                    coord_arr=coord_arr,
+                    is_qry=True,
+                    max_depth=pav_params.align_trim_max_depth,
+                    max_overlap=pav_params.align_trim_max_depth_prop
+                )
+            )
 
             # Build a tree of intersecting alignments
             itree = intervaltree.IntervalTree()
@@ -164,6 +175,15 @@ def trim_alignments(
             while iter_index_r < qry_index.shape[0]:
 
                 base_index_r = qry_index[iter_index_r]
+
+                if base_index_r not in depth_filter_set:
+                    active_records[base_index_r] = False
+                    iter_index_r += 1
+                    continue
+
+                if not active_records[base_index_r]:
+                    iter_index_r += 1
+                    continue
 
                 for index_l in qry_index[
                     sorted({
@@ -316,6 +336,16 @@ def trim_alignments(
 
             chrom_index = record_order_chrom[record_order_chrom == chrom].index.values
 
+            depth_filter_set = set(
+                filter_depth(
+                    record_index=chrom_index,
+                    coord_arr=coord_arr,
+                    is_qry=False,
+                    max_depth=pav_params.align_trim_max_depth,
+                    max_overlap=pav_params.align_trim_max_depth_prop
+                )
+            )
+
             # Build a tree of intersecting alignments
             itree = intervaltree.IntervalTree()
 
@@ -324,6 +354,15 @@ def trim_alignments(
             while iter_index_r < chrom_index.shape[0]:
 
                 base_index_r = chrom_index[iter_index_r]
+
+                if base_index_r not in depth_filter_set:
+                    active_records[base_index_r] = False
+                    iter_index_r += 1
+                    continue
+
+                if not active_records[base_index_r]:
+                    iter_index_r += 1
+                    continue
 
                 for index_l in chrom_index[
                     sorted({
@@ -428,6 +467,7 @@ def trim_alignments(
     #
     # Post trim formatting
     #
+
     if pav_params.debug:
         print(f'Post trim: Updating records', flush=True)
 
@@ -1117,6 +1157,91 @@ def truncate_alignment_record(record, overlap_bp, trunc_side, score_model=None, 
     )
 
     return record
+
+def filter_depth(
+        record_index: np.ndarray[Any, int],
+        coord_arr: np.ndarray[Any, int],
+        is_qry: bool,
+        max_depth: int=20,
+        max_overlap: int=0.8
+) -> np.ndarray[Any, int]:
+    """
+    Get a set of alignment indices where the depth exceeds a maximum depth.
+
+    :param record_index: List of record indices in `coord_array` to check. All indicies must be in the same reference or
+        query squence ID (i.e. POS/END or QRY_POS/QRY_END coordinates are assumed to be in the same sequence).
+    :param coord_arr: Coordinate array for the whole alignment table.
+    :param is_qry: Check depth in query coordinates if True, reference coordinates if False.
+
+    :param max_depth: Maximum depth.
+    """
+
+    if is_qry:
+        # Query coordinates
+        coord_pos = COORD_QRY_POS
+        coord_end = COORD_QRY_END
+
+    else:
+        # Reference coordinates
+        coord_pos = COORD_POS
+        coord_end = COORD_END
+
+    # Three column array:
+    # 1) Coordinates where an alignment begins or ends
+    # 2) 1 for alignment start, -1 for alignment end
+    # 3) Index from record_index
+    depth_edge_arr = np.asarray(
+        [
+            np.concatenate([coord_arr[record_index, coord_pos], coord_arr[record_index, coord_end]]),
+            np.concatenate([np.ones(record_index.shape[0]), -np.ones(record_index.shape[0])]),
+            np.concatenate([record_index, record_index])
+        ]
+    ).astype(int).T
+
+    # Sort by coordinates (first column)
+    depth_edge_arr = depth_edge_arr[depth_edge_arr[:, 0].argsort()]
+
+    # Find contiguous ranges where depth is exceeded
+    mask = np.cumsum(depth_edge_arr[:, 1]) > max_depth
+
+    if not np.any(mask):
+        return record_index
+
+    changes = np.diff(mask.astype(int), prepend=0)
+
+    filter_coords = np.asarray(
+        [
+            depth_edge_arr[np.where(changes == 1)[0], 0].astype(int),
+            depth_edge_arr[np.where(changes == -1)[0], 0].astype(int)
+        ]
+    ).T
+
+    # Create an index mask
+    filter_arr = np.ones(record_index.shape[0], dtype=bool)
+
+    for iter_index in range(record_index.shape[0]):
+        index = record_index[iter_index]
+
+        overlap = np.minimum(filter_coords[:, 1], coord_arr[index, coord_end]) - np.maximum(filter_coords[:, 0], coord_arr[index, coord_pos])
+
+        if (
+            np.sum(np.where(overlap > 0, overlap, 0))
+        ) / (
+            coord_arr[index, coord_end] - coord_arr[index, coord_pos]
+        ) > max_overlap:
+            filter_arr[iter_index] = False
+
+    # Subset indices
+    return record_index[filter_arr]
+
+
+    # Find a set of all record indices where depth exceeds max_depth
+    # return set(
+    #     depth_edge_arr[
+    #         np.where(np.cumsum(depth_edge_arr[:, 1]) > max_depth),  # Cumulative sum over second column
+    #         2  # Index column
+    #     ][0].astype(int)
+    # )
 
 def check_trim_qry(df):
     """

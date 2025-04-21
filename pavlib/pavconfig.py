@@ -414,6 +414,15 @@ CONFIG_PARAM_LIST = [
                             'reference and query gaps (i.e. add "gap(abs(ref_gap - qry_gap))" to the gap score when '
                             'choosing to aggregate or not (the total sum must be greater than align_agg_min_score).',
                 advanced=True),
+    ConfigParamElement('align_trim_max_depth', 'int', 20, min=1,
+                description='When trimming alignment records, filter out records where a proportion of the alignment '
+                            'record is in regions with this depth or greater (see "align_trim_max_depth_prop").',
+                advanced=True),
+    ConfigParamElement('align_trim_max_depth_prop', 'float', 0.8, min=0.0, max=1.0,
+                description='When trimming alignment records, filter out records where this proportion of the '
+                            'alignment record is in regions with depth greater than "align_trim_max_depth").',
+                advanced=True),
+
 
     # Variant calling
     ConfigParamElement('merge_partitions', 'int', 20, min=1,
