@@ -151,7 +151,7 @@ def scan_for_inv(
         index_set=None,
         match_index=True,
         stop_on_lift_fail=True,
-        kde=None,
+        kde_model=None,
         log=None,
         region_limit=const.INV_REGION_LIMIT,
         min_expand=const.INV_MIN_EXPAND_COUNT,
@@ -186,7 +186,7 @@ def scan_for_inv(
     :param stop_on_lift_fail: If `True`, stop if the reference-to-query lift fails for any reason (i.e. breakpoints
         missing alignment records). If `False`, keep expanding until expansion is exhausted (reaches maximum number of
         expansions or covers a whole reference region).
-    :param kde: Kernel density estimator function. Expected to be a `pavlib.kde.KdeTruncNorm` object, but can
+    :param kde_model: Kernel density estimator function. Expected to be a `pavlib.kde.KdeTruncNorm` object, but can
         be any object with a similar signature. If `None`, a default `kde` estimator is used.
     :param log: Log file (open file handle) or `None` for no log.
     :param region_limit: Max region size. If inversion (+ flank) exceeds this size, stop searching for inversions.
@@ -217,8 +217,8 @@ def scan_for_inv(
     if k_util is None:
         k_util = kanapy.util.kmer.KmerUtil(const.INV_K_SIZE)
 
-    if kde is None:
-        kde = kde.KdeTruncNorm()
+    if kde_model is None:
+        kde_model = kde.KdeTruncNorm()
 
     # Init
     _write_log(
@@ -308,7 +308,7 @@ def scan_for_inv(
             ref_fa_name=ref_fa_name, qry_fa_name=qry_fa_name,
             ref_fai=ref_fai, qry_fai=qry_fai,
             is_rev=region_qry.is_rev,
-            k_util=k_util, kde=kde,
+            k_util=k_util, kde_model=kde_model,
             max_ref_kmer_count=max_ref_kmer_count,
             expand_bound=True,
             log=log
@@ -457,8 +457,8 @@ def get_state_table(
         if ref_fai is None or qry_fai is None:
             raise RuntimeError('Expanding regions by KDE band-bounds requires both reference and query FAIs to be defined')
 
-        region_ref_exp = region_ref.copy().expand(kde.band_bound * 2, max_end=ref_fai, shift=False)
-        region_qry_exp = region_qry.copy().expand(kde.band_bound * 2, max_end=qry_fai, shift=False)
+        region_ref_exp = region_ref.copy().expand(kde_model.band_bound * 2, max_end=ref_fai, shift=False)
+        region_qry_exp = region_qry.copy().expand(kde_model.band_bound * 2, max_end=qry_fai, shift=False)
     else:
         region_ref_exp = region_ref
         region_qry_exp = region_qry

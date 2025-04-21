@@ -545,7 +545,9 @@ CONFIG_PARAM_LIST = [
 
     # Misc
     ConfigParamElement('verbose', 'bool', default=False,
-                       description='Verbose output.')
+                       description='Verbose output.'),
+    ConfigParamElement('debug', 'bool', default=False,
+                       description='Extra debugging checks.')
 ]
 
 CONFIG_PARAM_DICT = {

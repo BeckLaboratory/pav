@@ -176,7 +176,7 @@ class LCAlignModel(object, metaclass=abc.ABCMeta):
                 op_arr_list=op_arr_list,
                 existing_score_model=existing_score_model,
                 score_prop_conf=self.score_prop_conf,
-                qry_fai=qry_fai,
+                df_qry_fai=qry_fai,
                 inplace=False
             )
         except Exception as e:

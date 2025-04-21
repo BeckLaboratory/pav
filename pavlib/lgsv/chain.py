@@ -155,8 +155,8 @@ def can_reach_anchor(row_l, row_r, score_model):
     alignments are anchors (does not consider the score of the right-most alignment or the reference position or
     orientation).
 
-    :param row_l: Left-most archor in query coordinates.
-    :param row_r: Right-most archor in query coordinates.
+    :param row_l: Left-most anchor in query coordinates.
+    :param row_r: Right-most anchor in query coordinates.
     :param score_model: Model for determining a gap score.
 
     :return: `True` if the anchor in alignment `row_l` can reach as far as the start of `row_r` based on the alignment

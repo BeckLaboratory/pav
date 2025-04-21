@@ -541,7 +541,7 @@ class InversionVariant(Variant):
                 ) > np.sum(
                     df_int.loc[is_prox & (df_int['IS_REV'] != interval.is_rev), 'LEN_QRY']
                 ):
-            # Inveted by KDE, or Inverted segment lengths should outweigh the non-inverted segments if the inversion is called by alignment.
+            # Inverted by KDE, or Inverted segment lengths should outweigh the non-inverted segments if the inversion is called by alignment.
 
             return
 
@@ -557,7 +557,12 @@ class InversionVariant(Variant):
 
             self.call_subtype = 'KDE'
 
-        # Try by alignment
+        # # Try by untrimmed alignment
+        # seg_none = caller_resources.df_align_none.loc[list(interval.df_segment['INDEX'])]  # Segments in untrimmed
+
+
+
+        # Try by trimmed alignment
         local_inv = False
 
         if self.region_ref_inner is None:
@@ -982,7 +987,7 @@ def get_reference_trace(interval, df_segment=None, smooth_factor=0.0, svlen=None
     ])
 
     # Make depth table
-    df_depth = align.util.align_bed_to_depth_bed(df_segment.loc[df_segment['IS_ALIGNED']], df_fai=None, index_sep=';')
+    df_depth = align.tables.align_bed_to_depth_bed(df_segment.loc[df_segment['IS_ALIGNED']], df_fai=None, index_sep=';')
 
     del df_depth['QRY_ID']
 

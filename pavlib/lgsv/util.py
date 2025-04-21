@@ -338,8 +338,8 @@ def dot_graph_writer(
 
         width = anchor_width if index in variant_anchor_set else 1
 
-        out_file.write(f'    n{index} [label="{index} ({row["INDEX"]})\n{row["#CHROM"]}:{row["POS"]}-{row["END"]} ({"-" if row["REV"] else "+"})\ns={row["SCORE"]}", penwidth={width}, color="{color}"]\n')
-        # out_file.write(f'    n{index} [label="{index} ({row["INDEX"]}) - {row["#CHROM"]}:{row["POS"]}-{row["END"]} {"-" if row["REV"] else "+"} s={row["SCORE"]}", penwidth={width}, color="{color}"]\n')
+        out_file.write(f'    n{index} [label="{index} ({row["INDEX"]})\n{row["#CHROM"]}:{row["POS"]}-{row["END"]} ({"-" if row["IS_REV"] else "+"})\ns={row["SCORE"]}", penwidth={width}, color="{color}"]\n')
+        # out_file.write(f'    n{index} [label="{index} ({row["INDEX"]}) - {row["#CHROM"]}:{row["POS"]}-{row["END"]} {"-" if row["IS_REV"] else "+"} s={row["SCORE"]}", penwidth={width}, color="{color}"]\n')
 
     # Add candidate edges
     for start_index, end_index in chain_set:

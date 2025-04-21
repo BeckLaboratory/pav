@@ -41,12 +41,27 @@ rule align_all:
             trim=('none', 'qry', 'qryref')
         )
 
-localrules: align_notrim_all
-rule align_notrim_all:
+localrules: align_trimqryref_all
+rule align_trimqryref_all:
+    input:
+        bed=lambda wildcards: pavlib.pipeline.expand_pattern(
+            'results/{asm_name}/align/trim-qryref/align_qry_{hap}.bed.gz', ASM_TABLE, config
+        )
+
+localrules: align_trimqry_all
+rule align_trimqry_all:
+    input:
+        bed=lambda wildcards: pavlib.pipeline.expand_pattern(
+            'results/{asm_name}/align/trim-qry/align_qry_{hap}.bed.gz', ASM_TABLE, config
+        )
+
+localrules: align_trimnone_all
+rule align_trimnone_all:
     input:
         bed=lambda wildcards: pavlib.pipeline.expand_pattern(
             'results/{asm_name}/align/trim-none/align_qry_{hap}.bed.gz', ASM_TABLE, config
         )
+
 
 # Create a BED file of low-confidence alignment regions
 # rule align_lowconf_bed:
@@ -103,6 +118,20 @@ rule align_trim_qryref:
             pav_params=pav_params
         )
 
+        if pav_params.debug:
+            try:
+                pavlib.align.trim.check_trim_ref(df)
+            except Exception as ex:
+
+                # Save output to debug
+                out_filename = os.path.join('debug', output.bed)
+                os.makedirs(os.path.dirname(out_filename), exist_ok=True)
+                df.to_csv(out_filename, sep='\t', index=False, compression='gzip')
+
+                print(f'Saved output for debugging: {out_filename}')
+
+                raise ex
+
         # Write
         df.to_csv(output.bed, sep='\t', index=False, compression='gzip')
 
@@ -136,6 +165,20 @@ rule align_trim_qry:
                 min_score=pav_params.align_agg_min_score,
                 noncolinear_penalty=pav_params.align_agg_noncolinear_penalty
             )
+
+        if pav_params.debug:
+            try:
+                pavlib.align.trim.check_trim_qry(df)
+            except Exception as ex:
+
+                # Save output to debug
+                out_filename = os.path.join('debug', output.bed)
+                os.makedirs(os.path.dirname(out_filename), exist_ok=True)
+                df.to_csv(out_filename, sep='\t', index=False, compression='gzip')
+
+                print(f'Saved output for debugging: {out_filename}')
+
+                raise ex
 
         # Write
         df.to_csv(output.bed, sep='\t', index=False, compression='gzip')

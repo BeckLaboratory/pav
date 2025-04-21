@@ -1,5 +1,7 @@
 # Alignment trimming functions
 
+import collections
+import intervaltree
 import numpy as np
 import pandas as pd
 
@@ -19,19 +21,33 @@ TC_OP_CODE = 1
 TC_OP_LEN = 2
 TC_DIFF_CUM = 3
 TC_DIFF = 4
-TC_EVENT_CUM = 5
-TC_EVENT = 6
-TC_REF_BP = 7
-TC_QRY_BP = 8
-TC_CLIPS_BP = 9
-TC_CLIPH_BP = 10
-TC_SCORE_CUM = 11
+TC_REF_BP = 5
+TC_QRY_BP = 6
+TC_CLIP_BP = 7
+TC_SCORE_CUM = 8
 
 TRIM_DESC = {
     'none': 'No trimming',
     'qry': 'Query-only trimming',
     'qryref': 'Query-Reference trimming'
 }
+
+COORD_ARR_COLS = ['POS', 'END', 'QRY_POS', 'QRY_END', 'TRIM_REF_L', 'TRIM_REF_R', 'TRIM_QRY_L', 'TRIM_QRY_R']
+
+COORD_POS = 0
+COORD_END = 1
+COORD_QRY_POS = 2
+COORD_QRY_END = 3
+COORD_TRIM_REF_L = 4
+COORD_TRIM_REF_R = 5
+COORD_TRIM_QRY_L = 6
+COORD_TRIM_QRY_R = 7
+
+SEQNAME_ARR_COLS = ['#CHROM', 'QRY_ID']
+
+SEQNAME_CHROM = 0
+SEQNAME_QRY_ID = 1
+
 
 def trim_alignments(
         df: pd.DataFrame,
@@ -97,448 +113,395 @@ def trim_alignments(
     # For each altered alignment record, this dict contains the operation array (op_code: first column,
     # op_len: second column) and is keyed by the INDEX value of the alignment record since the indexes may change
     # and the INDEX column is unique.
-    op_arr_dict = dict()
+    op_arr_list = [None] * df.shape[0]
+
+    # Array of alignment records that have not been eliminated
+    active_records = np.ones(df.shape[0], dtype=bool)
 
     # Remove short alignments
-    df = df.loc[df['QRY_END'] - df['QRY_POS'] >= min_trim_qry_len].copy()
+    active_records[df['QRY_END'] - df['QRY_POS'] < min_trim_qry_len] = False
 
+    # Save fields as array for fast access (__getitem__ in Pandas as extremely slow)
+    coord_arr = df[COORD_ARR_COLS].values
+    is_rev_arr = df['IS_REV'].values
+    seqname_arr = df[SEQNAME_ARR_COLS].values.astype(str)
+    score_arr = df['SCORE'].values
 
-    ###                     ###
-    ### Trim in query space ###
-    ###                     ###
+    if 'FILTER' in df.columns:
+        is_filter_fail_arr = ~ ((df['FILTER'] == 'PASS') | df['FILTER'].isna()).values
+    else:
+        is_filter_fail_arr = np.zeros(df.shape[0], dtype=bool)
+
+    def get_op_arr(index:int) -> np.ndarray[int, int]:
+        if op_arr_list[index] is None:
+            op_arr_list[index] = op.cigar_as_array(df.iloc[index]['CIGAR'])
+
+        return op_arr_list[index]
+
+    #
+    # Trim in query coordinates
+    #
 
     if do_trim_qry:
+        if pav_params.debug:
+            print(f'Trimming in query coordinates', flush=True)
 
-        # Sort by alignment lengths in query space
-        df = df.sort_values(['QRY_ID', 'SCORE'], ascending=(True, False)).reset_index(drop=True)
+        # Sort by alignment lengths in query coordinates
+        record_order_qry_id = df.reset_index(drop=True).sort_values(['QRY_ID', 'SCORE'], ascending=(True, False))['QRY_ID']
 
-        # Do trim in query space #
-        iter_index_l = 0
-        index_max = df.shape[0]
-
-        while iter_index_l < index_max:
-
-            if df.loc[iter_index_l, 'INDEX'] < 0:
-                iter_index_l += 1
-                continue
-
-            iter_index_r = iter_index_l + 1
-
-            while iter_index_r < index_max and df.loc[iter_index_l, 'QRY_ID'] == df.loc[iter_index_r, 'QRY_ID']:
-
-                if df.loc[iter_index_l, 'INDEX'] < 0:
-                    iter_index_l += 1
-                    continue
-
-                # Get index in order of query placement
-                index_l, index_r = (iter_index_l, iter_index_r) \
-                    if df.loc[iter_index_l, 'QRY_POS'] <= df.loc[iter_index_r, 'QRY_POS'] \
-                        else (iter_index_r, iter_index_l)
-
-                row_l = df.loc[index_l]
-                row_r = df.loc[index_r]
-
-                # # Get index in order of query placement
-                # if df.loc[iter_index_l, 'QRY_POS'] <= df.loc[iter_index_r, 'QRY_POS']:
-                #     index_l = iter_index_l
-                #     index_r = iter_index_r
-                # else:
-                #     index_l = iter_index_r
-                #     index_r = iter_index_l
-
-                # # Skip if one record was already removed
-                # if row_l['INDEX'] < 0 or row_r['INDEX'] < 0:
-                #     iter_index_r += 1
-                #     continue
-
-                # Skip if there is no overlap
-                if row_r['QRY_POS'] >= row_l['QRY_END']:
-                    iter_index_r += 1
-                    continue
-
-                # # Check for record fully contained within another
-                # if row_r['QRY_END'] <= row_l['QRY_END']:
-                #     df.loc[index_r, 'INDEX'] = -1
-                #     iter_index_r += 1
-                #     continue
-
-                # Determine trim orientation (right side of index_l is to be trimmed, must be reversed so
-                # trimmed alignment records are at the beginning; left side of index_r is to be trimmed, which is
-                # already at the start of the alignment operation list).
-                rev_l = not row_l['IS_REV']  # Trim right end of index_l
-                rev_r = row_r['IS_REV']      # Trim left end of index_r
-
-                # Get operation arrays
-                op_arr_l = get_op_arr_from_dict(row_l, op_arr_dict)
-                op_arr_r = get_op_arr_from_dict(row_r, op_arr_dict)
-
-                # Determine which side to preferentially trim in case of ties
-                if (
-                    rev_l != rev_r  # Same as row_l['IS_REV'] == row_r['IS_REV']
-                ) and (
-                    row_l['#CHROM'] == row_r['#CHROM']  # Same chromosome
-                ):
-                    # Same chromosome and orientation, preferentially trim left-most record to maintain left-aligning
-                    # breakpoints.
-
-                    prefer_l = (
-                        row_l['QRY_POS'] if row_l['IS_REV'] else row_l['QRY_END']  # Reference position on left record being trimmed
-                    ) <= (
-                        row_r['QRY_END'] if row_r['IS_REV'] else row_r['QRY_POS']  # Reference position on right record being trimmed
-                    )
-
-                else:
-                    prefer_l = row_l['SCORE'] <= row_r['SCORE']
-
-                if prefer_l:
-                    record_l, record_r, op_arr_l, op_arr_r = trim_alignment_record(
-                        df.loc[index_l],
-                        df.loc[index_r],
-                        'qry',
-                        rev_l=rev_l,
-                        rev_r=rev_r,
-                        score_model=score_model,
-                        op_arr_l=op_arr_l,
-                        op_arr_r=op_arr_r
-                    )
-                else:
-                    record_r, record_l, op_arr_r, op_arr_l = trim_alignment_record(
-                        df.loc[index_r],
-                        df.loc[index_l],
-                        'qry',
-                        rev_l=rev_r,
-                        rev_r=rev_l,
-                        score_model=score_model,
-                        op_arr_l=op_arr_r,
-                        op_arr_r=op_arr_l
-                    )
-
-                # # If query alignments overlap in reference space and are in the same orientation, preferentially
-                # # trim the downstream end more to left-align alignment-truncating SVs (first argument to
-                # # trim_alignment_record is preferentially trimmed)
-                # if ref_overlap:
-                #
-                #     # Overlap in reference space (same orientation)
-                #     # Try both trim orientations and choose the one that left-aligns the best
-                #
-                #     # a: Try with record l as first and r as second
-                #     record_l_a, record_r_a, op_arr_l_a, op_arr_r_a = trim_alignment_record(
-                #         df.loc[index_l],
-                #         df.loc[index_r],
-                #         'qry',
-                #         rev_l=rev_l,
-                #         rev_r=rev_r,
-                #         score_model=score_model,
-                #         op_arr_l=op_arr_l,
-                #         op_arr_r=op_arr_r
-                #     )
-                #
-                #     # b: Try with record r as first and l as second
-                #     record_l_b, record_r_b, op_arr_l_b, op_arr_r_b = trim_alignment_record(
-                #         df.loc[index_r],
-                #         df.loc[index_l],
-                #         'qry',
-                #         rev_l=rev_r,
-                #         rev_r=rev_l,
-                #         score_model=score_model,
-                #         op_arr_l=op_arr_r,
-                #         op_arr_r=op_arr_l
-                #     )
-                #
-                #     ### Determine which left-aligns best ###
-                #     keep = None
-                #
-                #     # Case: Alignment trimming completely removes one of the records
-                #     rm_l_a = record_l_a['QRY_END'] - record_l_a['QRY_POS'] < min_trim_qry_len
-                #     rm_l_b = record_l_b['QRY_END'] - record_l_b['QRY_POS'] < min_trim_qry_len
-                #
-                #     rm_r_a = record_r_a['QRY_END'] - record_r_a['QRY_POS'] < min_trim_qry_len
-                #     rm_r_b = record_r_b['QRY_END'] - record_r_b['QRY_POS'] < min_trim_qry_len
-                #
-                #     rm_any_a = rm_l_a or rm_r_a
-                #     rm_any_b = rm_l_b or rm_r_b
-                #
-                #     # Break tie if one way removes a record and the other does not
-                #     if rm_any_a and not rm_any_b:
-                #         if not rm_l_a and rm_r_a:
-                #             keep = 'a'
-                #
-                #     elif rm_any_b and not rm_any_a:
-                #         if not rm_l_b and rm_r_b:
-                #             keep = 'b'
-                #
-                #     # Break tie if both are removed in one (do not leave short alignments).
-                #     if keep is None and rm_any_a:  # Both l and r are None, case where one is None was checked
-                #         keep = 'a'
-                #
-                #     if keep is None and rm_any_b:  # Both l and r are None, case where one is None was checked
-                #         keep = 'b'
-                #
-                #     # Break tie on most left-aligned base
-                #     if keep is None:
-                #
-                #         # Get position at end of trim
-                #         trim_pos_l_a = record_l_a['END'] if not record_l_a['IS_REV'] else record_l_a['POS']
-                #         trim_pos_l_b = record_l_b['END'] if not record_l_b['IS_REV'] else record_l_b['POS']
-                #
-                #         if trim_pos_l_a <= trim_pos_l_b:
-                #             keep = 'a'
-                #         else:
-                #             keep = 'b'
-                #
-                #     # Set record_l and record_r to the kept record
-                #     if keep == 'a':
-                #         record_l = record_l_a
-                #         record_r = record_r_a
-                #         op_arr_l = op_arr_l_a
-                #         op_arr_r = op_arr_r_a
-                #
-                #     else:
-                #         # Note: record at index_l became record_r_b (index_r become record_l_b)
-                #         # Swap back to match the index
-                #         record_l = record_r_b
-                #         record_r = record_l_b
-                #         op_arr_l = op_arr_r_b
-                #         op_arr_r = op_arr_l_b
-                #
-                # else:
-                #     # Does not overlap in reference space in same orientation
-                #
-                #     # Switch record order if they are on the same query and same orientation (note: rev_l and rev_r are
-                #     # opposite if query sequences are mapped in the same orientation, one was swapped to trim the
-                #     # downstream-aligned end).
-                #     if row_l['#CHROM'] == row_r['#CHROM'] and rev_l != rev_r:
-                #
-                #         # Get position of end to be trimmed
-                #         trim_pos_l = row_l['END'] if not row_l['IS_REV'] else row_l['POS']
-                #         trim_pos_r = row_r['POS'] if not row_r['IS_REV'] else row_r['END']
-                #
-                #         # Swap positions so the upstream-aligned end of the query is index_l. The left end is
-                #         # preferentially trimmed shorter where there are equal breakpoints effectively left-aligning
-                #         # around large SVs (e.g. large DELs).
-                #         if trim_pos_r < trim_pos_l:
-                #
-                #             # Swap
-                #             row_l, row_r = row_r, row_l
-                #             rev_l, rev_r = rev_r, rev_l
-                #             index_l, index_r = index_r, index_l
-                #             op_arr_l, op_arr_r = op_arr_r, op_arr_l
-                #
-                #     # Trim record
-                #     record_l, record_r, op_arr_l, op_arr_r = trim_alignment_record(
-                #         row_l, row_r, 'qry',
-                #         rev_l=rev_l,
-                #         rev_r=rev_r,
-                #         score_model=score_model,
-                #         op_arr_l=op_arr_l,
-                #         op_arr_r=op_arr_r
-                #     )
-
-                # Modify if new aligned size is at least min_trim_qry_len, remove if shorter
-                if record_l['QRY_END'] - record_l['QRY_POS'] >= min_trim_qry_len:
-                    df.loc[index_l] = record_l
-                    op_arr_dict[record_l['INDEX']] = op_arr_l
-                else:
-                    df.loc[index_l, 'INDEX'] = -1
-
-                if (record_r['QRY_END'] - record_r['QRY_POS']) >= min_trim_qry_len:
-                    df.loc[index_r] = record_r
-                    op_arr_dict[record_r['INDEX']] = op_arr_r
-
-                else:
-                    df.loc[index_r, 'INDEX'] = -1
-
-                # Next r record
-                iter_index_r += 1
-
-            # Next l record
-            iter_index_l += 1
-
-        # Discard fully trimmed records
-        df = df.loc[df['INDEX'] >= 0].copy()
+        for qry_id in record_order_qry_id.unique():
+            if pav_params.debug:
+                print(f'Trimming query: {qry_id}')
 
 
-    ###                         ###
-    ### Trim in reference space ###
-    ###                         ###
+            qry_index = record_order_qry_id[record_order_qry_id == qry_id].index.values
 
-    if do_trim_ref:
+            # Build a tree of intersecting alignments
+            itree = intervaltree.IntervalTree()
 
-        # Sort by alignment length in reference space
-        df = df.sort_values(['#CHROM', 'SCORE'], ascending=(True, False)).reset_index(drop=True)
+            iter_index_r = 0
 
-        # df = df.loc[
-        #     pd.concat(
-        #         [df['#CHROM'], df['END'] - df['POS']], axis=1
-        #     ).sort_values(
-        #         ['#CHROM', 0],
-        #         ascending=(True, False)
-        #     ).index
-        # ].reset_index(drop=True)
+            while iter_index_r < qry_index.shape[0]:
 
-        # Do trim in reference space
-        iter_index_l = 0
-        index_max = df.shape[0]
+                base_index_r = qry_index[iter_index_r]
 
-        while iter_index_l < index_max:
-            iter_index_r = iter_index_l + 1
+                for index_l in qry_index[
+                    sorted({
+                        match.data for match in
+                            itree[
+                                coord_arr[base_index_r, COORD_QRY_POS]:
+                                coord_arr[base_index_r, COORD_QRY_END]
+                            ]
+                    })
+                ]:
 
-            while (
-                    iter_index_r < index_max and
-                    df.loc[iter_index_l, '#CHROM'] == df.loc[iter_index_r, '#CHROM']
-            ):
+                    index_r = base_index_r  # May have been swapped with index_l in the previous iteration
 
-                # Skip if one record was already removed
-                if df.loc[iter_index_l, 'INDEX'] < 0 or df.loc[iter_index_r, 'INDEX'] < 0:
-                    iter_index_r += 1
-                    continue
+                    if not active_records[index_l] or not active_records[index_r]:
+                        continue
 
-                # Skip if match_qry and query names differ
-                if match_qry and df.loc[iter_index_l, 'QRY_ID'] != df.loc[iter_index_r, 'QRY_ID']:
-                    iter_index_r += 1
-                    continue
+                    # Switch indices to sequence order
+                    if (
+                        coord_arr[index_l, COORD_QRY_POS] > coord_arr[index_r, COORD_QRY_POS]  # R comes before L
+                    ) or (
+                        coord_arr[index_l, COORD_QRY_POS] == coord_arr[index_r, COORD_QRY_POS] and  # R and L start at the same position...
+                        coord_arr[index_l, COORD_QRY_END] < coord_arr[index_r, COORD_QRY_END]       # ...but L is shorter
+                    ):
+                        index_l, index_r = index_r, index_l
 
-                # Get indices ordered by query placement
-                index_l, index_r = (iter_index_l, iter_index_r) \
-                    if df.loc[iter_index_l, 'POS'] <= df.loc[iter_index_r, 'POS'] \
-                    else (iter_index_r, iter_index_l)
+                    # Skip if there is no overlap
+                    if coord_arr[index_r, COORD_QRY_POS] >= coord_arr[index_l, COORD_QRY_END]:
+                        continue
 
-                row_l = df.loc[index_l]
-                row_r = df.loc[index_r]
+                    # Check if record is contained within another
+                    if coord_arr[index_r, COORD_QRY_END] <= coord_arr[index_l, COORD_QRY_END]:
 
-                op_arr_l = get_op_arr_from_dict(row_l, op_arr_dict)
-                op_arr_r = get_op_arr_from_dict(row_r, op_arr_dict)
+                        if is_filter_fail_arr[index_l] and not is_filter_fail_arr[index_r]:
+                            active_records[index_l] = False
+                        else:
+                            active_records[index_r] = False
 
-                # # Get indices ordered by query placement
-                # if df.loc[iter_index_l, 'POS'] <= df.loc[iter_index_r, 'POS']:
-                #     index_l = iter_index_l
-                #     index_r = iter_index_r
-                # else:
-                #     index_l = iter_index_r
-                #     index_r = iter_index_l
+                        continue
 
-                # Check for overlaps
-                if row_r['POS'] < row_l['END']:
+                    # Determine trim orientation (right side of index_l is to be trimmed, must be reversed so
+                    # trimmed alignment records are at the beginning; left side of index_r is to be trimmed, which is
+                    # already at the start of the alignment operation list).
+                    rev_l = not is_rev_arr[index_l]  # Trim right end of index_l
+                    rev_r = is_rev_arr[index_r]      # Trim left end of index_r
 
-                    # Check for record fully contained within another
-                    if row_r['END'] <= row_l['END']:
-                        # print('\t* Fully contained')
+                    # Get operation arrays
+                    op_arr_l = get_op_arr(index_l)
+                    op_arr_r = get_op_arr(index_r)
 
-                        df.loc[index_r, 'INDEX'] = -1
+                    # Determine which side to preferentially trim in case of ties
+                    if (
+                        rev_l != rev_r  # Same as row_l['IS_REV'] == row_r['IS_REV']
+                    ) and (
+                        seqname_arr[index_l, SEQNAME_CHROM] == seqname_arr[index_r, SEQNAME_CHROM]  # Same chromosome
+                    ):
+                        # Same chromosome and orientation, preferentially trim left-most record to maintain left-aligning
+                        # breakpoints.
+
+                        prefer_l = (
+                            coord_arr[index_l, COORD_QRY_POS] if is_rev_arr[index_l] else coord_arr[index_l, COORD_QRY_END]  # Reference position on left record being trimmed
+                        ) <= (
+                            coord_arr[index_r, COORD_QRY_END] if is_rev_arr[index_r] else coord_arr[index_r, COORD_QRY_POS]  # Reference position on right record being trimmed
+                        )
 
                     else:
+                        prefer_l = score_arr[index_l] <= score_arr[index_r]
 
-                        record_l, record_r, op_arr_l, op_arr_r = trim_alignment_record(
-                            df.loc[index_l], df.loc[index_r],
-                            'ref',
+                    # Do trimming
+                    try:
+                        if prefer_l:
+                            op_arr_l_mod, op_arr_r_mod = trim_alignment_record(
+                                index_l_trim=index_l,
+                                index_r_trim=index_r,
+                                rev_l_trim=rev_l,
+                                rev_r_trim=rev_r,
+                                coord_arr=coord_arr,
+                                is_filter_fail_arr=is_filter_fail_arr,
+                                match_qry=True,
+                                is_rev_arr=is_rev_arr,
+                                score_model=score_model,
+                                op_arr_l=op_arr_l,
+                                op_arr_r=op_arr_r
+                            )
+                        else:
+                            op_arr_r_mod, op_arr_l_mod = trim_alignment_record(
+                                index_l_trim=index_r,
+                                index_r_trim=index_l,
+                                rev_l_trim=rev_r,
+                                rev_r_trim=rev_l,
+                                coord_arr=coord_arr,
+                                is_filter_fail_arr=is_filter_fail_arr,
+                                match_qry=True,
+                                is_rev_arr=is_rev_arr,
+                                score_model=score_model,
+                                op_arr_l=op_arr_r,
+                                op_arr_r=op_arr_l
+                            )
+                    except Exception as e:
+                        raise RuntimeError(
+                            f'Error trimming overlapping alignments in query coordinates: '
+                            f'INDEX {df.iloc[index_l]["INDEX"]} ({seqname_arr[index_l, SEQNAME_CHROM]}:{coord_arr[index_l, COORD_POS]:,}-{coord_arr[index_l, COORD_END]:,}, {seqname_arr[index_l, SEQNAME_QRY_ID]}:{coord_arr[index_l, COORD_QRY_POS]:,}-{coord_arr[index_l, COORD_QRY_END]:,}), '
+                            f'INDEX {df.iloc[index_r]["INDEX"]} ({seqname_arr[index_r, SEQNAME_CHROM]}:{coord_arr[index_r, COORD_POS]:,}-{coord_arr[index_r, COORD_END]:,}, {seqname_arr[index_r, SEQNAME_QRY_ID]}:{coord_arr[index_r, COORD_QRY_POS]:,}-{coord_arr[index_r, COORD_QRY_END]:,}): '
+                            f'Table indices {index_l}, {index_r} (QRY_ID={qry_id}): '
+                            f'{e}'
+                        )
+
+                    # Check trimming
+                    if coord_arr[index_r, COORD_QRY_POS] < coord_arr[index_l, COORD_QRY_END]:
+                        raise RuntimeError(
+                            f'Found overlapping query bases after trimming in query coordinates: '
+                            f'INDEX {df.iloc[index_l]["INDEX"]} (QRY_END={coord_arr[index_l, COORD_QRY_END]:,}), '
+                            f'INDEX {df.iloc[index_r]["INDEX"]} (QRY_POS={coord_arr[index_r, COORD_QRY_POS]:,}): '
+                            f'Table indices {index_l}, {index_r} (QRY_ID={qry_id})'
+                        )
+
+                    # Save operation arrays
+                    op_arr_list[index_l] = op_arr_l_mod
+                    op_arr_list[index_r] = op_arr_r_mod
+
+                    # Modify if new aligned size is at least min_trim_qry_len, remove if shorter
+                    if coord_arr[index_l, COORD_QRY_END] - coord_arr[index_l, COORD_QRY_POS] < min_trim_qry_len:
+                        active_records[index_l] = False
+
+                    if coord_arr[index_r, COORD_QRY_END] - coord_arr[index_r, COORD_QRY_POS] < min_trim_qry_len:
+                        active_records[index_r] = False
+
+                # Save index
+                itree[
+                    coord_arr[base_index_r, COORD_QRY_POS]:
+                    coord_arr[base_index_r, COORD_QRY_END]
+                ] = iter_index_r
+
+                iter_index_r += 1
+
+
+    #
+    # Trim in reference coordinates
+    #
+
+    if do_trim_ref:
+        if pav_params.debug:
+            print(f'Trimming reference coordinates', flush=True)
+
+        # Sort by alignment lengths in query space
+        record_order_chrom = df.reset_index(drop=True).sort_values(['#CHROM', 'SCORE'], ascending=(True, False))['#CHROM']
+
+        for chrom in record_order_chrom.unique():
+            if pav_params.debug:
+                print(f'Trimming chrom: {chrom}', flush=True)
+
+            chrom_index = record_order_chrom[record_order_chrom == chrom].index.values
+
+            # Build a tree of intersecting alignments
+            itree = intervaltree.IntervalTree()
+
+            iter_index_r = 0
+
+            while iter_index_r < chrom_index.shape[0]:
+
+                base_index_r = chrom_index[iter_index_r]
+
+                for index_l in chrom_index[
+                    sorted({
+                        match.data for match in
+                            itree[
+                                coord_arr[base_index_r, COORD_POS]:
+                                coord_arr[base_index_r, COORD_END]
+                            ]
+                    })
+                ]:
+
+                    index_r = base_index_r  # May have been swapped with index_l in the previous iteration
+
+                    if not active_records[index_l] or not active_records[index_r]:
+                        continue
+
+                    # Skip if match_qry and query names differ
+                    if match_qry and seqname_arr[index_l, SEQNAME_QRY_ID] != seqname_arr[index_r, SEQNAME_QRY_ID]:
+                        continue
+
+                    # Switch indices to sequence order
+                    if (
+                        coord_arr[index_l, COORD_POS] > coord_arr[index_r, COORD_POS]  # R comes before L
+                    ) or (
+                        coord_arr[index_l, COORD_POS] == coord_arr[index_r, COORD_POS] and  # R and L start at the same position...
+                        coord_arr[index_l, COORD_END] < coord_arr[index_r, COORD_END]       # ...but L is shorter
+                    ):
+                        index_l, index_r = index_r, index_l
+
+                    # Skip if no overlap
+                    if coord_arr[index_r, COORD_POS] >= coord_arr[index_l, COORD_END]:
+                        continue
+
+                    # Check if record is contained within another
+                    if coord_arr[index_r, COORD_END] <= coord_arr[index_l, COORD_END]:
+
+                        if is_filter_fail_arr[index_l] and not is_filter_fail_arr[index_r]:
+                            active_records[index_l] = False
+                        else:
+                            active_records[index_r] = False
+
+                        continue
+
+                    # Get operation arrays
+                    op_arr_l = get_op_arr(index_l)
+                    op_arr_r = get_op_arr(index_r)
+
+                    # Trim records
+                    try:
+                        op_arr_l_mod, op_arr_r_mod = trim_alignment_record(
+                            index_l_trim=index_l,
+                            index_r_trim=index_r,
+                            rev_l_trim=True,
+                            rev_r_trim=False,
+                            coord_arr=coord_arr,
+                            is_filter_fail_arr=is_filter_fail_arr,
+                            match_qry=False,
+                            is_rev_arr=is_rev_arr,
                             score_model=score_model,
                             op_arr_l=op_arr_l,
                             op_arr_r=op_arr_r
                         )
 
-                        if record_l is not None and record_r is not None:
+                    except Exception as e:
+                        raise RuntimeError(
+                            f'Error trimming overlapping alignments in reference coordinates: '
+                            f'INDEX {df.iloc[index_l]["INDEX"]} ({seqname_arr[index_l, SEQNAME_CHROM]}:{coord_arr[index_l, COORD_POS]:,}-{coord_arr[index_l, COORD_END]:,}, {seqname_arr[index_l, SEQNAME_QRY_ID]}:{coord_arr[index_l, COORD_QRY_POS]:,}-{coord_arr[index_l, COORD_QRY_END]:,}), '
+                            f'INDEX {df.iloc[index_r]["INDEX"]} ({seqname_arr[index_r, SEQNAME_CHROM]}:{coord_arr[index_r, COORD_POS]:,}-{coord_arr[index_r, COORD_END]:,}, {seqname_arr[index_r, SEQNAME_QRY_ID]}:{coord_arr[index_r, COORD_QRY_POS]:,}-{coord_arr[index_r, COORD_QRY_END]:,}): '
+                            f'Table indices {index_l}, {index_r} (QRY_ID={qry_id}): '
+                            f'{e}'
+                        )
 
-                            # Modify if new aligned size is at least min_trim_qry_len, remove if shorter
-                            if record_l['QRY_END'] - record_l['QRY_POS'] >= min_trim_qry_len:
-                                df.loc[index_l] = record_l
-                                op_arr_dict[record_l['INDEX']] = op_arr_l
-                            else:
-                                df.loc[index_l, 'INDEX'] = -1
+                    # Check trimming
+                    if coord_arr[index_r, COORD_POS] < coord_arr[index_l, COORD_POS]:
+                        raise RuntimeError(
+                            f'Found overlapping query bases after trimming in reference coordinates: '
+                            f'INDEX {df.iloc[index_l]["INDEX"]} (END={coord_arr[index_l, COORD_END]:,}), '
+                            f'INDEX {df.iloc[index_r]["INDEX"]} (POS={coord_arr[index_r, COORD_POS]:,}): '
+                            f'Table indices {index_l}, {index_r} (CHROM={chrom})'
+                        )
 
-                            if (record_r['QRY_END'] - record_r['QRY_POS']) >= min_trim_qry_len:
-                                df.loc[index_r] = record_r
-                                op_arr_dict[record_r['INDEX']] = op_arr_r
-                            else:
-                                df.loc[index_r, 'INDEX'] = -1
+                    # Save operation arrays
+                    op_arr_list[index_l] = op_arr_l_mod
+                    op_arr_list[index_r] = op_arr_r_mod
 
-                # Next r record
+                    # Modify if new aligned size is at least min_trim_qry_len, remove if shorter
+                    if coord_arr[index_l, COORD_QRY_END] - coord_arr[index_l, COORD_QRY_POS] < min_trim_qry_len:
+                        active_records[index_l] = False
+
+                    if coord_arr[index_r, COORD_QRY_END] - coord_arr[index_r, COORD_QRY_POS] < min_trim_qry_len:
+                        active_records[index_r] = False
+
+                # Save index
+                itree[
+                    coord_arr[base_index_r, COORD_POS]:
+                    coord_arr[base_index_r, COORD_END]
+                ] = iter_index_r
+
                 iter_index_r += 1
 
-            # Next l record
-            iter_index_l += 1
 
-        # Discard fully trimmed records
-        df = df.loc[df['INDEX'] >= 0].copy()
+    #
+    # Post trim formatting
+    #
+    if pav_params.debug:
+        print(f'Post trim: Updating records', flush=True)
 
+    # Set CIGAR string
+    df['CIGAR'] = [
+        op.to_cigar_string(op_arr_list[i]) if (
+            op_arr_list[i] is not None and active_records[i]
+        ) else df.iloc[i]['CIGAR']
+            for i in range(df.shape[0])
+    ]
 
-    ###                      ###
-    ### Post trim formatting ###
-    ###                      ###
+    # Update table with modified coordinates
+    df['POS'] = coord_arr[:, COORD_POS]
+    df['END'] = coord_arr[:, COORD_END]
+    df['QRY_POS'] = coord_arr[:, COORD_QRY_POS]
+    df['QRY_END'] = coord_arr[:, COORD_QRY_END]
+    df['TRIM_REF_L'] = coord_arr[:, COORD_TRIM_REF_L]
+    df['TRIM_REF_R'] = coord_arr[:, COORD_TRIM_REF_R]
+    df['TRIM_QRY_L'] = coord_arr[:, COORD_TRIM_QRY_L]
+    df['TRIM_QRY_R'] = coord_arr[:, COORD_TRIM_QRY_R]
 
-    # Clean and re-sort
-    df = df.loc[(
-            df['INDEX'] >= 0  # Removed records
-        ) & (
-            df['END'] - df['POS'] > 0  # Zero-length reference alignment (should not occur)
-        ) & (
-            df['QRY_END'] - df['QRY_POS'] > 0  # Zero-length query alignment (should not occur)
-    )].copy()
+    # Split modified records
+    if pav_params.debug:
+        print(f'Post trim: Updating table and recalculating features', flush=True)
 
-    # df = df.loc[(df['END'] - df['POS']) > 0]  # Should never occur, but don't allow 0-length records
-    # df = df.loc[(df['QRY_END'] - df['QRY_POS']) > 0]
+    mod_records = np.array([op_arr is not None for op_arr in op_arr_list])
 
-    # Set query order (dropping records may have altered the order)
-    df['QRY_ORDER'] = tables.get_qry_order(df)
+    df_mod = df[mod_records & active_records]
+    df_nmod = df[~mod_records & active_records]
 
-    # Force-recompute features
-    if len(op_arr_dict) > 0:
-        df_alt = df.loc[df['INDEX'].isin(set(op_arr_dict.keys()))]
-        df_same = df.loc[~ df.index.isin(set(df_alt.index))]
-
-        op_arr_list = [
-            op_arr_dict[index] for index in df_alt['INDEX']
-        ]
-
-        df = pd.concat([
-            df_same,
-            features.get_features(
-                df=df_alt,
-                feature_list=None,
-                score_model=score_model,
-                df_qry_fai=df_qry_fai,
-                op_arr_list=op_arr_list,
-                only_features=False,
-                inplace=True,
-                force_all=True
-            )
-        ], axis=0)
+    df = pd.concat([
+        df_nmod,
+        features.get_features(
+            df=df_mod,
+            feature_list=None,
+            score_model=score_model,
+            df_qry_fai=df_qry_fai,
+            op_arr_list=[op_arr_list[i] for i in range(df.shape[0]) if mod_records[i] and active_records[i]],
+            only_features=False,
+            inplace=True,
+            force_all=True
+        )
+    ], axis=0)
 
     # Re-sort in reference order
     df.sort_values(['#CHROM', 'POS', 'END', 'QRY_ID'], ascending=[True, True, False, True], inplace=True)
+    df['QRY_ORDER'] = tables.get_qry_order(df)
 
     # Check sanity
+    if pav_params.debug:
+        print(f'Post trim: Verifying records', flush=True)
+
     df.apply(records.check_record, df_qry_fai=df_qry_fai, axis=1)
 
     # Return trimmed alignments
+    if pav_params.debug:
+        print(f'Trimming complete', flush=True)
+
     return df
 
 
-def get_op_arr_from_dict(record, op_arr_dict):
-    """
-    Pull an operation array from a dictionary or create a new one if it doesn't exist.
-
-    :param record: Alignment record.
-    :param op_arr_dict: Dictionary of operation arrays.
-
-    :return: Operation array from dict or created from the record.
-    """
-
-    if record['INDEX'] not in op_arr_dict:
-        return op.cigar_as_array(record['CIGAR'])
-
-    return op_arr_dict[record['INDEX']]
-
-
 def trim_alignment_record(
-        record_l: pd.Series,
-        record_r: pd.Series,
-        match_coord: str,
-        rev_l: bool=True,
-        rev_r: bool=False,
-        score_model: score.ScoreModel=None,
-        op_arr_l: np.ndarray[int, int]=None,
-        op_arr_r: np.ndarray[int, int]=None
-) -> tuple[pd.Series, pd.Series, np.ndarray[int, int], np.ndarray[int, int]]:
+        index_l_trim: int,
+        index_r_trim: int,
+        rev_l_trim: bool,
+        rev_r_trim: bool,
+        match_qry: bool,
+        op_arr_l: np.ndarray[int, int],
+        op_arr_r: np.ndarray[int, int],
+        coord_arr: np.ndarray[int, int],
+        is_filter_fail_arr: np.ndarray[bool],
+        is_rev_arr: np.ndarray[bool],
+        score_model: score.ScoreModel
+) -> tuple[np.ndarray[int, int], np.ndarray[int, int]]:
     """
     Trim ends of overlapping alignments until ends no longer overlap. In repeat-mediated events, aligners may align the
     same parts of a query sequence to both reference copies (e.g. large DEL) or two parts of a query
@@ -560,91 +523,60 @@ def trim_alignment_record(
     alignment through the second copy in the query. In this case, this function would be asked to resolve reference
     coordinates (match_coord = "ref").
 
-    :param record_l: Pandas Series alignment record (generated by align_get_read_bed). This record should be in the
-        original alignment orientation regardless of whether `rev_l` is `True` or `False`.
-    :param record_r: Pandas Series alignment record (generated by align_get_read_bed). This record should be in the
-        original alignment orientation regardless of whether `rev_r` is `True` or `False`.
-    :param match_coord: "qry" to trim query alignments, or "ref" to match reference alignments.
-    :param rev_l: Trim `record_l` from the downstream end (alignment END) if `True`, otherwise, trim from the upstream
-        end (alignment POS).
-    :param rev_r: Trim `record_r` from the downstream end (alignment END) if `True`, otherwise, trim from the upstream
-        end (alignment POS).
-    :param score_model: Alignment model object or a configuration string describing a score model. If `None`, the
-        default score model is used.
-    :param op_arr_l: Alignment operation array for `record_l` or `None`.
-    :param op_arr_r: Alignment operation array for `record_r` or `None`.
+    :param index_l_trim: Index of `record_l` to trim.
+    :param index_r_trim: Index of `record_r` to trim.
+    :param rev_l_trim: True if `record_l` is reversed for trimming.
+    :param rev_r_trim: True if `record_r` is reversed for trimming.
+    :param coord_arr: Coordinate array containing all records.
+    :param is_filter_fail_arr: True for all records with a non-PASS filter.
+    :param match_qry: Match the query coordinates if `True`, otherwise, match the reference coordinates.
+    :param is_rev_arr: "IS_REV" array for all records.
+    :param score_model: Alignment model object or a configuration string describing a score model.
+    :param op_arr_l: Alignment operation array for record at `index_l_trim`.
+    :param op_arr_r: Alignment operation array for record at `index_r_trim`.
 
-    :return: A tuple of four elements, the first two anre modified `record_l` and `record_r`, and the second two are
-        trimmed alignment operation arrays for `record_l` and `record_r`.
+    :return: Tuple of trimmed alignment operation arrays for `record_l` and `record_r`.
     """
 
-    if score_model is None:
-        score_model = score.get_score_model()
+    filter_l = is_filter_fail_arr[index_l_trim]
+    filter_r = is_filter_fail_arr[index_r_trim]
 
-    record_l = record_l.copy()
-    record_r = record_r.copy()
-
-    if op_arr_l is None:
-        op_arr_l = op.cigar_as_array(record_l['CIGAR'])
-
-    if op_arr_r is None:
-        op_arr_r = op.cigar_as_array(record_r['CIGAR'])
-
-    # Check arguments
-    if match_coord == 'reference':
-        match_coord = 'ref'
-
-    if match_coord == 'query':
-        match_coord = 'qry'
-
-    if match_coord not in {'qry', 'ref'}:
-        raise RuntimeError('Unknown match_coord parameter: {}: Expected "qry" or "ref"'.format(match_coord))
-
-    # Determine if either record is filtered
-    if 'FILTER' not in record_l:
-        filter_l = False
-    else:
-        filter_l = not (record_l['FILTER'] == 'PASS' or pd.isnull(record_l['FILTER']))
-
-    if 'FILTER' not in record_r:
-        filter_r = False
-    else:
-        filter_r = not (record_r['FILTER'] == 'PASS' or pd.isnull(record_r['FILTER']))
+    record_l = coord_arr[index_l_trim]
+    record_r = coord_arr[index_r_trim]
 
     # Orient operations so regions to be trimmed are at the head of the list
-    if rev_l:
-        op_arr_l = op_arr_l[::-1]
+    if rev_l_trim:
+        op_arr_l_mod = op_arr_l[::-1].copy()
+    else:
+        op_arr_l_mod = op_arr_l.copy()
 
-    if rev_r:
-        op_arr_r = op_arr_r[::-1]
+    if rev_r_trim:
+        op_arr_r_mod = op_arr_r[::-1].copy()
+    else:
+        op_arr_r_mod = op_arr_r.copy()
 
     # Get number of bases to trim. Assumes records overlap.
-    if match_coord == 'qry':
+    if match_qry:
 
-        diff_bp = np.min([record_l['QRY_END'], record_r['QRY_END']]) - np.max([record_l['QRY_POS'], record_r['QRY_POS']])
+        diff_bp = np.min([record_l[COORD_QRY_END], record_r[COORD_QRY_END]]) - np.max([record_l[COORD_QRY_POS], record_r[COORD_QRY_POS]])
 
         if diff_bp < 0:
-            raise RuntimeError(f'Cannot trim: records do not overlap in query space: {record_l["QRY_ID"]}:{record_l["QRY_POS"]}-{record_l["QRY_END"]} vs {record_r["QRY_ID"]}:{record_r["QRY_POS"]}-{record_r["QRY_END"]}')
+            raise RuntimeError('Records do not overlap in query space')
 
     else:
-        if record_l['POS'] > record_r['POS']:
-            raise RuntimeError('Query sequences are incorrectly ordered in reference space: {} ({}:{}) vs {} ({}:{}), match_coord={}'.format(
-                record_l['QRY_ID'], record_l['#CHROM'], record_l['POS'],
-                record_r['QRY_ID'], record_r['#CHROM'], record_r['POS'],
-                match_coord
-            ))
+        if record_l[COORD_POS] > record_r[COORD_POS]:
+            raise RuntimeError(f'Query sequences are incorrectly ordered in reference space')
 
-        diff_bp = record_l['END'] - record_r['POS']
+        diff_bp = record_l[COORD_END] - record_r[COORD_POS]
 
         if diff_bp <= 0:
-            raise RuntimeError(f'Cannot trim: records do not overlap in reference space: {record_l["QRY_ID"]}:{record_l["QRY_POS"]}-{record_l["QRY_END"]} vs {record_r["QRY_ID"]}:{record_r["QRY_POS"]}-{record_r["QRY_END"]}')
+            raise RuntimeError(f'Records do not overlap in reference space')
 
     # Find the number of upstream (l) bases to trim to get to 0 (or query start)
-    trace_l = trace_op_to_zero(op_arr_l, diff_bp, record_l, match_coord == 'qry', score_model)
+    trace_l = trace_op_to_zero(op_arr_l_mod, diff_bp, match_qry, score_model)
 
     # Find the number of downstream (r) bases to trim to get to 0 (or query start)
-    trace_r = trace_op_to_zero(op_arr_r, diff_bp, record_r, match_coord == 'qry', score_model)
-
+    trace_r = trace_op_to_zero(op_arr_r_mod, diff_bp,  match_qry, score_model)
 
     # For each upstream alignment cut-site, find the best matching downstream alignment cut-site. Not all cut-site
     # combinations need to be tested since trimmed bases and event count is non-decreasing as it moves away from the
@@ -667,11 +599,9 @@ def trim_alignment_record(
 
     # Check for no cut-sites. Should not occur at this stage.
     if cut_idx_l is None or cut_idx_r is None:
-        raise RuntimeError('Program bug: Found no cut-sites: {} (INDEX={}) vs {} (INDEX={}), match_coord={}'.format(
-            record_l['QRY_ID'], record_l['INDEX'],
-            record_r['QRY_ID'], record_r['INDEX'],
-            match_coord
-        ))
+        raise RuntimeError(
+            f'Program bug: Found no cut-sites'
+        )
 
     # Get cut records
     cut_l = trace_l[cut_idx_l]
@@ -679,11 +609,8 @@ def trim_alignment_record(
 
     # Set mid-record cuts (Left-align cuts, mismatch first, preferentially trim filtered records)
     residual_bp = diff_bp - (cut_l[TC_DIFF_CUM] + cut_r[TC_DIFF_CUM])
-    # trim_l = 0
-    # trim_r = 0
 
     trim_dict = {'l': 0, 'r': 0}
-
     cut_dict = {'l': cut_l, 'r': cut_r}
 
     trim_order = {
@@ -702,135 +629,92 @@ def trim_alignment_record(
     trim_l = trim_dict['l']
     trim_r = trim_dict['r']
 
-
-    # if residual_bp > 0 and cut_r[TC_OP_CODE] == op.X:  # Right mismatch
-    #     trim_r += np.min([residual_bp, cut_r[TC_OP_LEN] - 1])
-    #     residual_bp -= trim_r
-    #
-    # if residual_bp > 0 and cut_l[TC_OP_CODE] == op.X:  # Left mismatch
-    #     trim_l += np.min([residual_bp, cut_l[TC_OP_LEN] - 1])
-    #     residual_bp -= trim_l
-    #
-    # if residual_bp > 0 and cut_l[TC_OP_CODE] == op.EQ:  # Left match
-    #     trim_l += np.min([residual_bp, cut_l[TC_OP_LEN] - 1])
-    #     residual_bp -= trim_l
-    #
-    # if residual_bp > 0 and cut_r[TC_OP_CODE] == op.EQ:  # Right match
-    #     trim_r += np.min([residual_bp, cut_r[TC_OP_LEN] - 1])
-    #     residual_bp -= trim_r
-
     # Get cut CIGAR String
-    op_arr_l_mod = op_arr_l[cut_l[TC_INDEX]:]
-    op_arr_r_mod = op_arr_r[cut_r[TC_INDEX]:]
+    op_arr_l_mod = op_arr_l_mod[cut_l[TC_INDEX]:]
+    op_arr_r_mod = op_arr_r_mod[cut_r[TC_INDEX]:]
 
     # Shorten last alignment record if set.
-    op_arr_l_mod[0] = (op_arr_l_mod[0][0], op_arr_l_mod[0][1] - trim_l)
-    op_arr_r_mod[0] = (op_arr_r_mod[0][0], op_arr_r_mod[0][1] - trim_r)
+    op_arr_l_mod[0, 1] -= trim_l
+    op_arr_r_mod[0, 1] -= trim_r
 
     # Modify alignment records
-    record_l_mod = record_l.copy()
-    record_r_mod = record_r.copy()
-
     cut_ref_l = cut_l[TC_REF_BP] + trim_l
     cut_qry_l = cut_l[TC_QRY_BP] + trim_l
 
     cut_ref_r = cut_r[TC_REF_BP] + trim_r
     cut_qry_r = cut_r[TC_QRY_BP] + trim_r
 
-    if rev_l:
-        record_l_mod['END'] -= cut_ref_l
+    if rev_l_trim:
+        coord_arr[index_l_trim, COORD_END] -= cut_ref_l
 
         # Adjust positions in query space
-        if record_l_mod['IS_REV']:
-            record_l_mod['QRY_POS'] += cut_qry_l
+        if is_rev_arr[index_l_trim]:
+            coord_arr[index_l_trim, COORD_QRY_POS] += cut_qry_l
         else:
-            record_l_mod['QRY_END'] -= cut_qry_l
+            coord_arr[index_l_trim, COORD_QRY_END] -= cut_qry_l
 
         # Track cut bases
-        record_l_mod['TRIM_REF_R'] += cut_ref_l
-        record_l_mod['TRIM_QRY_R'] += cut_qry_l
+        coord_arr[index_l_trim, COORD_TRIM_REF_R] += cut_ref_l
+        coord_arr[index_l_trim, COORD_TRIM_QRY_R] += cut_qry_l
 
     else:
-        record_l_mod['POS'] += cut_ref_l
+        coord_arr[index_l_trim, COORD_POS] += cut_ref_l
 
         # Adjust positions in query space
-        if record_l_mod['IS_REV']:
-            record_l_mod['QRY_END'] -= cut_qry_l
+        if is_rev_arr[index_l_trim]:
+            coord_arr[index_l_trim, COORD_QRY_END] -= cut_qry_l
         else:
-            record_l_mod['QRY_POS'] += cut_qry_l
+            coord_arr[index_l_trim, COORD_QRY_POS] += cut_qry_l
 
         # Track cut bases
-        record_l_mod['TRIM_REF_L'] += cut_ref_l
-        record_l_mod['TRIM_QRY_L'] += cut_qry_l
+        coord_arr[index_l_trim, COORD_TRIM_REF_L] += cut_ref_l
+        coord_arr[index_l_trim, COORD_TRIM_QRY_L] += cut_qry_l
 
-    if rev_r:
-        record_r_mod['END'] -= cut_ref_r
+    if rev_r_trim:
+        coord_arr[index_r_trim, COORD_END] -= cut_ref_r
 
         # Adjust positions in query space
-        if record_r_mod['IS_REV']:
-            record_r_mod['QRY_POS'] += cut_qry_r
+        if is_rev_arr[index_r_trim]:
+            coord_arr[index_r_trim, COORD_QRY_POS] += cut_qry_r
         else:
-            record_r_mod['QRY_END'] -= cut_qry_r
+            coord_arr[index_r_trim, COORD_QRY_END] -= cut_qry_r
 
         # Track cut bases
-        record_r_mod['TRIM_REF_R'] += cut_ref_r
-        record_r_mod['TRIM_QRY_R'] += cut_qry_r
+        coord_arr[index_r_trim, COORD_TRIM_REF_R] += cut_ref_r
+        coord_arr[index_r_trim, COORD_TRIM_QRY_R] += cut_qry_r
 
     else:
-        record_r_mod['POS'] += cut_ref_r
+        coord_arr[index_r_trim, COORD_POS] += cut_ref_r
 
         # Adjust positions in query space
-        if record_r_mod['IS_REV']:
-            record_r_mod['QRY_END'] -= cut_qry_r
+        if is_rev_arr[index_r_trim]:
+            coord_arr[index_r_trim, COORD_QRY_END] -= cut_qry_r
         else:
-            record_r_mod['QRY_POS'] += cut_qry_r
+            coord_arr[index_r_trim, COORD_QRY_POS] += cut_qry_r
 
         # Track cut bases
-        record_r_mod['TRIM_REF_L'] += cut_ref_r
-        record_r_mod['TRIM_QRY_L'] += cut_qry_r
+        coord_arr[index_r_trim, COORD_TRIM_REF_L] += cut_ref_r
+        coord_arr[index_r_trim, COORD_TRIM_QRY_L] += cut_qry_r
 
-    # Add clipped bases to CIGAR
-    if cut_l[TC_CLIPH_BP] > 0:
-        cigar_l_pre = [(op.H, cut_l[TC_CLIPH_BP])]
-    else:
-        cigar_l_pre = []
+    # Add clipped bases to operations
+    clip_l = cut_l[TC_CLIP_BP] + cut_l[TC_QRY_BP] + trim_l
+    clip_r = cut_r[TC_CLIP_BP] + cut_r[TC_QRY_BP] + trim_r
 
-    if cut_r[TC_CLIPH_BP] > 0:
-        cigar_r_pre = [(op.H, cut_r[TC_CLIPH_BP])]
-    else:
-        cigar_r_pre = []
+    if clip_l > 0:
+        op_arr_l_mod = np.append([(op.H, clip_l)], op_arr_l_mod, axis=0)
 
-    clip_s_l = cut_l[TC_CLIPS_BP] + cut_l[TC_QRY_BP] + trim_l
-    clip_s_r = cut_r[TC_CLIPS_BP] + cut_r[TC_QRY_BP] + trim_r
-
-    if clip_s_l > 0:
-        cigar_l_pre.append((op.S, clip_s_l))
-
-    if clip_s_r > 0:
-        cigar_r_pre.append((op.S, clip_s_r))
-
-    # Append remaining CIGAR
-    if len(cigar_l_pre) > 0:
-        op_arr_l_mod = np.append(cigar_l_pre, op_arr_l_mod, axis=0)
-
-    if len(cigar_r_pre) > 0:
-        op_arr_r_mod = np.append(cigar_r_pre, op_arr_r_mod, axis=0)
+    if clip_r > 0:
+        op_arr_r_mod = np.append([(op.H, clip_r)], op_arr_r_mod, axis=0)
 
     # Finish CIGAR and update score
-    if rev_l:
+    if rev_l_trim:
         op_arr_l_mod = op_arr_l_mod[::-1]
 
-    if rev_r:
+    if rev_r_trim:
         op_arr_r_mod = op_arr_r_mod[::-1]
 
-    record_l_mod['CIGAR'] = op.to_cigar_string(op_arr_l_mod)
-    record_l_mod['SCORE'] = score_model.score_operations(op_arr_l_mod)
-
-    record_r_mod['CIGAR'] = op.to_cigar_string(op_arr_r_mod)
-    record_r_mod['SCORE'] = score_model.score_operations(op_arr_r_mod)
-
     # Return trimmed records
-    return record_l_mod, record_r_mod, op_arr_l_mod, op_arr_r_mod
+    return op_arr_l_mod, op_arr_r_mod
 
 
 def find_cut_sites(
@@ -936,21 +820,6 @@ def find_cut_sites(
                 # Must over-cut to use these sites.
                 diff_optimal = diff_min
 
-            # # Save max
-            # if (
-            #     score_cum < min_score_part or (  # Better alignment score, or
-            #         score_cum == min_score_part and (  # Same event count, and
-            #             max_diff_optimal_part is None or diff_optimal < max_diff_optimal_part  # Optimal difference is closer to 0 (less over-cut)
-            #         )
-            #     )
-            # ):
-            #     cut_idx_part_l = tc_idx_l
-            #     cut_idx_part_r = tc_idx_r
-            #     min_score_part = score_cum
-            #     max_diff_optimal_part = diff_optimal
-            #
-            # tc_idx_r += 1
-
             # Save max
             if (
                 score_cum < min_score or (  # Better event count, or
@@ -975,7 +844,6 @@ def find_cut_sites(
 def trace_op_to_zero(
         op_arr: np.ndarray[int, int],
         diff_bp: int,
-        aln_record: pd.Series,
         diff_query: bool,
         score_model: score.ScoreModel
 ) -> list[tuple]:
@@ -990,16 +858,11 @@ def trace_op_to_zero(
         * TC_OP_LEN = 2: Operation length.
         * TC_DIFF_CUM = 3: Cumulative base difference up this event, but not including it.
         * TC_DIFF = 4: Base difference for this event. Will be op_len depending on the operation code.
-        * TC_EVENT_CUM = 5: Cumulative event difference (number of insertions, deletions, and SNVs) up to this event,
-            but not including it.
-        * TC_EVENT = 6: Event differences for this event. "1" for insertions or deletions, OP_LEN for mismatches
-            "X", SNV).
-        * TC_REF_BP = 7: Cumulative number of reference bases consumed up to this event, but not including it.
-        * TC_QRY_BP = 8: Cumulative number of query bases consumed up to this event, but not including it.
-        * TC_CLIPS_BP = 9: Cumulative number of soft-clipped bases up to AND INCLUDING this event. Alignments are not
-            cut on clipped records, so cumulative and including does not affect the algorithm.
-        * TC_CLIPH_BP = 10: Cumulative number of hard-clipped bases up to AND INCLUDING this event.
-        * TC_SCORE_CUM = 11: Cumulative alignment score up to this event, but not including it.
+        * TC_REF_BP = 5: Cumulative number of reference bases consumed up to this event, but not including it.
+        * TC_QRY_BP = 6: Cumulative number of query bases consumed up to this event, but not including it.
+        * TC_CLIP_BP = 7: Cumulative number of clipped bases (soft or hard). Alignments are not cut on clipped records,
+            so cumulative and including does not affect the algorithm.
+        * TC_SCORE_CUM = 8: Cumulative alignment score up to this event, but not including it.
 
     :param op_arr: Array of alignment operations (col 1: cigar_len, col 2: cigar_op).
     :param diff_bp: Number of query bases to trace back. Final record will traverse past this value.
@@ -1016,13 +879,11 @@ def trace_op_to_zero(
     op_count = 0
 
     diff_cumulative = 0
-    event_cumulative = 0
     score_cumulative = 0
 
     ref_bp_sum = 0
     qry_bp_sum = 0
-    clip_s_sum = 0
-    clip_h_sum = 0
+    clip_sum = 0
 
     trace_list = list()
 
@@ -1035,52 +896,34 @@ def trace_op_to_zero(
         last_no_match = True
 
         if op_code == op.EQ:
-            event_count = 0
-
             ref_bp = op_len
             qry_bp = op_len
 
             last_no_match = False
 
         elif op_code == op.X:
-            event_count = op_len
-
             ref_bp = op_len
             qry_bp = op_len
 
         elif op_code == op.I:
-            event_count = 1
-
             ref_bp = 0
             qry_bp = op_len
 
         elif op_code == op.D:
-            event_count = 1
-
             ref_bp = op_len
             qry_bp = 0
 
-        elif op_code == op.S:
-            event_count = 0
-
+        elif op_code in op.CLIP_SET:
             ref_bp = 0
             qry_bp = 0
 
-            clip_s_sum += op_len
-
-        elif op_code == op.H:
-            event_count = 0
-
-            ref_bp = 0
-            qry_bp = 0
-
-            clip_h_sum += op_len
+            clip_sum += op_len
 
         else:
-            raise RuntimeError((
-                'Illegal alignment operation while trimming alignment: {} '
-                '(start={}:{}): Operation #{}: Expected op in "IDSH=X"'
-            ).format(op_code, aln_record['#CHROM'], aln_record['POS'], index))
+            raise RuntimeError(
+                'Illegal alignment operation while trimming alignment '
+                f'(Op code #{op_code} at CIGAR index {index}): Expected op in "IDSH=X"'
+            )
 
         # Get number of bases affected by this event
         if diff_query:
@@ -1095,16 +938,14 @@ def trace_op_to_zero(
                     index,
                     op_code, op_len,
                     diff_cumulative, diff_change,
-                    event_cumulative, event_count,
                     ref_bp_sum, qry_bp_sum,
-                    clip_s_sum, clip_h_sum,
+                    clip_sum,
                     score_cumulative
                 )
             )
 
         # Increment cumulative counts
         diff_cumulative += diff_change
-        event_cumulative += event_count
         score_cumulative += score_model.score(op_code, op_len)
 
         ref_bp_sum += ref_bp
@@ -1276,3 +1117,49 @@ def truncate_alignment_record(record, overlap_bp, trunc_side, score_model=None, 
     )
 
     return record
+
+def check_trim_qry(df):
+    """
+    Check for alignment overlaps in query coordinates and raise an exception if found.
+
+    :param df: Alignment dataframe after query trimming.
+    """
+
+    itree = collections.defaultdict(intervaltree.IntervalTree)
+
+    index_tuple_set = set()
+
+    for index, row in df.iterrows():
+        for match in itree[row['QRY_ID']][row['QRY_POS']:row['QRY_END']]:
+            index_tuple_set.add((row['INDEX'], match.data))
+
+        itree[row['QRY_ID']][row['QRY_POS']:row['QRY_END']] = row['INDEX']
+
+    if index_tuple_set:
+        n = len(index_tuple_set)
+        index_list = ', '.join([f'{i1}-{i2}' for i1, i2 in sorted(index_tuple_set)[:3]]) + ('...' if n > 3 else '')
+
+        raise RuntimeError(f'Found {n} overlapping query alignments: INDEX pairs {index_list}')
+
+def check_trim_ref(df):
+    """
+    Check for alignment overlaps in query coordinates and raise an exception if found.
+
+    :param df: Alignment dataframe after query trimming.
+    """
+
+    itree = collections.defaultdict(intervaltree.IntervalTree)
+
+    index_tuple_set = set()
+
+    for index, row in df.iterrows():
+        for match in itree[row['#CHROM']][row['POS']:row['END']]:
+            index_tuple_set.add((row['INDEX'], match.data))
+
+        itree[row['#CHROM']][row['POS']:row['END']] = row['INDEX']
+
+    if index_tuple_set:
+        n = len(index_tuple_set)
+        index_list = ', '.join([f'{i1}-{i2}' for i1, i2 in sorted(index_tuple_set)[:3]]) + ('...' if n > 3 else '')
+
+        raise RuntimeError(f'Found {n} overlapping reference alignments: INDEX pairs {index_list}')

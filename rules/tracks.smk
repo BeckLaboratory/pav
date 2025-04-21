@@ -343,7 +343,17 @@ rule tracks_align:
         df['POS_THICK'] = df['POS']
         df['END_THICK'] = df['END']
         df['ID'] = df.apply(lambda row: '{QRY_ID} - {INDEX} ({HAP}-{QRY_ORDER})'.format(**row), axis=1)
-        df['TRACK_SCORE'] = 1000
+
+        if 'MATCH_PROP' in df.columns:
+            df['TRK_SCORE'] = (
+                np.clip(
+                    df['MATCH_PROP'].fillna(0.0) * 1000, 0.0, 1000.0
+                )
+            ).astype(int)
+        else:
+            df['TRK_SCORE'] = 1000
+
+
         df['STRAND'] = df['IS_REV'].apply(lambda val: '-' if val else '+')
 
         # Set Color
@@ -380,7 +390,7 @@ rule tracks_align:
         )
 
         # Sort columns
-        head_cols = ['#CHROM', 'POS', 'END', 'ID', 'SCORE', 'STRAND', 'POS_THICK', 'END_THICK', 'COL']
+        head_cols = ['#CHROM', 'POS', 'END', 'ID', 'TRK_SCORE', 'STRAND', 'POS_THICK', 'END_THICK', 'COL']
         tail_cols = [col for col in df.columns if col not in head_cols]
 
         df = df[head_cols + tail_cols]

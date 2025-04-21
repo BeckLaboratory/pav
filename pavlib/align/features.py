@@ -347,7 +347,7 @@ def feature_match_prop(
                     (
                         op_arr[:, 1] * (op_arr[:, 0] == op.X)
                     ).sum() / (
-                        op_arr[:, 1] * (op_arr[:, 0] == op.EQ)
+                        op_arr[:, 1] * (op_arr[:, 0] == op.EQ) + 1e-15  # Add a tiny number to avoid division by zero warnings
                     ).sum(),
                     nan=0.0
                 )
