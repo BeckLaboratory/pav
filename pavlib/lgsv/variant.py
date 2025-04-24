@@ -523,6 +523,8 @@ class InversionVariant(Variant):
             ~ interval.df_segment['IS_ANCHOR']
         ]
 
+        df_int_aligned = df_int[df_int['IS_ALIGNED']]
+
         is_prox = (
             df_int['IS_ALIGNED'] &
             (df_int['POS'] < interval.region_ref.end) &
@@ -531,68 +533,121 @@ class InversionVariant(Variant):
 
         is_dist = (~ is_prox) & df_int['IS_ALIGNED']
 
-        if np.sum(df_int.loc[is_dist, 'LEN_QRY']) > interval.len_qry * 0.1:
-            # No more than 10% aligned outside of the inversion site (allow for small alignments)
-            return
+        inv_index = interval.df_segment.loc[
+            (interval.df_segment['IS_ALIGNED']),
+            'INDEX'
+        ].values
 
-        if not var_region_kde.try_inv and \
-                np.sum(
-                    df_int.loc[is_prox & (df_int['IS_REV'] == interval.is_rev), 'LEN_QRY']
-                ) > np.sum(
-                    df_int.loc[is_prox & (df_int['IS_REV'] != interval.is_rev), 'LEN_QRY']
-                ):
-            # Inverted by KDE, or Inverted segment lengths should outweigh the non-inverted segments if the inversion is called by alignment.
+        # Try inversion by untrimmed alignment
+        if df_int_aligned.shape[0] == 1 and all(df_int_aligned['IS_REV'] != interval.is_rev) and all(df_int_aligned['#CHROM'] == interval.chrom):
+            df_align_none = caller_resources.df_align_none.loc[inv_index].reset_index(drop=True)
 
-            return
+            ref_pos_outer = df_align_none.loc[1, 'POS']
+            ref_end_outer = df_align_none.loc[1, 'END']
 
-        # Call variant by KDE
-        if var_region_kde is not None and var_region_kde.try_inv:
+            ref_pos_inner = df_align_none.loc[0, 'END']
+            ref_end_inner = df_align_none.loc[2, 'POS']
 
-            # Set region boundaries
-            self.region_ref_inner = interval.region_ref
-            self.region_qry_inner = interval.region_qry
+            if not interval.is_rev:
+                qry_pos_outer = df_align_none.loc[1, 'QRY_POS']
+                qry_end_outer = df_align_none.loc[1, 'QRY_END']
 
-            self.region_ref_outer = self.region_ref_inner
-            self.region_qry_outer = self.region_qry_inner
+                qry_pos_inner = df_align_none.loc[0, 'QRY_END']
+                qry_end_inner = df_align_none.loc[2, 'QRY_POS']
+            else:
+                qry_pos_outer = df_align_none.loc[1, 'QRY_POS']
+                qry_end_outer = df_align_none.loc[1, 'QRY_END']
 
-            self.call_subtype = 'KDE'
+                qry_pos_inner = df_align_none.loc[2, 'QRY_END']
+                qry_end_inner = df_align_none.loc[0, 'QRY_POS']
 
-        # # Try by untrimmed alignment
-        # seg_none = caller_resources.df_align_none.loc[list(interval.df_segment['INDEX'])]  # Segments in untrimmed
+            if (
+                ref_pos_outer <= ref_pos_inner
+            ) and (
+                ref_end_outer >= ref_end_inner
+            ) and (
+                ref_pos_inner <= ref_end_inner
+            ) and (
+                qry_pos_outer <= qry_pos_inner
+            ) and (
+                qry_end_outer >= qry_end_inner
+            ) and (
+                qry_pos_inner <= qry_end_inner
+            ):
 
+                self.region_ref_outer = seq.Region(interval.chrom, ref_pos_outer, ref_end_outer)
+                self.region_ref_inner = seq.Region(interval.chrom, ref_pos_inner, ref_end_inner)
 
+                self.region_qry_outer = seq.Region(interval.qry_id, qry_pos_outer, qry_end_outer)
+                self.region_qry_inner = seq.Region(interval.qry_id, qry_pos_inner, qry_end_inner)
 
-        # Try by trimmed alignment
-        local_inv = False
+                self.call_subtype = 'ALN'
 
+                self.size_gap = 0
+
+        # Try call by KDE
         if self.region_ref_inner is None:
-            inv_ref_flank = len(interval.region_qry) * 0.1  # Allow inverted segment to be within 5% of the reference region
 
-            df_int = interval.df_segment.loc[
-                ~ interval.df_segment['IS_ANCHOR']
-            ]
+            # Pre-checks before trying inversion by KDE
+            if np.sum(df_int.loc[is_dist, 'LEN_QRY']) > interval.len_qry * 0.1:
+                # No more than 10% aligned outside of the inversion site (allow for small alignments)
+                return
 
-            if df_int.shape[0] == 1:
-                row_inv = df_int.iloc[0]
+            if not var_region_kde.try_inv and \
+                    np.sum(
+                        df_int.loc[is_prox & (df_int['IS_REV'] == interval.is_rev), 'LEN_QRY']
+                    ) > np.sum(
+                        df_int.loc[is_prox & (df_int['IS_REV'] != interval.is_rev), 'LEN_QRY']
+                    ):
+                # Inverted by KDE, or Inverted segment lengths should outweigh the non-inverted segments if the inversion is called by alignment.
 
-                local_inv = (
-                    row_inv['#CHROM'] == interval.chrom
-                ) and (
-                    row_inv['POS'] < interval.region_ref.pos + inv_ref_flank
-                ) and (
-                    row_inv['END'] > interval.region_ref.end - inv_ref_flank
-                ) and (
-                    row_inv['IS_REV'] != interval.is_rev
-                )
+                return
 
-        if local_inv:
-            self.region_ref_inner = interval.region_ref
-            self.region_qry_inner = interval.region_qry
+            # Call variant by KDE
+            if var_region_kde is not None and var_region_kde.try_inv:
 
-            self.region_ref_outer = self.region_ref_inner
-            self.region_qry_outer = self.region_qry_inner
+                # Set region boundaries
+                self.region_ref_inner = interval.region_ref
+                self.region_qry_inner = interval.region_qry
 
-            self.call_subtype = 'ALN'
+                self.region_ref_outer = self.region_ref_inner
+                self.region_qry_outer = self.region_qry_inner
+
+                self.call_subtype = 'KDE'
+
+                self.size_gap = np.abs(len(self.region_ref_inner) - len(self.region_qry_inner))
+
+        # # Try by trimmed alignment
+        # local_inv = False
+        #
+        # if self.region_ref_inner is None:
+        #     inv_ref_flank = len(interval.region_qry) * 0.1  # Allow inverted segment to be within 5% of the reference region
+        #
+        #     df_int = interval.df_segment.loc[
+        #         ~ interval.df_segment['IS_ANCHOR']
+        #     ]
+        #
+        #     if df_int.shape[0] == 1:
+        #         row_inv = df_int.iloc[0]
+        #
+        #         local_inv = (
+        #             row_inv['#CHROM'] == interval.chrom
+        #         ) and (
+        #             row_inv['POS'] < interval.region_ref.pos + inv_ref_flank
+        #         ) and (
+        #             row_inv['END'] > interval.region_ref.end - inv_ref_flank
+        #         ) and (
+        #             row_inv['IS_REV'] != interval.is_rev
+        #         )
+        #
+        # if local_inv:
+        #     self.region_ref_inner = interval.region_ref
+        #     self.region_qry_inner = interval.region_qry
+        #
+        #     self.region_ref_outer = self.region_ref_inner
+        #     self.region_qry_outer = self.region_qry_inner
+        #
+        #     self.call_subtype = 'ALN'
 
         # Call variant
         if self.region_ref_inner is not None:

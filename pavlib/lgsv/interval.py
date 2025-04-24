@@ -14,7 +14,7 @@ SEGMENT_TABLE_FIELDS = [  # Fields for creating an empty table
     'QRY_ID', 'QRY_POS', 'QRY_END',
     'LEN_REF', 'LEN_QRY',
     'GAP_REF',
-    'INDEX', 'SEG_ORDER',
+    'INDEX', 'QRY_ORDER', 'SEG_ORDER',
     'SCORE',
     'TRIM_REF_L', 'TRIM_REF_R', 'TRIM_QRY_L', 'TRIM_QRY_R'
 ]
@@ -83,7 +83,8 @@ class AnchoredInterval:
         ref_pos = self.df_segment.iloc[0]['END']
         ref_end = self.df_segment.iloc[-1]['POS']
 
-        self.seg_n = self.df_segment.iloc[1:-1].shape[0]
+        self.seg_n = (~ self.df_segment['IS_ANCHOR']).sum()
+        self.seg_n_aligned = (self.df_segment['IS_ALIGNED'] & ~ self.df_segment['IS_ANCHOR']).sum()
 
         self.len_ref = ref_end - ref_pos
 
@@ -174,7 +175,7 @@ def get_segment_table(start_index, end_index, df_align, caller_resources):
                 qry_id, head_row['QRY_POS'], head_row['QRY_END'],
                 head_row['END'] - head_row['POS'], head_row['QRY_END'] - head_row['QRY_POS'],
                 0,
-                head_row['INDEX'], seg_order,
+                head_row['INDEX'], head_row['QRY_ORDER'], seg_order,
                 head_row['SCORE'],
                 head_row['TRIM_REF_L'], head_row['TRIM_REF_R'], head_row['TRIM_QRY_L'], head_row['TRIM_QRY_R']
             ],
@@ -185,7 +186,7 @@ def get_segment_table(start_index, end_index, df_align, caller_resources):
                 'QRY_ID', 'QRY_POS', 'QRY_END',
                 'LEN_REF', 'LEN_QRY',
                 'GAP_REF',
-                'INDEX', 'SEG_ORDER',
+                'INDEX', 'QRY_ORDER', 'SEG_ORDER',
                 'SCORE',
                 'TRIM_REF_L', 'TRIM_REF_R', 'TRIM_QRY_L', 'TRIM_QRY_R'
             ]
@@ -234,7 +235,7 @@ def get_segment_table(start_index, end_index, df_align, caller_resources):
                         qry_id, gap_qry_pos, gap_qry_end,
                         0, gap_len_qry,
                         0,
-                        -1, seg_order,
+                        -1, -1, seg_order,
                         score_model.gap(gap_len_qry),
                         0, 0, 0, 0
                     ],
@@ -245,7 +246,7 @@ def get_segment_table(start_index, end_index, df_align, caller_resources):
                         'QRY_ID', 'QRY_POS', 'QRY_END',
                         'LEN_REF', 'LEN_QRY',
                         'GAP_REF',
-                        'INDEX', 'SEG_ORDER',
+                        'INDEX', 'QRY_ORDER', 'SEG_ORDER',
                         'SCORE',
                         'TRIM_REF_L', 'TRIM_REF_R', 'TRIM_QRY_L', 'TRIM_QRY_R'
                     ]
@@ -265,7 +266,7 @@ def get_segment_table(start_index, end_index, df_align, caller_resources):
                         qry_id, row_r['QRY_POS'], row_r['QRY_END'],
                         row_r['END'] - row_r['POS'], row_r['QRY_END'] - row_r['QRY_POS'],
                         gap_len_ref,
-                        row_r['INDEX'], seg_order,
+                        row_r['INDEX'], row_r['QRY_ORDER'], seg_order,
                         row_r['SCORE'],
                         row_r['TRIM_REF_L'], row_r['TRIM_REF_R'], row_r['TRIM_QRY_L'], row_r['TRIM_QRY_R']
                     ],
@@ -276,7 +277,7 @@ def get_segment_table(start_index, end_index, df_align, caller_resources):
                         'QRY_ID', 'QRY_POS', 'QRY_END',
                         'LEN_REF', 'LEN_QRY',
                         'GAP_REF',
-                        'INDEX', 'SEG_ORDER',
+                        'INDEX', 'QRY_ORDER', 'SEG_ORDER',
                         'SCORE',
                         'TRIM_REF_L', 'TRIM_REF_R', 'TRIM_QRY_L', 'TRIM_QRY_R'
                     ]
@@ -301,7 +302,7 @@ def get_segment_table(start_index, end_index, df_align, caller_resources):
                 qry_id, tail_row['QRY_POS'], tail_row['QRY_END'],
                 tail_row['END'] - tail_row['POS'], tail_row['QRY_END'] - tail_row['QRY_POS'],
                 0,
-                tail_row['INDEX'], seg_order,
+                tail_row['INDEX'], tail_row['QRY_ORDER'], seg_order,
                 tail_row['SCORE'],
                 tail_row['TRIM_REF_L'], tail_row['TRIM_REF_R'], tail_row['TRIM_QRY_L'], tail_row['TRIM_QRY_R']
             ],
@@ -312,7 +313,7 @@ def get_segment_table(start_index, end_index, df_align, caller_resources):
                 'QRY_ID', 'QRY_POS', 'QRY_END',
                 'LEN_REF', 'LEN_QRY',
                 'GAP_REF',
-                'INDEX', 'SEG_ORDER',
+                'INDEX', 'QRY_ORDER', 'SEG_ORDER',
                 'SCORE',
                 'TRIM_REF_L', 'TRIM_REF_R', 'TRIM_QRY_L', 'TRIM_QRY_R'
             ]

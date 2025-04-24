@@ -104,9 +104,12 @@ def get_model(lc_model_path=None, search_dir=None, alias_filename_list=None):
     # Check for alias
     if 'alias' in lc_model_def:
 
-        if set(lc_model_def.keys()) != {'alias'}:
-            n_unknown = len(set(lc_model_def.keys()) - {'alias'})
-            raise RuntimeError(f'LC align model definition JSON specifies an alias, which may only have the "alias" attribute: Found {n_unknown} unknown attributes: {model_def_filename}')
+        unknown_set = set(lc_model_def.keys()) - {'alias', 'name'}
+
+        if unknown_set:
+            n_unknown = len(unknown_set)
+            unknown_str = ', '.join(sorted(unknown_set)[:3]) + ('...' if n_unknown > 3 else '')
+            raise RuntimeError(f'LC align model definition JSON specifies an alias, which may only have the "alias" attribute: Found {n_unknown} unknown attributes "{unknown_str}": {model_def_filename}')
 
         alias_filename_list.append(model_def_filename)
 

@@ -79,12 +79,27 @@ class VarRegionKde:
             self.try_var = True
             return
 
-        if interval.len_qry <= max_qry_len_kde:
+        # Build KDE
+        region_ref_exp = interval.region_ref.expand(
+            len(interval.region_ref) * 0.2,
+            max_end=caller_resources.ref_fai[interval.region_ref.chrom],
+            shift=False,
+            inplace=False
+        )
+
+        region_qry_exp = interval.region_qry.expand(
+            len(interval.region_qry) * 0.2,
+            max_end=caller_resources.qry_fai[interval.region_qry.chrom],
+            shift=False,
+            inplace=False
+        )
+
+        if len(region_qry_exp) <= max_qry_len_kde:
 
             # Match complex sequence to the gap region
             self.df_kde = inv.get_state_table(
-                region_ref=interval.region_ref,
-                region_qry=interval.region_qry,
+                region_ref=region_ref_exp,
+                region_qry=region_qry_exp,
                 ref_fa_name=caller_resources.ref_fa_name,
                 qry_fa_name=caller_resources.qry_fa_name,
                 ref_fai=caller_resources.ref_fai,
@@ -129,9 +144,9 @@ class VarRegionKde:
                 # Try a non-INV variant call if tests to this point have passed.
                 # Weed out misalignments around inverted repeats (human chrX)
                 self.try_var = (
-                        kmer_n_kde / kmer_n < 0.8  # Too many missing k-mers to make a call, try a variant
+                    kmer_n_kde / kmer_n < 0.8  # Too many missing k-mers to make a call, try a variant
                 ) or (
-                        prop_fwdrev < 0.5 or prop_fwd + prop_fwdrev < 0.90  # Weed out misalignments around inverted repeats (human chrX)
+                    prop_fwdrev < 0.5 or prop_fwd + prop_fwdrev < 0.90  # Weed out misalignments around inverted repeats (human chrX)
                 )
 
                 # Test states for inverted or reference states
@@ -141,6 +156,8 @@ class VarRegionKde:
                     self.try_inv = p_binom < 0.01 and prop_rev >= 0.5
 
                 # Check all segments, should belong to the gap region
+                qry_exp_diff = interval.region_qry.pos - region_qry_exp.pos
+
                 if self.try_inv:
                     qry_start = interval.df_segment.iloc[-1 if interval.is_rev else 0]['QRY_END']
 
@@ -148,8 +165,11 @@ class VarRegionKde:
                         pos, end = sorted([abs(row['QRY_POS'] - qry_start), abs(row['QRY_END'] - row['QRY_POS'])])
 
                         df_kde_seg = self.df_kde.loc[
-                            (self.df_kde['INDEX'] >= pos) * (self.df_kde['INDEX'] <= end)
+                            (self.df_kde['INDEX'] >= (pos + qry_exp_diff)) * (self.df_kde['INDEX'] <= (end + qry_exp_diff))
                         ]
+
+                        if df_kde_seg.shape[0] / len(interval.region_qry) < 0.05:  # Skip diminuitive segments
+                            continue
 
                         df_kde_seg = df_kde_seg.loc[df_kde_seg['STATE'].isin({inv.KDE_STATE_FWDREV, inv.KDE_STATE_REV})]
 
