@@ -123,10 +123,13 @@ class SamStreamer(object):
     Stream a SAM, BAM, or CRAM file as a line generator.
     """
 
-    def __init__(self, filename, file_type=None):
+    def __init__(self, filename, file_type=None, ref_fa=None):
         self.filename = filename.strip()
+        self.ref_fa = ref_fa
+
         self.is_open = False
         self.is_closed = False
+
 
         # Set type
         if isinstance(filename, str):
@@ -166,13 +169,22 @@ class SamStreamer(object):
             return self.iterator
 
         if self.file_type in {'bam', 'cram'}:
+            # self.iterator = DecodeIterator(
+            #     subprocess.Popen(['samtools', 'view', '-h', self.filename], stdout=subprocess.PIPE).stdout
+            # )
+
+            if self.ref_fa is not None:
+                samtools_cmd = ['samtools', 'view', '-h', '-T', self.ref_fa, self.filename]
+            else:
+                samtools_cmd = ['samtools', 'view', '-h', self.filename]
+
             self.iterator = DecodeIterator(
-                subprocess.Popen(['samtools', 'view', '-h', self.filename], stdout=subprocess.PIPE).stdout
+                subprocess.Popen(samtools_cmd, stdout=subprocess.PIPE).stdout
             )
 
             self.is_open = True
 
-            return DecodeIterator(self.iterator)
+            return self.iterator
 
         if self.file_type == 'iter':
             self.iterator = self.filename

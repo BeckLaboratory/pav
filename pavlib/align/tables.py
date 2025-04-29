@@ -276,7 +276,7 @@ def get_align_bed(
     align_index = -1
     line_number = 0
 
-    with io.SamStreamer(align_filename) as in_file:
+    with io.SamStreamer(align_filename, ref_fa=ref_fa_filename) as in_file:
         for line in in_file:
             line_number += 1
 

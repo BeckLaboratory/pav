@@ -41,8 +41,8 @@ if __name__ == '__main__':
                         help='Output troubleshooting information to stderr'
                         )
 
-    parser.add_argument('--tag',
-                        help='PAV program SAM tag to add. String represetns the full line. String should start with "@PG" and include the full tab-delimited line of tag information. Tabs should be escaped in this string (i.e. "\\t" will be translated to an acutal tab character).'
+    parser.add_argument('--tag', default=None,
+                        help='PAV program SAM tag to add. String represents the full line. String should start with "@PG" and include the full tab-delimited line of tag information. Tabs should be escaped in this string (i.e. "\\t" will be translated to an actual tab character).'
                         )
 
     args = parser.parse_args()
@@ -54,6 +54,8 @@ if __name__ == '__main__':
     with gzip.open(args.headers, 'rt') as header_file:
         for line in header_file:
             out_file.write(line)
+
+        if args.tag is not None:
             out_file.write(codecs.getdecoder('unicode_escape')(args.tag)[0])
             out_file.write('\n')
 
@@ -69,9 +71,9 @@ if __name__ == '__main__':
                 sys.stderr.flush()
 
             # Get coordinates
-            ref_bp, tig_bp, clip_h_l, clip_s_l, clip_h_r, clip_s_r = pavlib.align.util.count_cigar(row)
+            ref_bp, tig_bp, clip_h_l, clip_s_l, clip_h_r, clip_s_r = pavlib.align.records.count_cigar(row)
 
-            if row['REV']:
+            if row['IS_REV']:
                 clip_r = clip_s_l
                 clip_l = clip_s_r
             else:
@@ -82,7 +84,7 @@ if __name__ == '__main__':
             seq = fasta_file.fetch(row['QRY_ID'], row['QRY_POS'] - clip_l, row['QRY_END'] + clip_r)
 
             # Reverse-complement
-            if row['REV']:
+            if row['IS_REV']:
                 seq = str(Bio.Seq.Seq(seq).reverse_complement())
 
             sys.stdout.write(
