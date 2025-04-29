@@ -189,6 +189,7 @@ rule align_trim_qry:
 rule align_get_bed:
     input:
         sam='temp/{asm_name}/align/trim-none/align_qry_{hap}.sam.gz',
+        qry_fa='data/query/{asm_name}/query_{hap}.fa.gz',
         qry_fai='data/query/{asm_name}/query_{hap}.fa.gz.fai'
     output:
         bed='results/{asm_name}/align/trim-none/align_qry_{hap}.bed.gz',
@@ -214,8 +215,11 @@ rule align_get_bed:
         # Read alignments as a BED file.
         df = pavlib.align.tables.get_align_bed(
             input.sam, df_qry_fai, wildcards.hap,
+            lc_model=lc_model,
             score_model=score_model,
-            lc_model=lc_model
+            check_match=pav_params.debug,
+            ref_fa_filename=REF_FA,
+            qry_fa_filename=input.qry_fa
         )
 
         # Add trimming fields
@@ -300,8 +304,8 @@ rule align_map:
         if aligner == 'minimap2':
             align_cmd = (
                 f"""minimap2 """
+                    f"""--secondary=no -a -t {threads} --eqx """
                     f"""{pav_params.align_params} """
-                    f"""--secondary=no -a -t {threads} --eqx -Y """
                     f"""{input.ref_fa} {input.seq_files[0]}"""
             )
 

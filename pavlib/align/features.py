@@ -28,7 +28,7 @@ def get_features(
         score_model: score.ScoreModel=None,
         existing_score_model: str | score.ScoreModel | bool=None,
         score_prop_conf: float=ALIGN_FEATURE_SCORE_PROP_CONF,
-        op_arr_list: list[np.ndarray[int, int]]=None,
+        op_arr_list: list[np.ndarray]=None,
         df_qry_fai: pd.Series=None,
         inplace: bool=False,
         only_features: bool=True,
@@ -188,7 +188,7 @@ def get_features(
 def feature_score(
         df: pd.DataFrame,
         score_model: score.ScoreModel,
-        op_arr_list: list[np.ndarray[int, int]]=None
+        op_arr_list: list[np.ndarray]=None
 ) -> pd.Series:
     """
     Score alignment records.
@@ -228,7 +228,7 @@ def feature_score(
 def feature_score_mm(
         df: pd.DataFrame,
         score_model: score.ScoreModel,
-        op_arr_list: list[np.ndarray[int, int]]=None
+        op_arr_list: list[np.ndarray]=None
 ) -> pd.Series:
     """
     Score aligned bases in alignment records ignoring gaps. This uses a match/mismatch-only alignment score model
@@ -279,7 +279,7 @@ def feature_score_prop(
 def feature_score_mm_prop(
         df: pd.DataFrame,
         score_model: score.ScoreModel,
-        op_arr_list: list[np.ndarray[int, int]]=None
+        op_arr_list: list[np.ndarray]=None
 ) -> pd.Series:
     """
     Divide the mismatch alignment score ("SCORE_MM" column, gap penalties ignored) by the maximum alignment score if all
@@ -316,7 +316,7 @@ def feature_score_mm_prop(
 
 def feature_match_prop(
         df: pd.DataFrame,
-        op_arr_list: list[np.ndarray[int, int]]=None
+        op_arr_list: list[np.ndarray]=None
 ) -> pd.Series:
     """
     Compute the proportion of matching bases over aligned bases (i.e. EQ / (X + EQ)).
@@ -421,8 +421,8 @@ def feature_qry_prop(
 
 def _set_op_array(
         df: pd.DataFrame,
-        op_arr_list: list[np.ndarray[int, int]]=None,
-) -> list[np.ndarray[int, int]]:
+        op_arr_list: list[np.ndarray]=None,
+) -> list[np.ndarray]:
     """
     Get a list of alignment operation tuples per alignment record.
 

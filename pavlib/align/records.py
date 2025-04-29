@@ -1,14 +1,17 @@
 # Alignment base operations
 
 
+import Bio.Seq
 import numpy as np
 import pandas as pd
+import pysam
 
 from . import op
 
 
 # Filter definitions
 FILTER_LCALIGN = 'LCALIGN'
+FILTER_ALIGN = 'ALIGN'
 
 # def count_aligned_bases(
 #         record: pd.Series | str | list[tuple[str, int]]
@@ -335,41 +338,108 @@ def count_cigar(
 
     return ref_bp, qry_bp, clip_h_l, clip_s_l, clip_h_r, clip_s_r
 
-
-def clip_op_tuples_soft_to_hard(
-        op_tuples: list[tuple[int, int]]
-) -> list[tuple[int, int]]:
+def check_matched_bases(
+        record: pd.Series,
+        ref_fa_filename: str,
+        qry_fa_filename: str
+) -> None:
     """
-    Get a list of CIGAR tuples with soft-clipping converted to hard-clipping.
+    Check an alignment record and throw an exception if there are any bases aligned and matching by the alignment
+    operations (CIGAR string) that don't match in the reference and query sequences.
 
-    :param op_tuples: List of alignment operations as tuples (op_code: int, op_len: int).
-
-    :return: Operation tuples with soft-clipping converted to hard-clipping.
+    :param record: Alignment record.
     """
 
-    front_n = 0
+    op_arr = op.cigar_as_array(record['CIGAR'])
 
-    while len(op_tuples) > 0 and op_tuples[0][0] in op.CLIP_SET:
-        front_n += op_tuples[0][1]
-        op_tuples = op_tuples[1:]
+    ref_pos = np.concatenate([
+        [0],
+        np.cumsum(np.where(np.isin(op_arr[:, 0], op.CONSUMES_REF_ARR), op_arr[:, 1], 0))[:-1]
+    ])
 
-    back_n = 0
+    qry_pos = np.concatenate([
+        [0],
+        np.cumsum(np.where(np.isin(op_arr[:, 0], op.CONSUMES_QRY_ARR), op_arr[:, 1], 0))[:-1]
+    ])
 
-    while len(op_tuples) > 0 and op_tuples[-1][0] in op.CLIP_SET:
-        back_n += op_tuples[-1][1]
-        op_tuples = op_tuples[:-1]
+    with pysam.FastaFile(ref_fa_filename) as ref_fa:
+        seq_ref = ref_fa.fetch(record['#CHROM'], record['POS'], record['END']).upper()
 
-    if len(op_tuples) == 0:
-        if front_n + back_n == 0:
-            raise RuntimeError('Cannot convert soft clipping to hard: No CIGAR records')
+    with pysam.FastaFile(qry_fa_filename) as qry_fa:
+        seq_qry = qry_fa.fetch(record['QRY_ID'], record['QRY_POS'], record['QRY_END']).upper()
 
-        op_tuples = [(op.H, front_n + back_n)]
+    if record['IS_REV']:
+        seq_qry = str(Bio.Seq.Seq(seq_qry).reverse_complement()).upper()
 
-    else:
-        if front_n > 0:
-            op_tuples = [(op.H, front_n)] + op_tuples
+    # Check matched bases
+    for index in np.where(op_arr[:, 0] == op.EQ)[0]:
+        if seq_ref[
+            ref_pos[index]:ref_pos[index] + op_arr[index, 1]
+        ] != seq_qry[
+            qry_pos[index]:qry_pos[index] + op_arr[index, 1]
+        ]:
+            # Find position of the first mismatch
+            mismatch_index = np.where(
+                seq_ref[ref_pos[index]:ref_pos[index] + op_arr[index, 1]] !=
+                seq_qry[qry_pos[index]:qry_pos[index] + op_arr[index, 1]]
+            )[0][0]
 
-        if back_n > 0:
-            op_tuples = op_tuples + [(op.H, back_n)]
+            raise RuntimeError(
+                f'Found a mismatched base in match operation ("=") alignment operation {index}: ref={seq_ref[mismatch_index]}, query={seq_qry[mismatch_index]}'
+            )
 
-    return op_tuples
+    # Check mismatched bases
+    for index in np.where(op_arr[:, 0] == op.X)[0]:
+        if seq_ref[
+            ref_pos[index]:ref_pos[index] + op_arr[index, 1]
+        ] == seq_qry[
+            qry_pos[index]:qry_pos[index] + op_arr[index, 1]
+        ]:
+            # Find position of the first match
+            match_index = np.where(
+                seq_ref[ref_pos[index]:ref_pos[index] + op_arr[index, 1]] !=
+                seq_qry[qry_pos[index]:qry_pos[index] + op_arr[index, 1]]
+            )[0][0]
+
+            raise RuntimeError(
+                f'Found a matching base in mismatch operation ("X") alignment operation {index}: ref={seq_ref[match_index]}, query={seq_qry[match_index]}'
+            )
+
+
+# def clip_op_tuples_soft_to_hard(
+#         op_tuples: tuple[int, int]
+# ) -> tuple[int, int]:
+#     """
+#     Get a list of CIGAR tuples with soft-clipping converted to hard-clipping.
+#
+#     :param op_tuples: List of alignment operations as tuples (op_code: int, op_len: int).
+#
+#     :return: Operation tuples with soft-clipping converted to hard-clipping.
+#     """
+#
+#     front_n = 0
+#
+#     while len(op_tuples) > 0 and op_tuples[0][0] in op.CLIP_SET:
+#         front_n += op_tuples[0][1]
+#         op_tuples = op_tuples[1:]
+#
+#     back_n = 0
+#
+#     while len(op_tuples) > 0 and op_tuples[-1][0] in op.CLIP_SET:
+#         back_n += op_tuples[-1][1]
+#         op_tuples = op_tuples[:-1]
+#
+#     if len(op_tuples) == 0:
+#         if front_n + back_n == 0:
+#             raise RuntimeError('Cannot convert soft clipping to hard: No CIGAR records')
+#
+#         op_tuples = [(op.H, front_n + back_n)]
+#
+#     else:
+#         if front_n > 0:
+#             op_tuples = [(op.H, front_n)] + op_tuples
+#
+#         if back_n > 0:
+#             op_tuples = op_tuples + [(op.H, back_n)]
+#
+#     return op_tuples

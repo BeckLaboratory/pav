@@ -33,7 +33,7 @@ class LCAlignModelNull(LCAlignModel):
     def __call__(self,
                  df: pd.DataFrame,
                  existing_score_model: score.ScoreModel=None,
-                 op_arr_list: list[np.ndarray[int, int]]=None,
+                 op_arr_list: list[np.ndarray]=None,
                  qry_fai: pd.Series=None
         ) -> np.ndarray:
         """

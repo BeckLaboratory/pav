@@ -49,9 +49,12 @@ OP_CODE = {
     'X': X
 }
 
+CONSUMES_QRY_ARR = np.array([M, I, S, EQ, X])
+CONSUMES_REF_ARR = np.array([M, D, N, EQ, X])
+
 def cigar_as_array(
         cigar_str: str
-) -> np.ndarray[int, int]:
+) -> np.ndarray:
     """
     Get a numpy array with two dimensions (dtype int). The first column is the operation codes, the second column is the
     operation lengths.
@@ -93,7 +96,7 @@ def to_cigar_string(
     """
     Generate a CIGAR string from operation codes.
 
-    :param op_arr: Array of operations (n x 2, op_code/op_len columns) or a list of tuples (op_code: int, op_len: int).
+    :param op_arr: Array of operations (n x 2, op_code/op_len columns).
 
     :return: A CIGAR string.
     """
@@ -104,3 +107,41 @@ def to_cigar_string(
             OP_CHAR_FUNC(op_arr[:, 0])
         )
     )
+
+def clip_soft_to_hard(
+        op_arr: np.ndarray
+) -> np.ndarray:
+    """
+    Shift soft clipped bases to hard clipped bases.
+
+    :param op_arr: Array of operations (n x 2, op_code/op_len columns).
+
+    :return: Array of operations (n x 2, op_code/op_len columns).
+    """
+
+    clip_l = 0
+    clip_l_i = 0
+    clip_r = 0
+    clip_r_i = op_arr.shape[0]
+
+    while clip_l_i < clip_r_i and op_arr[clip_l_i, 0] in CLIP_SET:
+        clip_l += op_arr[clip_l_i, 1]
+        clip_l_i += 1
+
+    while clip_r_i > clip_l_i and op_arr[clip_r_i - 1, 0] in CLIP_SET:
+        clip_r += op_arr[clip_r_i - 1, 1]
+        clip_r_i -= 1
+
+    if clip_r_i == clip_l_i:
+        if op_arr.shape[0] > 0:
+            raise RuntimeError(f'Alignment consists only of clipped bases')
+
+        return op_arr
+
+    if clip_l > 0:
+        op_arr = np.append([(H, clip_l)], op_arr[clip_l_i:], axis=0)
+
+    if clip_r > 0:
+        op_arr = np.append(op_arr[:clip_r_i], [(H, clip_r)], axis=0)
+
+    return op_arr

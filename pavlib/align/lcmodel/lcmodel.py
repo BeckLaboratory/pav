@@ -134,7 +134,7 @@ class LCAlignModel(object, metaclass=abc.ABCMeta):
     def get_feature_table(self,
                           df: pd.DataFrame | pd.Series,
                           existing_score_model: str | score.ScoreModel | bool=None,
-                          op_arr_list: np.ndarray[int, int]=None,
+                          op_arr_list: np.ndarray=None,
                           qry_fai: pd.Series=None
                           ):
         """
@@ -244,7 +244,7 @@ class LCAlignModel(object, metaclass=abc.ABCMeta):
     def __call__(self,
                  df: pd.DataFrame,
                  existing_score_model: score.ScoreModel=None,
-                 op_arr_list: list[np.ndarray[int, int]]=None,
+                 op_arr_list: list[np.ndarray]=None,
                  qry_fai: pd.Series=None
         ) -> np.ndarray:
         """

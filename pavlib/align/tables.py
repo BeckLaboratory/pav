@@ -5,13 +5,201 @@ Create and manaage alignemnt BED files.
 import numpy as np
 import os
 import pandas as pd
-import pysam
+
+from .. import io
 
 from . import features
 from . import lcmodel
 from . import op
 from . import records
 from . import score
+
+# def get_align_bed(
+#         align_filename: str,
+#         df_qry_fai: pd.Series,
+#         hap: str,
+#         min_mapq: int=0,
+#         score_model: score.ScoreModel | str=None,
+#         lc_model: lcmodel.LCAlignModel=None,
+#         align_features=None
+# ):
+#     """
+#     Read alignment file as a BED file that PAV can process. Drops any records marked as unaligned by the SAM flag.
+#
+#     :param align_filename: Path to a SAM, CRAM, BAM, anything `pysam.AlignmentFile` can read.
+#     :param df_qry_fai: Pandas Series with query names as keys and query lengths as values. Index should be cast as
+#         type str if query names are numeric.
+#     :param hap: Haplotype assinment for this alignment file (h1 or h2).
+#     :param min_mapq: Minimum MAPQ. If 0, then all alignments are accepted as long as the unmapped flag is not set.
+#     :param score_model: Alignment model object (`pavlib.align.score.ScoreModel`) or a configuration string to generate
+#         a score model object. If `None`, the default score model is used. An alignment score is computed by summing
+#         the score of each CIGAR operation against this model (match, mismatch, and gap) to create the "SCORE" column.
+#     :param lc_model: Model for predicting low-confidence alignments.
+#     :param align_features: List of alignment features (SCORE, MISMATCH_PROP, etc) to add to the alignment BED.
+#
+#     :return: BED file of alignment records.
+#     """
+#
+#     if align_features is None:
+#         align_features = features.ALIGN_FEATURE_COLUMNS
+#     else:
+#         align_features = list(align_features)
+#
+#     columns_head = [
+#         '#CHROM', 'POS', 'END',
+#         'INDEX',
+#         'FILTER',
+#         'QRY_ID', 'QRY_POS', 'QRY_END',
+#         'QRY_ORDER',
+#         'RG',
+#         'MAPQ',
+#         'IS_REV', 'FLAGS', 'HAP',
+#         'CIGAR'
+#     ]
+#
+#     columns = columns_head + align_features
+#
+#     if align_filename is None or os.stat(align_filename).st_size == 0:
+#         return pd.DataFrame([], columns=columns)
+#
+#     # Get score model
+#     score_model = score.get_score_model(score_model)
+#
+#     # Get records from SAM
+#     record_list = list()
+#     op_arr_list = list()
+#
+#     align_index = -1
+#
+#     with pysam.AlignmentFile(align_filename, 'rb') as in_file:
+#         for record in in_file:
+#
+#             # Increment align_index
+#             align_index += 1
+#
+#             # Skipped unmapped reads
+#             if record.is_unmapped or record.mapping_quality < min_mapq or len(record.cigartuples) == 0:
+#                 continue
+#
+#             # Get length for computing real query positions for rev-complemented records
+#             qry_len = df_qry_fai[record.query_name]
+#
+#             # Read tags
+#             tags = dict(record.get_tags())
+#
+#             # Determine left hard-clipped bases.
+#             # pysam query alignment functions are relative to the sequence in the alignment record, not the original
+#             # sequence. The left-most hard-clipped bases must be added to the query positions to translate to the
+#             # correct query coordinates (https://github.com/pysam-developers/pysam/issues/1017).
+#             if len(record.cigartuples) > 0:
+#                 clip_h = record.cigartuples[0][1] if record.cigartuples[0][0] == op.H else 0
+#             else:
+#                 clip_h = 0
+#
+#             op_tuples = records.clip_op_tuples_soft_to_hard(record.cigartuples)
+#
+#             qry_map_pos = op_tuples[0][1] if op_tuples[0][0] == op.H else 0
+#             qry_map_len = record.query_alignment_end - record.query_alignment_start
+#             qry_map_end = qry_map_pos + qry_map_len
+#
+#             if record.query_alignment_start + clip_h != qry_map_pos:
+#                 raise RuntimeError(f'First aligned based from pysam ({record.query_alignment_start}) does not match clipping ({qry_map_pos}) at alignment record {align_index}')
+#
+#             op_arr = np.array(op_tuples)
+#             op_arr_list.append(op_arr)
+#
+#             # Disallow alignment match (M) in CIGAR (requires =X for base match/mismatch)
+#             if op.M in {op_code for op_code, op_len in op_tuples}:
+#                 raise RuntimeError((
+#                     'Found alignment match CIGAR operation (M) for record {} (Start = {}:{}): '
+#                     'Alignment requires CIGAR base-level match/mismatch (=X)'
+#                 ).format(record.query_name, record.reference_name, record.reference_start))
+#
+#             # Save record
+#             record_list.append(
+#                 pd.Series(
+#                     [
+#                         record.reference_name,   # #CHROM
+#                         record.reference_start,  # POS
+#                         record.reference_end,    # END
+#
+#                         align_index,  # INDEX
+#
+#                         'PASS',  # FILTER
+#
+#                         record.query_name,  # QRY_ID
+#                         qry_len - qry_map_end if record.is_reverse else qry_map_pos,  # QRY_POS
+#                         qry_len - qry_map_pos if record.is_reverse else qry_map_end,  # QRY_END
+#
+#                         -1,  # QRY_ORDER (filled in later)
+#
+#                         tags['RG'] if 'RG' in tags else 'NA',  # RG
+#                         tags['AO'] if 'AO' in tags else 'NA',  # AO
+#
+#                         record.mapping_quality,  # MAPQ
+#
+#                         record.is_reverse,       # IS_REV
+#                         f'0x{record.flag:04x}',  # FLAGS
+#                         hap,                     # HAP
+#
+#                         op.to_cigar_string(op_arr)  # CIGAR
+#                     ],
+#                     index=columns_head
+#                 )
+#             )
+#
+#     # Merge records
+#     if len(record_list) == 0:
+#         return pd.DataFrame(
+#             [], columns=columns
+#         )
+#
+#     df = pd.concat(record_list, axis=1).T
+#
+#     # Compute features
+#     df = features.get_features(
+#         df=df,
+#         feature_list=align_features,
+#         score_model=score_model,
+#         existing_score_model=True,
+#         op_arr_list=op_arr_list,
+#         df_qry_fai=df_qry_fai,
+#         inplace=True,
+#         only_features=False,
+#         force_all=True
+#     )
+#
+#     # Set filter
+#     if lc_model is not None:
+#         df['FILTER'] = np.where(
+#             lc_model(
+#                 df,
+#                 existing_score_model=score_model,
+#                 op_arr_list=op_arr_list,
+#                 qry_fai=df_qry_fai
+#             ), records.FILTER_LCALIGN, 'PASS'
+#         )
+#
+#     # Assign order per query sequence
+#     df.sort_values(['QRY_ID', 'QRY_POS', 'QRY_END'], inplace=True)
+#
+#     for qry_id in df['QRY_ID'].unique():
+#         df.loc[df['QRY_ID'] == qry_id, 'QRY_ORDER'] = df.loc[df['QRY_ID'] == qry_id, 'QRY_POS'].rank().astype(int) - 1
+#
+#     # Reference order
+#     df.sort_values(['#CHROM', 'POS', 'END', 'QRY_ID'], ascending=[True, True, False, True], inplace=True)
+#
+#     # Check sanity
+#     df.apply(records.check_record, df_qry_fai=df_qry_fai, axis=1)
+#
+#     # Check columns
+#     missing_cols = [col for col in columns if col not in df.columns]
+#
+#     if missing_cols:
+#         raise RuntimeError(f'Missing columns in alignment BED: {", ".join(missing_cols)}')
+#
+#     # Return BED
+#     return df
 
 def get_align_bed(
         align_filename: str,
@@ -20,24 +208,41 @@ def get_align_bed(
         min_mapq: int=0,
         score_model: score.ScoreModel | str=None,
         lc_model: lcmodel.LCAlignModel=None,
-        align_features=None
+        align_features=None,
+        check_match: bool=False,
+        flag_filter=0x700,
+        ref_fa_filename: str=None,
+        qry_fa_filename: str=None
 ):
     """
-    Read alignment file as a BED file that PAV can process. Drops any records marked as unaligned by the SAM flag.
+    Read alignment records from a SAM file. Avoid pysam, it uses htslib, which has a limit of 268,435,456 bp for each
+    alignment record, and clipping on a CIGAR string can exceed this limit
+    (https://github.com/samtools/samtools/issues/1667) and causing PAV to crash with an error message starting with
+    "CIGAR length too long at position".
 
-    :param align_filename: Path to a SAM, CRAM, BAM, anything `pysam.AlignmentFile` can read.
-    :param df_qry_fai: Pandas Series with query names as keys and query lengths as values. Index should be cast as
-        type str if query names are numeric.
-    :param hap: Haplotype assinment for this alignment file (h1 or h2).
-    :param min_mapq: Minimum MAPQ. If 0, then all alignments are accepted as long as the unmapped flag is not set.
-    :param score_model: Alignment model object (`pavlib.align.score.ScoreModel`) or a configuration string to generate
-        a score model object. If `None`, the default score model is used. An alignment score is computed by summing
-        the score of each CIGAR operation against this model (match, mismatch, and gap) to create the "SCORE" column.
-    :param lc_model: Model for predicting low-confidence alignments.
-    :param align_features: List of alignment features (SCORE, MISMATCH_PROP, etc) to add to the alignment BED.
+    :param align_filename: File to read.
+    :param df_qry_fai: Pandas Series with query names as keys and query lengths as values.
+    :param hap: Name of haplotype.
+    :param min_mapq: Minimum MAPQ score for alignment record.
+    :param score_model: Score model to use.
+    :param lc_model: LCAlignModel to use.
+    :param align_features: List of alignment features (SCORE, MISMATCH_PROP, etc) to add to the alignment BED. If
+        None, use PAV's default features.
+    :param check_match: If `True`, check that all aligned bases in the final table either match (operation "=") or
+        do not match (operation "X"). Time consuming and not required for production, only use for development and
+        testing the SAM to BED conversion.
+    :param flag_filter: Filter alignments matching these flags.
+    :param ref_fa_filename: Reference FASTA filename. Required if `check_match` is True.
+    :param qry_fa_filename: Query FASTA filename. Required if `check_match` is True.
 
-    :return: BED file of alignment records.
+    :return: Table of alignment records
     """
+
+    if check_match:
+        if ref_fa_filename is None:
+            raise ValueError('ref_fa_filename is required if check_match is True')
+        if qry_fa_filename is None:
+            raise ValueError('qry_fa_filename is required if check_match is True')
 
     if align_features is None:
         align_features = features.ALIGN_FEATURE_COLUMNS
@@ -50,7 +255,7 @@ def get_align_bed(
         'FILTER',
         'QRY_ID', 'QRY_POS', 'QRY_END',
         'QRY_ORDER',
-        'RG', 'AO',
+        'RG',
         'MAPQ',
         'IS_REV', 'FLAGS', 'HAP',
         'CIGAR'
@@ -69,83 +274,109 @@ def get_align_bed(
     op_arr_list = list()
 
     align_index = -1
+    line_number = 0
 
-    with pysam.AlignmentFile(align_filename, 'rb') as in_file:
-        for record in in_file:
+    with io.SamStreamer(align_filename) as in_file:
+        for line in in_file:
+            line_number += 1
 
-            # Increment align_index
-            align_index += 1
+            try:
 
-            # Skipped unmapped reads
-            if record.is_unmapped or record.mapping_quality < min_mapq or len(record.cigartuples) == 0:
-                continue
+                line = line.strip()
 
-            # Get length for computing real query positions for rev-complemented records
-            qry_len = df_qry_fai[record.query_name]
+                if line.startswith('@'):
+                    continue
 
-            # Read tags
-            tags = dict(record.get_tags())
+                align_index += 1
 
-            # Determine left hard-clipped bases.
-            # pysam query alignment functions are relative to the sequence in the alignment record, not the original
-            # sequence. The left-most hard-clipped bases must be added to the query positions to translate to the
-            # correct query coordinates (https://github.com/pysam-developers/pysam/issues/1017).
-            if len(record.cigartuples) > 0:
-                clip_h = record.cigartuples[0][1] if record.cigartuples[0][0] == op.H else 0
-            else:
-                clip_h = 0
+                tok = line.split('\t')
 
-            op_tuples = records.clip_op_tuples_soft_to_hard(record.cigartuples)
+                if len(tok) < 11:
+                    raise RuntimeError('Expected at least 11 fields, received {}'.format(line_number, len(tok)))
 
-            qry_map_pos = op_tuples[0][1] if op_tuples[0][0] == op.H else 0
-            qry_map_len = record.query_alignment_end - record.query_alignment_start
-            qry_map_end = qry_map_pos + qry_map_len
+                tag = dict(val.split(':', 1) for val in tok[11:])  # Note: values are prefixed with type and colon, (e.g. {"NM": "i:579204"}).
 
-            if record.query_alignment_start + clip_h != qry_map_pos:
-                raise RuntimeError(f'First aligned based from pysam ({record.query_alignment_start}) does not match clipping ({qry_map_pos}) at alignment record {align_index}')
+                if 'CG' in tag:
+                    raise RuntimeError(f'Found BAM-only CG')
 
-            op_arr = np.array(op_tuples)
-            op_arr_list.append(op_arr)
+                if 'RG' in tag:
+                    if not tag['RG'].startswith('Z:'):
+                        raise RuntimeError(f'Found non-Z RG tag: {tag["RG"]}')
+                    tag_rg = tag['RG'][2:].strip()
 
-            # Disallow alignment match (M) in CIGAR (requires =X for base match/mismatch)
-            if op.M in {op_code for op_code, op_len in op_tuples}:
-                raise RuntimeError((
-                    'Found alignment match CIGAR operation (M) for record {} (Start = {}:{}): '
-                    'Alignment requires CIGAR base-level match/mismatch (=X)'
-                ).format(record.query_name, record.reference_name, record.reference_start))
+                    if not tag_rg:
+                        tag_rg = 'NA'
 
-            # Save record
-            record_list.append(
-                pd.Series(
-                    [
-                        record.reference_name,   # #CHROM
-                        record.reference_start,  # POS
-                        record.reference_end,    # END
+                else:
+                    tag_rg = 'NA'
 
-                        align_index,  # INDEX
+                flag = int(tok[1])
+                mapq = int(tok[4])
+                is_rev = bool(flag & 0x10)
 
-                        'PASS',  # FILTER
+                pos_ref = int(tok[3]) - 1
 
-                        record.query_name,  # QRY_ID
-                        qry_len - qry_map_end if record.is_reverse else qry_map_pos,  # QRY_POS
-                        qry_len - qry_map_pos if record.is_reverse else qry_map_end,  # QRY_END
+                # Skipped unmapped reads, low MAPQ reads, or other flag-based filters
+                if flag & 0x4 or mapq < min_mapq or pos_ref < 0:
+                    continue
 
-                        -1,  # QRY_ORDER (filled in later)
+                # Get alignment operations
+                op_arr = op.clip_soft_to_hard(op.cigar_as_array(tok[5]))
 
-                        tags['RG'] if 'RG' in tags else 'NA',  # RG
-                        tags['AO'] if 'AO' in tags else 'NA',  # AO
+                if np.any(op_arr[:, 0] * op.M):
+                    raise RuntimeError('PAV does not allow match alignment operations (CIGAR "M", requires "=" and "X")')
 
-                        record.mapping_quality,  # MAPQ
+                len_qry = np.sum(op_arr[np.isin(op_arr[:, 0], op.CONSUMES_QRY_ARR), 1])
+                len_ref = np.sum(op_arr[np.isin(op_arr[:, 0], op.CONSUMES_REF_ARR), 1])
 
-                        record.is_reverse,       # IS_REV
-                        f'0x{record.flag:04x}',  # FLAGS
-                        hap,                     # HAP
+                if is_rev:
+                    pos_qry = op_arr[-1, 1] * (op_arr[-1, 0] == op.H)
+                else:
+                    pos_qry = op_arr[0, 1] * (op_arr[0, 0] == op.H)
 
-                        op.to_cigar_string(op_arr)  # CIGAR
-                    ],
-                    index=columns_head
+                # Check sequences
+                chrom = tok[2].strip()
+                qry_id = tok[0].strip()
+
+                if chrom == '*' or qry_id == '*':
+                    raise RuntimeError(f'Found mapped read with missing names (chrom={chrom}, qry_id={qry_id})')
+
+                # Save record
+                record_list.append(
+                    pd.Series(
+                        [
+                            chrom,              # #CHROM
+                            pos_ref,            # POS
+                            pos_ref + len_ref,  # END
+
+                            align_index,  # INDEX
+
+                            'PASS' if not flag & flag_filter or mapq < min_mapq else records.FILTER_ALIGN,  # FILTER
+
+                            qry_id,             # QRY_ID
+                            pos_qry,            # QRY_POS
+                            pos_qry + len_qry,  # QRY_END
+
+                            -1,  # QRY_ORDER (filled in later)
+
+                            tag_rg,  # RG
+
+                            mapq,  # MAPQ
+
+                            is_rev,           # IS_REV
+                            f'0x{flag:04x}',  # FLAGS
+                            hap,              # HAP
+
+                            op.to_cigar_string(op_arr)  # CIGAR
+                        ],
+                        index=columns_head
+                    )
                 )
-            )
+
+                op_arr_list.append(op_arr)
+
+            except Exception as e:
+                raise RuntimeError('Failed to parse record at line {}: {}'.format(line_number, str(e))) from e
 
     # Merge records
     if len(record_list) == 0:
@@ -154,6 +385,7 @@ def get_align_bed(
         )
 
     df = pd.concat(record_list, axis=1).T
+    df['QRY_ORDER'] = get_qry_order(df)
 
     # Compute features
     df = features.get_features(
@@ -170,20 +402,16 @@ def get_align_bed(
 
     # Set filter
     if lc_model is not None:
-        df['FILTER'] = np.where(
-            lc_model(
-                df,
-                existing_score_model=score_model,
-                op_arr_list=op_arr_list,
-                qry_fai=df_qry_fai
-            ), records.FILTER_LCALIGN, 'PASS'
+        filter_loc =  lc_model(
+            df,
+            existing_score_model=score_model,
+            op_arr_list=op_arr_list,
+            qry_fai=df_qry_fai
         )
 
-    # Assign order per query sequence
-    df.sort_values(['QRY_ID', 'QRY_POS', 'QRY_END'], inplace=True)
-
-    for qry_id in df['QRY_ID'].unique():
-        df.loc[df['QRY_ID'] == qry_id, 'QRY_ORDER'] = df.loc[df['QRY_ID'] == qry_id, 'QRY_POS'].rank().astype(int) - 1
+        df.loc[filter_loc, 'FILTER'] = df.loc[filter_loc, 'FILTER'].apply(lambda vals:
+            ','.join(sorted(set(vals.split(',')) - {'PASS'} | {records.FILTER_LCALIGN}))
+        )
 
     # Reference order
     df.sort_values(['#CHROM', 'POS', 'END', 'QRY_ID'], ascending=[True, True, False, True], inplace=True)
@@ -196,6 +424,10 @@ def get_align_bed(
 
     if missing_cols:
         raise RuntimeError(f'Missing columns in alignment BED: {", ".join(missing_cols)}')
+
+    # Check alignment sanity by comparing matched bases
+    if check_match:
+        df.apply(records.check_matched_bases, ref_fa_filename=ref_fa_filename, qry_fa_filename=qry_fa_filename, axis=1)
 
     # Return BED
     return df

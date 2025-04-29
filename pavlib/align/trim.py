@@ -134,7 +134,7 @@ def trim_alignments(
     else:
         is_filter_fail_arr = np.zeros(df.shape[0], dtype=bool)
 
-    def get_op_arr(index:int) -> np.ndarray[int, int]:
+    def get_op_arr(index:int) -> np.ndarray:
         if op_arr_list[index] is None:
             op_arr_list[index] = op.cigar_as_array(df.iloc[index]['CIGAR'])
 
@@ -336,7 +336,7 @@ def trim_alignments(
 
             chrom_index = record_order_chrom[record_order_chrom == chrom].index.values
 
-            depth_filter_set = set(
+            depth_filter_set = set(  # Set of indices passing the depth filter
                 filter_depth(
                     record_index=chrom_index,
                     coord_arr=coord_arr,
@@ -535,13 +535,13 @@ def trim_alignment_record(
         rev_l_trim: bool,
         rev_r_trim: bool,
         match_qry: bool,
-        op_arr_l: np.ndarray[int, int],
-        op_arr_r: np.ndarray[int, int],
-        coord_arr: np.ndarray[int, int],
-        is_filter_fail_arr: np.ndarray[bool],
-        is_rev_arr: np.ndarray[bool],
+        op_arr_l: np.ndarray,
+        op_arr_r: np.ndarray,
+        coord_arr: np.ndarray,
+        is_filter_fail_arr: np.ndarray,
+        is_rev_arr: np.ndarray,
         score_model: score.ScoreModel
-) -> tuple[np.ndarray[int, int], np.ndarray[int, int]]:
+) -> tuple[np.ndarray, np.ndarray]:
     """
     Trim ends of overlapping alignments until ends no longer overlap. In repeat-mediated events, aligners may align the
     same parts of a query sequence to both reference copies (e.g. large DEL) or two parts of a query
@@ -882,7 +882,7 @@ def find_cut_sites(
 
 
 def trace_op_to_zero(
-        op_arr: np.ndarray[int, int],
+        op_arr: np.ndarray,
         diff_bp: int,
         diff_query: bool,
         score_model: score.ScoreModel
@@ -1159,21 +1159,27 @@ def truncate_alignment_record(record, overlap_bp, trunc_side, score_model=None, 
     return record
 
 def filter_depth(
-        record_index: np.ndarray[Any, int],
-        coord_arr: np.ndarray[Any, int],
+        record_index: np.ndarray,
+        coord_arr: np.ndarray,
         is_qry: bool,
         max_depth: int=20,
         max_overlap: int=0.8
-) -> np.ndarray[Any, int]:
+) -> np.ndarray:
     """
-    Get a set of alignment indices where the depth exceeds a maximum depth.
+    Determine which records pass this depth filter.
 
     :param record_index: List of record indices in `coord_array` to check. All indicies must be in the same reference or
-        query squence ID (i.e. POS/END or QRY_POS/QRY_END coordinates are assumed to be in the same sequence).
+        query sequence ID (i.e. POS/END or QRY_POS/QRY_END coordinates are assumed to be in the same sequence).
     :param coord_arr: Coordinate array for the whole alignment table.
     :param is_qry: Check depth in query coordinates if True, reference coordinates if False.
+    :param max_depth: Filter records intersecting loci where alignments exceed this depth.
+    :param max_overlap: Maximum overlap allowed when intersecting deep alignment regions. If the overlap is less than
+        this value, do not filter. This allows long alignments to pass through regions with deep redundant alignments.
+        If the total number of aligned bases divided by the total number of bases in deeply aligned regions is less
+        than this overlap value, then do not filter.
 
-    :param max_depth: Maximum depth.
+
+    :return: Array of record indices passing the depth filter.
     """
 
     if is_qry:
@@ -1222,7 +1228,11 @@ def filter_depth(
     for iter_index in range(record_index.shape[0]):
         index = record_index[iter_index]
 
-        overlap = np.minimum(filter_coords[:, 1], coord_arr[index, coord_end]) - np.maximum(filter_coords[:, 0], coord_arr[index, coord_pos])
+        overlap = np.minimum(
+            filter_coords[:, 1], coord_arr[index, coord_end]
+        ) - np.maximum(
+            filter_coords[:, 0], coord_arr[index, coord_pos]
+        )
 
         if (
             np.sum(np.where(overlap > 0, overlap, 0))

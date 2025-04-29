@@ -5,6 +5,7 @@ I/O utilities.
 import gzip
 import os
 import pysam
+import subprocess
 
 class PlainOrGzFile:
     """
@@ -116,3 +117,108 @@ class FastaReader:
             self.file_handle.__exit__(exc_type, exc_value, traceback)
 
         self.is_open = False
+
+class SamStreamer(object):
+    """
+    Stream a SAM, BAM, or CRAM file as a line generator.
+    """
+
+    def __init__(self, filename, file_type=None):
+        self.filename = filename.strip()
+        self.is_open = False
+        self.is_closed = False
+
+        # Set type
+        if isinstance(filename, str):
+            filename = filename.strip()
+
+            if not filename:
+                raise RuntimeError('File name is empty')
+
+            filename_lower = filename.lower()
+
+            if file_type is None:
+                if filename_lower.endswith('.sam') or filename_lower.endswith('.sam.gz'):
+                    file_type = 'sam'
+                elif filename_lower.endswith('.bam'):
+                    file_type = 'bam'
+                elif filename_lower.endswith('.cram'):
+                    file_type = 'cram'
+                else:
+                    raise RuntimeError(f'File name is not a string (type "{type(filename)}"), expected SAM, BAM, or CRAM file, but file name does not end with ".sam", ".sam.gz", ".bam", or ".cram"')
+
+        else:
+            if file_type is not None and file_type.strip().lower() != 'iter':
+                raise RuntimeError(f'File name is not a string (type "{type(filename)}"), expected iterator, but "type" argument is not "iter" (file_type="{file_type}"')
+            file_type = 'iter'
+
+        self.file_type = file_type
+
+    def __enter__(self):
+
+        if self.is_open:
+            raise RuntimeError(f'Enter called: File is already open by this context guard: {self.filename}')
+
+        if self.file_type == 'sam':
+            self.iterator = PlainOrGzFile(self.filename, 'rt').__enter__()
+            self.is_open = True
+
+            return self.iterator
+
+        if self.file_type in {'bam', 'cram'}:
+            self.iterator = DecodeIterator(
+                subprocess.Popen(['samtools', 'view', '-h', self.filename], stdout=subprocess.PIPE).stdout
+            )
+
+            self.is_open = True
+
+            return DecodeIterator(self.iterator)
+
+        if self.file_type == 'iter':
+            self.iterator = self.filename
+
+            self.is_open = True
+
+            return self.iterator
+
+        raise RuntimeError(f'Unknown file type: {self.file_type}')
+
+    def __exit__(self, exc_type, exc_value, traceback):
+
+        if not self.is_open:
+            raise RuntimeError(f'Exit called: File is not open by this context guard: {self.filename}')
+
+        if self.file_type == {'bam', 'cram'}:
+            self.iterator.close()
+
+        elif self.file_type == 'sam':
+            self.iterator.__exit__(exc_type, exc_value, traceback)
+
+        self.is_open = False
+        self.is_closed = True
+
+    def __iter__(self):
+        if self.is_closed:
+            raise RuntimeError('Iterator is closed')
+
+        if not self.is_open:
+            self.__enter__()
+
+        return self.iterator
+
+class DecodeIterator(object):
+    """
+    Utility iterator for decoding bytes to strings. Needed by SamStreamer for streaming BAM & CRAM files.
+    """
+
+    def __init__(self, iterator):
+        self.iterator = iterator
+
+    def __iter__(self):
+        return self
+
+    def __next__(self):
+        return next(self.iterator).decode()
+
+    def close(self):
+        self.iterator.close()

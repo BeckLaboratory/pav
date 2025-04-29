@@ -92,8 +92,8 @@ class ScoreModel(object, metaclass=abc.ABCMeta):
             raise RuntimeError(f'Unrecognized CIGAR op code: {op_code}')
 
     def score_operations(self,
-                         op_arr: np.ndarray[int, int],
-                         ):
+                         op_arr: np.ndarray,
+                         ) -> float:
         """
         A vectorized implementation of summing scores for affine models.
 
@@ -128,6 +128,10 @@ class ScoreModel(object, metaclass=abc.ABCMeta):
 
 
 class AffineScoreModel(ScoreModel):
+    score_match: float
+    score_mismatch: float
+    score_affine_gap: tuple
+    score_template_switch: float
     """
     Affine score model with default values modeled on minimap2 (2.26) default parameters.
 
@@ -137,7 +141,12 @@ class AffineScoreModel(ScoreModel):
     :param template_switch: Template switch penalty. If none, defaults to 2x the penalty of a 50 bp gap.
     """
 
-    def __init__(self, match=AFFINE_SCORE_MATCH, mismatch=AFFINE_SCORE_MISMATCH, affine_gap=AFFINE_SCORE_GAP, template_switch=AFFINE_SCORE_TS):
+    def __init__(self,
+             match: float=AFFINE_SCORE_MATCH,
+             mismatch: float=AFFINE_SCORE_MISMATCH,
+             affine_gap: float=AFFINE_SCORE_GAP,
+             template_switch: float=AFFINE_SCORE_TS
+         ):
         self.score_match = np.abs(match)
         self.score_mismatch = -np.abs(mismatch)
         self.score_affine_gap = tuple((
@@ -153,7 +162,7 @@ class AffineScoreModel(ScoreModel):
             except ValueError:
                 raise ValueError(f'template_switch parameter is not numeric: {template_switch}')
 
-    def match(self, n=1):
+    def match(self, n: int=1) -> float:
         """
         Score match.
 
@@ -162,7 +171,7 @@ class AffineScoreModel(ScoreModel):
 
         return self.score_match * n
 
-    def mismatch(self, n=1):
+    def mismatch(self, n: int=1) -> float:
         """
         Score mismatch.
 
@@ -171,7 +180,7 @@ class AffineScoreModel(ScoreModel):
 
         return self.score_mismatch * n
 
-    def gap(self, n=1):
+    def gap(self, n: int=1) -> float:
         """
         Score gap (insertion or deletion). Compute all affine alignment gap scores and return the lowest penalty.
 
@@ -188,7 +197,7 @@ class AffineScoreModel(ScoreModel):
             ]
         )
 
-    def template_switch(self):
+    def template_switch(self) -> float:
         """
         Score a template switch.
 
@@ -196,7 +205,7 @@ class AffineScoreModel(ScoreModel):
         """
         return self.score_template_switch
 
-    def mismatch_model(self):
+    def mismatch_model(self) -> ScoreModel:
         """
         Create a version of this model that scores only mismatches (ignores gaps). Thd mismatch model retains the
         template-switch penalty based on the original model even if it was derived from gap scores. A new model
@@ -210,8 +219,8 @@ class AffineScoreModel(ScoreModel):
         )
 
     def score_operations(self,
-                         op_arr: np.ndarray[int, int]
-                         ):
+                         op_arr: np.ndarray
+                         ) -> float:
         """
         A vectorized implementation of summing scores for affine models.
 
@@ -257,7 +266,9 @@ class AffineScoreModel(ScoreModel):
         return f'AffineScoreModel(match={self.score_match},mismatch={-self.score_mismatch},gap={gap_str},ts={-self.score_template_switch})'
 
 
-def get_score_model(param_string=None):
+def get_score_model(
+        param_string: str=None
+) -> ScoreModel:
     """
     Get score model from a string of alignment parameters.
 
@@ -288,7 +299,9 @@ def get_score_model(param_string=None):
 
     raise RuntimeError(f'Unrecognized score model type: {model_type}')
 
-def get_affine_by_params(param_string):
+def get_affine_by_params(
+        param_string: str
+) -> AffineScoreModel:
     """
     Parse a string to get alignment parameters from it.
 
