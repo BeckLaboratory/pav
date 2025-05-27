@@ -793,7 +793,7 @@ def find_cut_sites(
     cut_idx_l = None  # Record where cut occurs in left trace
     cut_idx_r = None  # Record where cut occurs in right trace
 
-    min_score = np.inf      # Minimum cumulative score that may be cut
+    max_score = -np.inf      # Minimum cumulative score that may be cut
     max_diff_optimal = None  # Optimal difference in the number of bases cut over diff_bp. closest to 0 means cut-site
                              # can be placed exactly and does not force over-cutting to remove overlap)
 
@@ -862,15 +862,15 @@ def find_cut_sites(
 
             # Save max
             if (
-                score_cum < min_score or (  # Better event count, or
-                    score_cum == min_score and (  # Same event count, and
+                score_cum > max_score or (  # Better event count, or
+                    score_cum == max_score and (  # Same event count, and
                         max_diff_optimal is None or diff_optimal < max_diff_optimal  # Optimal difference is closer to 0 (less over-cut)
                     )
                 )
             ):
                 cut_idx_l = tc_idx_l
                 cut_idx_r = tc_idx_r
-                min_score = score_cum
+                max_score = score_cum
                 max_diff_optimal = diff_optimal
 
             tc_idx_r += 1

@@ -35,7 +35,7 @@ OP_CHAR = {
     X: 'X'
 }
 
-OP_CHAR_FUNC = np.vectorize(OP_CHAR.get)
+OP_CHAR_FUNC = np.vectorize(lambda val: OP_CHAR.get(val, '?'))
 
 OP_CODE = {
     'M': M,
@@ -51,6 +51,11 @@ OP_CODE = {
 
 CONSUMES_QRY_ARR = np.array([M, I, S, EQ, X])
 CONSUMES_REF_ARR = np.array([M, D, N, EQ, X])
+
+ADV_REF_ARR = np.array([EQ, X, D])
+ADV_QRY_ARR = np.array([EQ, X, I, S, H])
+VAR_ARR = np.array([X, I, D])
+
 
 def cigar_as_array(
         cigar_str: str
@@ -145,3 +150,57 @@ def clip_soft_to_hard(
         op_arr = np.append(op_arr[:clip_r_i], [(H, clip_r)], axis=0)
 
     return op_arr
+
+def op_arr_add_coords(op_arr, pos_ref=0, add_index=True):
+    """
+    Take an operation array (n x 2, op_code/op_len columns), add coordinate and index columns.
+
+    Columns:
+        0: Operation code
+        1: Operation length
+        2: Reference position
+        4: Query position
+        3: Index (optional, first record is 0, second is 1, etc). Allows a rows to be dropped while keeping a record of
+            of the operation index.
+
+    :param op_arr: Array of operations (n x 2, op_code/op_len columns).
+    :param pos_ref: First aligned reference base in the sequence. Note the query position is determined by following
+        clipping and alignment operations.
+    :param add_index: Add index column.
+
+    :return: Array of operations (n x 4 or n x 5) with columns described above.
+    """
+
+    adv_ref_arr = op_arr[:, 1] * np.isin(op_arr[:, 0], ADV_REF_ARR)
+    adv_qry_arr = op_arr[:, 1] * np.isin(op_arr[:, 0], ADV_QRP_ARR)
+
+    ref_pos_arr = np.cumsum(adv_ref_arr) - adv_ref_arr + pos_ref
+    qry_pos_arr = np.cumsum(adv_qry_arr) - adv_qry_arr
+
+    # Check for zero-length operations (no operation or bad CIGAR length)
+    if np.any((adv_ref_arr + adv_qry_arr) == 0):
+        no_op_arr = op_arr[(adv_ref_arr + adv_qry_arr == 0) & (op_arr[:, 1] > 0)]
+        no_len_arr = op_arr[op_arr[:, 1] == 0]
+
+        op_set = ', '.join(sorted(set(no_op_arr[:, 0].astype(str))))
+        len_set = ', '.join(sorted(set(no_len_arr[:, 0].astype(str))))
+
+        if op_set:
+            raise RuntimeError(f'Unexpected operations in CIGAR string at {align_index}: operation code(s) "{op_set}"')
+
+        if len_set:
+            raise RuntimeError(f'Zero-length operations CIGAR string at {align_index}: operation code(s) "{len_set}"')
+
+    if add_index:
+        return np.concatenate([
+            op_arr,
+            np.expand_dims(ref_pos_arr, axis=1),
+            np.expand_dims(qry_pos_arr, axis=1),
+            np.expand_dims(np.arange(op_arr.shape[0]), axis=1)
+        ], axis=1)
+    else:
+        return np.concatenate([
+            op_arr,
+            np.expand_dims(ref_pos_arr, axis=1),
+            np.expand_dims(qry_pos_arr, axis=1)
+        ], axis=1)

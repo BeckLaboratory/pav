@@ -120,6 +120,7 @@ class Variant(object, metaclass=abc.ABCMeta):
         chain_end_index: End index from the alignment chain
         region_ref: Reference region from the interval
         region_qry: Query region from the interval
+        resolved: False if variant is incompletely resolved. This is set for complex SVs containing unmapped segments.
     """
 
     def __init__(self, interval):
@@ -128,7 +129,7 @@ class Variant(object, metaclass=abc.ABCMeta):
         self.interval = interval
 
         self.score_variant = -np.inf
-        self.filter = 'PASS'
+        self.filter_set = set()  # Set of filters, do not include "PASS", an empty set implies "PASS".
 
         self.df_ref_trace = None
 
@@ -182,6 +183,18 @@ class Variant(object, metaclass=abc.ABCMeta):
 
         self.is_patch = False  # Patch variant, represents a bridge across alignment artifacts (no real variant)
 
+        # Set alignment filters
+        if self.interval.anchor_filters:
+            self.filter_set.update(self.interval.anchor_filters)
+
+        if self.interval.qry_bp > 100 and self.interval.align_prop_fail > 0.2:
+            self.filter_set.update(self.interval.align_filters)
+
+        # Set resolution filter (resolved if mostly aligned)
+        self.resolved_templ = np.nan
+
+
+
     def __getattr__(self, name):
         """
         Get additional attributes by name.
@@ -215,6 +228,17 @@ class Variant(object, metaclass=abc.ABCMeta):
         elif name == 'seg_n':
             return self.interval.df_segment.shape[0] if not self.is_null() else 0
 
+        elif name == 'filter':
+            filter_set = self.filter_set - {'PASS'}
+
+            if filter_set:
+                return ','.join(sorted(filter_set))
+
+            return 'PASS'
+
+        elif name == 'is_pass':
+            return len(self.filter_set - {'PASS'}) == 0
+
         raise AttributeError(f'Variant has no attribute: {name}')
 
     def __repr__(self):
@@ -224,7 +248,7 @@ class Variant(object, metaclass=abc.ABCMeta):
         :return: String representation.
         """
 
-        return f'Variant({self.variant_id}, ref={self.region_ref}, qry={self.region_qry}, strand={self.strand}, score={self.score_variant})'
+        return f'Variant({self.variant_id}, ref={self.region_ref}, qry={self.region_qry}, strand={self.strand}, score={self.score_variant}, filter={self.filter})'
 
     def complete_anno(self):
         """
@@ -337,22 +361,31 @@ class InsertionVariant(Variant):
 
         self.region_qry = interval.region_qry
 
+        self.templ_region = None
+
+        if (dup_row := interval.df_segment.iloc[1])['IS_ALIGNED']:
+            self.templ_region = seq.Region(dup_row['#CHROM'], dup_row['POS'], dup_row['END'])
+
+        self.resolved_templ = interval.aligned_pass_prop >= caller_resources.pav_params.lg_cpx_min_aligned_prop
+
     def row_impl(self):
         return pd.Series(
             [
                 self.chrom, self.pos, self.end, self.variant_id, self.svtype, self.svlen,
-                self.filter,
+                self.filter, self.resolved_templ,
                 str(self.region_qry), self.strand,
-                self.svsubtype, self.score_variant,
+                self.svsubtype, str(self.templ_region) if self.templ_region is not None else np.nan,
+                self.score_variant,
                 self.call_source,
                 self.anchor_score_min, self.anchor_score_max,
                 f'{self.chain_start_index}-{self.chain_end_index}'
             ],
             index=[
                 '#CHROM', 'POS', 'END', 'ID', 'SVTYPE', 'SVLEN',
-                'FILTER',
+                'FILTER', 'RESOLVED_TEMPL',
                 'QRY_REGION', 'QRY_STRAND',
-                'SVSUBTYPE', 'VAR_SCORE',
+                'SVSUBTYPE', 'TEMPL_REGION',
+                'VAR_SCORE',
                 'CALL_SOURCE',
                 'ANCHOR_SCORE_MIN', 'ANCHOR_SCORE_MAX',
                 'INTERVAL'
@@ -388,30 +421,38 @@ class TandemDuplicationVariant(InsertionVariant):
         if interval.seg_n != 0 or interval.len_ref >= 0:
             return
 
-        if interval.df_segment.iloc[0]['INDEX'] not in caller_resources.df_align_qryref:
+        if interval.df_segment.iloc[0]['INDEX'] not in caller_resources.df_align_qryref.index:
             return
 
-        if interval.df_segment.iloc[-1]['INDEX'] not in caller_resources.df_align_qryref:
+        if interval.df_segment.iloc[-1]['INDEX'] not in caller_resources.df_align_qryref.index:
             return
 
         # Determine left-most breakpoint using alignment trimming for homology
-        self.pos = caller_resources.df_align_qryref.loc[interval.df_segment.iloc[0]['INDEX'], 'END']
-        self.end = self.pos + 1
+        if interval.is_rev:
+            qry_pos = caller_resources.df_align_qryref.loc[interval.df_segment.iloc[-1]['INDEX'], 'QRY_END']
+            qry_end = caller_resources.df_align_qryref.loc[interval.df_segment.iloc[0]['INDEX'], 'QRY_POS']
+        else:
+            qry_pos = caller_resources.df_align_qryref.loc[interval.df_segment.iloc[0]['INDEX'], 'QRY_END']
+            qry_end = caller_resources.df_align_qryref.loc[interval.df_segment.iloc[-1]['INDEX'], 'QRY_POS']
 
-        qry_pos = caller_resources.df_align_qryref.loc[interval.df_segment.iloc[0]['INDEX'], 'QRY_END']
-        qry_end = caller_resources.df_align_qryref.loc[interval.df_segment.iloc[-1]['INDEX'], 'QRY_POS']
+        if (svlen := qry_end - qry_pos) > 0:
+            self.svlen = svlen
 
-        self.svlen = qry_end - qry_pos
+            self.pos = caller_resources.df_align_qryref.loc[interval.df_segment.iloc[0]['INDEX'], 'END'] - 1
+            self.end = self.pos + 1
 
-        self.score_variant = \
-            caller_resources.score_model.gap(self.svlen)
+            self.score_variant = \
+                caller_resources.score_model.gap(self.svlen)
 
-        self.vartype = 'SV' if self.svlen > 50 else 'INDEL'
-        self.svtype = 'INS'
-        self.svsubtype = 'TD'
+            self.vartype = 'SV' if self.svlen > 50 else 'INDEL'
+            self.svtype = 'INS'
+            self.svsubtype = 'TD'
 
-        self.region_qry = interval.region_qry
+            self.region_qry = seq.Region(interval.region_qry.chrom, qry_pos, qry_end)
 
+            self.templ_region = interval.region_ref
+
+            self.resolved_templ = interval.aligned_pass_prop >= caller_resources.pav_params.lg_cpx_min_aligned_prop
 
 class DeletionVariant(Variant):
     """
@@ -446,11 +487,13 @@ class DeletionVariant(Variant):
         self.vartype = 'SV' if self.svlen > 50 else 'INDEL'
         self.svtype = 'DEL'
 
+        self.resolved_templ = True
+
     def row_impl(self):
         return pd.Series(
             [
                 self.chrom, self.pos, self.end, self.variant_id, self.svtype, self.svlen,
-                self.filter,
+                self.filter, self.resolved_templ,
                 str(self.region_qry), self.strand,
                 self.score_variant,
                 self.call_source,
@@ -459,7 +502,7 @@ class DeletionVariant(Variant):
             ],
             index=[
                 '#CHROM', 'POS', 'END', 'ID', 'SVTYPE', 'SVLEN',
-                'FILTER',
+                'FILTER', 'RESOLVED_TEMPL',
                 'QRY_REGION', 'QRY_STRAND',
                 'VAR_SCORE',
                 'CALL_SOURCE',
@@ -617,6 +660,8 @@ class InversionVariant(Variant):
 
                 self.size_gap = np.abs(len(self.region_ref_inner) - len(self.region_qry_inner))
 
+                self.resolved_templ = interval.aligned_pass_prop >= caller_resources.pav_params.lg_cpx_min_aligned_prop
+
         # # Try by trimmed alignment
         # local_inv = False
         #
@@ -676,7 +721,7 @@ class InversionVariant(Variant):
         return pd.Series(
             [
                 self.chrom, self.pos, self.end, self.variant_id, self.svtype, self.svlen,
-                self.filter,
+                self.filter, self.resolved_templ,
                 str(self.region_qry_inner), self.strand,
                 self.score_variant,
                 str(self.region_ref_outer), str(self.region_qry_outer),
@@ -687,7 +732,7 @@ class InversionVariant(Variant):
             ],
             index=[
                 '#CHROM', 'POS', 'END', 'ID', 'SVTYPE', 'SVLEN',
-                'FILTER',
+                'FILTER', 'RESOLVED_TEMPL',
                 'QRY_REGION', 'QRY_STRAND',
                 'VAR_SCORE',
                 'REGION_REF_OUTER', 'REGION_QRY_OUTER',
@@ -739,6 +784,8 @@ class ComplexVariant(Variant):
         self.pos = interval.region_ref.pos
         self.end = interval.region_ref.end
 
+        self.resolved_templ = interval.aligned_pass_prop >= caller_resources.pav_params.lg_cpx_min_aligned_prop
+
     def complete_anno_impl(self):
 
         # Get smoothed segment table
@@ -751,17 +798,17 @@ class ComplexVariant(Variant):
 
         # Get reference trace
         if self.df_ref_trace is None:
-            self.df_ref_trace = get_reference_trace(self.interval, df_segment, 0.01, self.svlen)
+            self.df_ref_trace = get_reference_trace(self.interval, df_segment, 0.01, self.svlen, self.is_pass)
             # self.df_ref_trace = get_reference_trace(self.interval, df_segment, self.caller_resources.pav_params.lg_smooth_segments, self.svlen)
 
-        self.struct_qry = get_qry_struct_str(df_segment)
+        self.struct_qry = get_qry_struct_str(df_segment, self.is_pass)
         self.struct_ref = get_ref_struct_str(self.df_ref_trace, self.interval.len_ref, self.interval.len_qry)
 
     def row_impl(self):
         return pd.Series(
             [
                 self.chrom, self.pos, self.end, self.variant_id, self.svtype, self.svlen,
-                self.filter,
+                self.filter, self.resolved_templ,
                 str(self.region_qry), self.strand,
                 self.seg_n, self.struct_ref, self.struct_qry,
                 self.score_variant,
@@ -770,7 +817,7 @@ class ComplexVariant(Variant):
             ],
             index=[
                 '#CHROM', 'POS', 'END', 'ID', 'SVTYPE', 'SVLEN',
-                'FILTER',
+                'FILTER', 'RESOLVED_TEMPL',
                 'QRY_REGION', 'QRY_STRAND',
                 'SEG_N', 'STRUCT_REF', 'STRUCT_QRY',
                 'VAR_SCORE',
@@ -778,7 +825,6 @@ class ComplexVariant(Variant):
                 'INTERVAL'
             ]
         )
-
 
 class NullVariant(Variant):
     """
@@ -992,7 +1038,7 @@ def collapse_segments(variant_call, smooth_factor=const.DEFAULT_LG_SMOOTH_SEGMEN
 
     return df_segment
 
-def get_reference_trace(interval, df_segment=None, smooth_factor=0.0, svlen=None):
+def get_reference_trace(interval, df_segment=None, smooth_factor=0.0, svlen=None, is_pass=None):
     """
     Get a table representing the trace across the reference locus for this SV. This only covers the locus of the SV
     and omits distal template switches.
@@ -1005,12 +1051,18 @@ def get_reference_trace(interval, df_segment=None, smooth_factor=0.0, svlen=None
     :param df_segment: Segment table or `None` to use the segment table in `interval`.
     :param smooth_factor: Smoothing factor.
     :param svlen: SV length. Required for smoothing. May be `None` if smooth_factor is zero.
+    :param is_pass: Variaont passed filters. If True, poor alignment segments are removed from the variant call,
+        otherwise, they are retained and the full erroneous CSV structure is reported as a filtered variant. If
+        `None`, the variant is assumed to pass if both anchors are not filtered.
 
     :return: A reference trace table. Has no rows if there is no reference context at the SV site.
     """
 
     if df_segment is None:
         df_segment = interval.df_segment
+
+    if is_pass is None:
+        is_pass = interval.is_anchor_pass
 
     # df_segment = df_segment.reset_index(drop=True)
 
@@ -1042,7 +1094,12 @@ def get_reference_trace(interval, df_segment=None, smooth_factor=0.0, svlen=None
     ])
 
     # Make depth table
-    df_depth = align.tables.align_bed_to_depth_bed(df_segment.loc[df_segment['IS_ALIGNED']], df_fai=None, index_sep=';')
+    df_depth = align.tables.align_bed_to_depth_bed(
+        df_segment.loc[df_segment['IS_ALIGNED']],
+        df_fai=None,
+        index_sep=';',
+        retain_filtered=not interval.is_anchor_pass  # Get a full structure of false CSVs that would be filtered, drop filtered segments otherwise
+    )
 
     del df_depth['QRY_ID']
 
@@ -1163,18 +1220,32 @@ def get_reference_trace(interval, df_segment=None, smooth_factor=0.0, svlen=None
     return df_ref_trace
 
 
-def get_qry_struct_str(df_segment):
+def get_qry_struct_str(df_segment, is_pass):
     """
     Get a comuplex SV structure following the reference through template switches, templated insertions, and
     untemplated insertions.
 
     :param df_segment: Segment table.
+    :param is_pass: Variaont passed filters. If True, poor alignment segments are removed from the variant call,
+        otherwise, they are retained and the full erroneous CSV structure is reported as a filtered variant. If
+        `None`, the variant is assumed to pass if both anchors are not filtered.
 
     :return: String describing the complex SV structure.
     """
 
     df_segment = df_segment.sort_values(['QRY_ID', 'QRY_POS', 'QRY_END'])
 
+    if is_pass is None:
+        if np.any(df_segment['IS_ANCHOR']):
+            is_pass = np.all(df_segment.loc[df_segment['IS_ANCHOR'], 'FILTER_PASS'])
+        else:
+            is_pass = True
+
+    # Removed filtered segments unless the variant failed, then report the full structure of the erroneous CSV.
+    if is_pass:
+        df_segment = df_segment.loc[df_segment['FILTER_PASS']]
+
+    # Get strand for templated sites
     strand_dict = None
 
     if df_segment.iloc[0]['IS_ANCHOR'] and df_segment.iloc[0]['IS_REV']:

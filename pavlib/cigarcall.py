@@ -11,7 +11,7 @@ import pysam
 import svpoplib
 
 from . import align
-from . import call as pav_call
+from . import call
 
 #
 # Definitions
@@ -21,7 +21,7 @@ from . import call as pav_call
 CALL_SOURCE = 'CIGAR'
 
 
-def make_insdel_snv_calls(df_align, ref_fa_name, qry_fa_name, hap, version_id=True):
+def make_insdel_snv_calls(df_align, ref_fa_name, qry_fa_name, hap, version_id=True, debug=False):
     """
     Parse variants from CIGAR strings.
 
@@ -31,48 +31,59 @@ def make_insdel_snv_calls(df_align, ref_fa_name, qry_fa_name, hap, version_id=Tr
     :param hap: String identifying the haplotype ("h1", "h2").
     :param version_id: Version duplicate variant IDs if `True`. If `False`, duplicate IDs may be written, and a
         subsequent step should apply versioning.
+    :param debug: Extra debugging checks if `True`.
 
     :return: A tuple of two dataframes, one for insertions and deletions (SV and indel), and one for SNVs.
     """
 
+
+    df_align = df_align.sort_values(['#CHROM', 'QRY_ID'], ignore_index=True)
+
     df_insdel_list = list()
     df_snv_list = list()
 
-    seq_ref = None       # Current reference sequence
-    seq_ref_name = None  # Current reference contig name
+    seq_ref = None        # Current reference sequence
+    seq_ref_upper = None  # Current reference sequence, upper-case
+    seq_ref_name = None   # Current reference contig name
 
-    seq_qry = None       # Current query sequence
-    seq_qry_name = None  # Current query name
-    seq_qry_len = None   # Current query length
-    seq_qry_rev = None   # Aligned query was reverse-complemented
+    seq_qry = None        # Current query sequence
+    seq_qry_upper = None  # Current query sequence, upper-case
+    seq_qry_name = None   # Current query name
+    seq_qry_len = None    # Current query length
+    seq_qry_rev = None    # Aligned query was reverse-complemented
 
     # Define arrays of operations consuming reference and query bases
-    op_adv_ref_arr = np.array([align.op.EQ, align.op.X, align.op.D])
-    op_adv_qry_arr = np.array([align.op.EQ, align.op.X, align.op.I, align.op.S, align.op.H])
+    # op_adv_ref_arr = np.array([align.op.EQ, align.op.X, align.op.D])
+    # op_adv_qry_arr = np.array([align.op.EQ, align.op.X, align.op.I, align.op.S, align.op.H])
+    # op_var_arr = np.array([align.op.X, align.op.I, align.op.D])
 
     COL_OP_CODE = 0
     COL_OP_LEN = 1
     COL_REF_POS = 2
     COL_QRY_POS = 3
+    COL_OP_INDEX = 4
 
-    # Parse alignment records
-    for index, row in df_align.iterrows():
+    with (pysam.FastaFile(ref_fa_name) as ref_fa, pysam.FastaFile(qry_fa_name) as qry_fa):
 
-        # Get strand
-        is_rev = row['IS_REV']
-        strand = '-' if is_rev else '+'
-        align_index = row['INDEX']
+        # Parse alignment records
+        for row_index, row in df_align.iterrows():
 
-        # Load reference and tig sequences
-        if seq_ref_name is None or row['#CHROM'] != seq_ref_name:
-            with pysam.FastaFile(ref_fa_name) as ref_fa:
-                seq_ref_name = row['#CHROM']
-                seq_ref = ref_fa.fetch(str(seq_ref_name))
+            # Save alignment fields
+            is_rev = row['IS_REV']
+            strand = '-' if is_rev else '+'
+            align_index = row['INDEX']
+            filter = row['FILTER'] if 'filter' in row else 'PASS'
 
-        if seq_qry_name is None or row['QRY_ID'] != seq_qry_name or is_rev != seq_qry_rev:
-            with pysam.FastaFile(qry_fa_name) as tig_fa:
-                seq_qry_name = row['QRY_ID']
-                seq_qry = tig_fa.fetch(str(seq_qry_name))
+            # Load reference and tig sequences
+            if seq_ref_name is None or row['#CHROM'] != seq_ref_name:
+                seq_ref_name = str(row['#CHROM'])
+                seq_ref = ref_fa.fetch(seq_ref_name)
+
+                seq_ref_upper = seq_ref.upper()
+
+            if seq_qry_name is None or row['QRY_ID'] != seq_qry_name or is_rev != seq_qry_rev:
+                seq_qry_name = str(row['QRY_ID'])
+                seq_qry = qry_fa.fetch(seq_qry_name)
                 seq_qry_len = len(seq_qry)
 
                 if is_rev:
@@ -80,316 +91,306 @@ def make_insdel_snv_calls(df_align, ref_fa_name, qry_fa_name, hap, version_id=Tr
 
                 seq_qry_rev = is_rev
 
-        seq_ref_upper = seq_ref.upper()
-        seq_qry_upper = seq_qry.upper()
+                seq_qry_upper = seq_qry.upper()
 
-        # # Process CIGAR
-        # pos_ref = row['POS']
-        # pos_qry = 0
-        #
-        # cigar_index = 0
+            # Get alignment operations and starting positions
+            op_arr = op.op_arr_add_coords(
+                op_arr=op.align.op.cigar_as_array(row['CIGAR']),
+                pos_ref=row['POS'],
+                add_index=True
+            )
 
-        # last_op = None
-        # last_oplen = 0
+            # adv_ref_arr = op_arr[:, 1] * np.isin(op_arr[:, 0], op_adv_ref_arr)
+            # adv_qry_arr = op_arr[:, 1] * np.isin(op_arr[:, 0], op_adv_qry_arr)
+            #
+            # ref_pos_arr = np.cumsum(adv_ref_arr) - adv_ref_arr + row['POS']
+            # qry_pos_arr = np.cumsum(adv_qry_arr) - adv_qry_arr
+            #
+            # # Check for zero-length operations (no operation or bad CIGAR length)
+            # if np.any((adv_ref_arr + adv_qry_arr) == 0):
+            #     no_op_arr = op_arr[(adv_ref_arr + adv_qry_arr == 0) & (op_arr[:, 1] > 0)]
+            #     no_len_arr = op_arr[op_arr[:, 1] == 0]
+            #
+            #     op_set = ', '.join(sorted(set(no_op_arr[:, 0].astype(str))))
+            #     len_set = ', '.join(sorted(set(no_len_arr[:, 0].astype(str))))
+            #
+            #     if op_set:
+            #         raise RuntimeError(f'Unexpected operations in CIGAR string at {align_index}: operation code(s) "{op_set}"')
+            #
+            #     if len_set:
+            #         raise RuntimeError(f'Zero-length operations CIGAR string at {align_index}: operation code(s) "{len_set}"')
+            #
+            # op_arr = np.concatenate([
+            #     op_arr,
+            #     np.expand_dims(ref_pos_arr, axis=1),
+            #     np.expand_dims(qry_pos_arr, axis=1),
+            #     np.expand_dims(np.arange(op_arr.shape[0]), axis=1)
+            # ], axis=1)
 
-        # Get alignment operations and starting positions
-        op_arr = align.op.cigar_as_array(row['CIGAR'])
+            op_arr = op_arr[np.isin(op_arr[:, 0], OP.VAR_ARR)]
 
-        adv_ref_arr = op_arr[:, 1] * np.isin(op_arr[:, 0], op_adv_ref_arr)
-        adv_qry_arr = op_arr[:, 1] * np.isin(op_arr[:, 0], op_adv_qry_arr)
+            for index in range(len(op_arr)):
 
-        ref_pos_arr = np.cumsum(adv_ref_arr) - adv_ref_arr + row['POS']
-        qry_pos_arr = np.cumsum(adv_qry_arr) - adv_qry_arr
+                op_code = op_arr[index, COL_OP_CODE]
+                op_len = op_arr[index, COL_OP_LEN]
+                op_index = op_arr[index, COL_OP_INDEX]
 
-        if np.any((adv_ref_arr + adv_qry_arr) == 0):
-            no_op_arr = op_arr[(adv_ref_arr + adv_qry_arr == 0) & (op_arr[:, 1] > 0)]
-            no_len_arr = op_arr[op_arr[:, 1] == 0]
+                if op_code == align.op.X:
+                    # Call SNV(s)
 
-            op_set = ', '.join(sorted(set(no_op_arr[:, 0].astype(str))))
-            len_set = ', '.join(sorted(set(no_len_arr[:, 0].astype(str))))
+                    for i in range(op_len):
 
-            if op_set:
-                raise RuntimeError(f'Unexpected operations in CIGAR string at {row["INDEX"]}: operation code(s) "{op_set}"')
+                        # Get position and bases
+                        pos_ref = op_arr[index, COL_REF_POS] + i
+                        pos_qry = op_arr[index, COL_QRY_POS] + i
 
-            if len_set:
-                raise RuntimeError(f'Zero-length operations CIGAR string at {row["INDEX"]}: operation code(s) "{len_set}"')
+                        base_ref = seq_ref[pos_ref]
+                        base_qry = seq_qry[pos_qry]
 
-        op_arr = np.concatenate([op_arr, np.expand_dims(ref_pos_arr, axis=1), np.expand_dims(qry_pos_arr, axis=1)], axis=1)
-    #
-    #     for oplen, op in align.op.as_tuples(row):
-    #         # NOTE: break/continue in this loop will not advance last_op and last_oplen (end of loop)
-    #
-    #         cigar_index += 1
-    #
-    #         if op == '=':
-    #             pos_ref += oplen
-    #             pos_qry += oplen
-    #
-    #         elif op == 'X':
-    #             # Call SNV(s)
-    #
-    #             for i in range(oplen):
-    #
-    #                 # Get position and bases
-    #                 pos_ref_snv = pos_ref + i
-    #                 pos_tig_snv = pos_qry + i
-    #
-    #                 base_ref = seq_ref[pos_ref_snv]
-    #                 base_tig = seq_qry[pos_tig_snv]
-    #
-    #                 # pos_tig_snv to fwd contig if alignment is reversed
-    #                 if is_rev:
-    #                     pos_tig_snv = seq_qry_len - pos_tig_snv - 1
-    #
-    #                 # Add variant
-    #                 var_id = f'{seq_ref_name}-{pos_ref_snv + 1}-SNV-{base_ref.upper()}{base_tig.upper()}'
-    #
-    #                 df_snv_list.append(pd.Series(
-    #                     [
-    #                         seq_ref_name, pos_ref_snv, pos_ref_snv + 1,
-    #                         var_id, 'SNV', 1,
-    #                         base_ref, base_tig,
-    #                         hap,
-    #                         f'{seq_qry_name}:{pos_tig_snv + 1}-{pos_tig_snv + 1}', strand,
-    #                         0,
-    #                         align_index,
-    #                         CALL_SOURCE
-    #                     ],
-    #                     index=[
-    #                         '#CHROM', 'POS', 'END',
-    #                         'ID', 'SVTYPE', 'SVLEN',
-    #                         'REF', 'ALT',
-    #                         'HAP',
-    #                         'QRY_REGION', 'QRY_STRAND',
-    #                         'CI',
-    #                         'ALIGN_INDEX',
-    #                         'CALL_SOURCE'
-    #                     ]
-    #                 ))
-    #
-    #             # Advance
-    #             pos_ref += oplen
-    #             pos_qry += oplen
-    #
-    #         elif op == 'I':
-    #             # Call INS
-    #
-    #             # Get sequence
-    #             seq = seq_qry[pos_qry:(pos_qry + oplen)]
-    #             seq_upper = seq.upper()
-    #
-    #             # Left shift
-    #             if last_op == '=':
-    #                 left_shift = np.min([
-    #                     last_oplen,
-    #                     pav_call.left_homology(pos_ref - 1, seq_ref_upper, seq_upper)  # SV/breakpoint upstream homology
-    #                 ])
-    #             else:
-    #                 left_shift = 0
-    #
-    #             sv_pos_ref = pos_ref - left_shift
-    #             sv_end_ref = sv_pos_ref + 1
-    #             sv_pos_tig = pos_qry - left_shift
-    #             sv_end_tig = sv_pos_tig + oplen
-    #
-    #             if left_shift != 0:
-    #                 seq = seq_qry[sv_pos_tig:(sv_pos_tig + oplen)]
-    #
-    #             # Get positions in the original SV space
-    #             # pos_tig_insdel to fwd contig if alignment is reversed
-    #             if is_rev:
-    #                 end_tig_insdel = seq_qry_len - sv_pos_tig
-    #                 pos_tig_insdel = end_tig_insdel - oplen
-    #
-    #             else:
-    #                 pos_tig_insdel = sv_pos_tig
-    #                 end_tig_insdel = pos_tig_insdel + oplen
-    #
-    #             # Find breakpoint homology
-    #             seq_upper = seq.upper()
-    #
-    #             hom_ref_l = pav_call.left_homology(sv_pos_ref - 1, seq_ref_upper, seq_upper)
-    #             hom_ref_r = pav_call.right_homology(sv_pos_ref, seq_ref_upper, seq_upper)
-    #
-    #             hom_tig_l = pav_call.left_homology(sv_pos_tig - 1, seq_tig_upper, seq_upper)
-    #             hom_tig_r = pav_call.right_homology(sv_end_tig, seq_tig_upper, seq_upper)
-    #
-    #             # Add variant
-    #             var_id = f'{seq_ref_name}-{sv_pos_ref + 1}-INS-{oplen}'
-    #
-    #             df_insdel_list.append(pd.Series(
-    #                 [
-    #                     seq_ref_name, sv_pos_ref, sv_end_ref,
-    #                     var_id, 'INS', oplen,
-    #                     hap,
-    #                     f'{seq_qry_name}:{pos_tig_insdel + 1}-{end_tig_insdel}', strand,
-    #                     0,
-    #                     align_index,
-    #                     left_shift, f'{hom_ref_l},{hom_ref_r}', f'{hom_tig_l},{hom_tig_r}',
-    #                     CALL_SOURCE,
-    #                     seq
-    #                 ],
-    #                 index=[
-    #                     '#CHROM', 'POS', 'END',
-    #                     'ID', 'SVTYPE', 'SVLEN',
-    #                     'HAP',
-    #                     'QRY_REGION', 'QRY_STRAND',
-    #                     'CI',
-    #                     'ALIGN_INDEX',
-    #                     'LEFT_SHIFT', 'HOM_REF', 'HOM_TIG',
-    #                     'CALL_SOURCE',
-    #                     'SEQ'
-    #                 ]
-    #             ))
-    #
-    #             # Advance
-    #             pos_qry += oplen
-    #
-    #             pass
-    #
-    #         elif op == 'D':
-    #             # Call DEL
-    #
-    #             # Get sequence
-    #             seq = seq_ref[pos_ref:(pos_ref + oplen)]
-    #             seq_upper = seq.upper()
-    #
-    #             # Left shift
-    #             if last_op == '=':
-    #                 left_shift = np.min([
-    #                     last_oplen,
-    #                     pav_call.left_homology(pos_ref - 1, seq_ref_upper, seq_upper)  # SV/breakpoint upstream homology
-    #                 ])
-    #             else:
-    #                 left_shift = 0
-    #
-    #             sv_pos_ref = pos_ref - left_shift
-    #             sv_end_ref = sv_pos_ref + oplen
-    #             sv_pos_tig = pos_qry - left_shift
-    #             sv_end_tig = sv_pos_tig + 1
-    #
-    #             # Contig position in original coordinates (translate if - strand)
-    #             pos_tig_insdel = sv_pos_tig
-    #
-    #             if is_rev:
-    #                 pos_tig_insdel = seq_qry_len - sv_pos_tig
-    #
-    #             # Find breakpoint homology
-    #             seq_upper = seq.upper()
-    #
-    #             hom_ref_l = pav_call.left_homology(sv_pos_ref - 1, seq_ref_upper, seq_upper)
-    #             hom_ref_r = pav_call.right_homology(sv_end_ref, seq_ref_upper, seq_upper)
-    #
-    #             hom_tig_l = pav_call.left_homology(sv_pos_tig - 1, seq_tig_upper, seq_upper)
-    #             hom_tig_r = pav_call.right_homology(sv_pos_tig, seq_tig_upper, seq_upper)
-    #
-    #             # Add variant
-    #             var_id = f'{seq_ref_name}-{pos_ref + 1}-DEL-{oplen}'
-    #
-    #             df_insdel_list.append(pd.Series(
-    #                 [
-    #                     seq_ref_name, pos_ref, pos_ref + oplen,
-    #                     var_id, 'DEL', oplen,
-    #                     hap,
-    #                     f'{seq_qry_name}:{pos_tig_insdel + 1}-{pos_tig_insdel + 1}', strand,
-    #                     0,
-    #                     align_index,
-    #                     left_shift, f'{hom_ref_l},{hom_ref_r}', f'{hom_tig_l},{hom_tig_r}',
-    #                     CALL_SOURCE,
-    #                     seq
-    #                 ],
-    #                 index=[
-    #                     '#CHROM', 'POS', 'END',
-    #                     'ID', 'SVTYPE', 'SVLEN',
-    #                     'HAP',
-    #                     'QRY_REGION', 'QRY_STRAND',
-    #                     'CI',
-    #                     'ALIGN_INDEX',
-    #                     'LEFT_SHIFT', 'HOM_REF', 'HOM_TIG',
-    #                     'CALL_SOURCE',
-    #                     'SEQ'
-    #                 ]
-    #             ))
-    #
-    #             # Advance
-    #             pos_ref += oplen
-    #
-    #             pass
-    #
-    #         elif op in {'S', 'H'}:
-    #             pos_qry += oplen
-    #
-    #         else:
-    #             # Cannot handle CIGAR operation
-    #
-    #             if op == 'M':
-    #                 raise RuntimeError((
-    #                     'Illegal operation code in CIGAR string at operation {}: '
-    #                     'Alignments must be generated with =/X (not M): '
-    #                     'opcode={}, subject={}:{}, query={}:{}, align-index={}'
-    #                 ).format(
-    #                     cigar_index, op, seq_ref_name, pos_ref, seq_qry_name, pos_qry, row['INDEX']
-    #                 ))
-    #
-    #             else:
-    #                 raise RuntimeError((
-    #                     'Illegal operation code in CIGAR string at operation {}: '
-    #                     'opcode={}, subject={}:{} , query={}:{}, align-index={}'
-    #                 ).format(
-    #                     cigar_index, op, seq_ref_name, pos_ref, seq_qry_name, pos_qry, row['INDEX']
-    #                 ))
-    #
-    #         # Save last op
-    #         last_op = op
-    #         last_oplen = oplen
-    #
-    # # Merge tables
-    # if len(df_snv_list) > 0:
-    #     df_snv = pd.concat(df_snv_list, axis=1).T
-    #
-    #     if version_id:
-    #         df_snv['ID'] = svpoplib.variant.version_id(df_snv['ID'])
-    #
-    #     df_snv.sort_values(['#CHROM', 'POS', 'END', 'ID'], inplace=True)
-    #
-    # else:
-    #     df_snv = pd.DataFrame(
-    #         [],
-    #         columns=[
-    #             '#CHROM', 'POS', 'END',
-    #             'ID', 'SVTYPE', 'SVLEN',
-    #             'REF', 'ALT',
-    #             'HAP',
-    #             'QRY_REGION', 'QRY_STRAND',
-    #             'CI',
-    #             'ALIGN_INDEX',
-    #             'CALL_SOURCE'
-    #         ]
-    #     )
-    #
-    # if len(df_insdel_list) > 0:
-    #     df_insdel = pd.concat(df_insdel_list, axis=1).T
-    #
-    #     if version_id:
-    #         df_insdel['ID'] = svpoplib.variant.version_id(df_insdel['ID'])
-    #
-    #     df_insdel.sort_values(['#CHROM', 'POS', 'END', 'ID'], inplace=True)
-    #
-    # else:
-    #     df_insdel = pd.DataFrame(
-    #         [],
-    #         columns=[
-    #             '#CHROM', 'POS', 'END',
-    #             'ID', 'SVTYPE', 'SVLEN',
-    #             'HAP',
-    #             'QRY_REGION', 'QRY_STRAND',
-    #             'CI',
-    #             'ALIGN_INDEX',
-    #             'LEFT_SHIFT', 'HOM_REF', 'HOM_TIG',
-    #             'CALL_SOURCE',
-    #             'SEQ'
-    #         ]
-    #     )
+                        if debug:
+                            if base_ref.upper() == base_qry.upper():
+                                raise RuntimeError(f'Expected base mismatch at {align_index} (op_code={align.op.OP_CHAR_FUNC(op_code)}, op_len={op_arr[index, COL_OP_LEN]}, op_index={op_index}): ref={base_ref}, qry={base_qry}')
+
+                        # Query coordinates
+                        if is_rev:
+                            pos_qry = seq_qry_len - pos_qry - 1
+
+                        if debug:
+                            base_qry_exp = qry_fa.fetch(seq_qry_name, pos_qry, pos_qry + 1)
+
+                            if is_rev:
+                                base_qry_exp = str(Bio.Seq.Seq(base_qry_exp).reverse_complement())
+
+                            if base_qry != base_qry_exp:
+                                raise RuntimeError(f'Coordinate mismatch at {align_index} (op_code={align.op.OP_CHAR_FUNC(op_code)}, op_len={op_arr[index, COL_OP_LEN]}, op_index={op_index}): base_qry={base_qry}, expected={base_qry_exp}')
+
+                        # Add variant
+                        df_snv_list.append(
+                            pd.Series(
+                                [
+                                    seq_ref_name, pos_ref, pos_ref + 1,
+                                    np.nan, 'SNV', 1,
+                                    base_ref, base_qry,
+                                    filter,
+                                    hap,
+                                    f'{seq_qry_name}:{pos_qry + 1}-{pos_qry + 1}', strand,
+                                    0,
+                                    align_index,
+                                    CALL_SOURCE
+                                ],
+                                index=[
+                                    '#CHROM', 'POS', 'END',
+                                    'ID', 'SVTYPE', 'SVLEN',
+                                    'REF', 'ALT',
+                                    'FILTER',
+                                    'HAP',
+                                    'QRY_REGION', 'QRY_STRAND',
+                                    'CI',
+                                    'ALIGN_INDEX',
+                                    'CALL_SOURCE'
+                                ]
+                            )
+                        )
+
+                elif op_code == align.op.I:
+                    # Call INS
+
+                    pos_qry = op_arr[index, COL_QRY_POS]
+                    pos_ref = op_arr[index, COL_REF_POS]
+
+                    seq = seq_qry[pos_qry:(pos_qry + op_len)]
+                    seq_upper = seq.upper()
+
+                    # Left shift
+                    left_shift = (
+                        np.min([
+                            op_arr[index - 1, COL_OP_LEN],
+                            call.left_homology(pos_ref - 1, seq_ref_upper, seq_upper)  # SV/breakpoint upstream homology
+                        ])
+                    ) if index > 0 and op_arr[index - 1, COL_OP_CODE] == align.op.EQ else 0
+
+                    if debug and left_shift < 0:
+                        raise RuntimeError(f'Negative left shift at {align_index} (op_code={op_code}({align.op.OP_CHAR_FUNC(op_code)}), op_len={op_arr[index, COL_OP_LEN]}, op_index={op_index}): left_shift={left_shift}')
+
+                    pos_ref -= left_shift
+                    pos_qry -= left_shift
+
+                    end_qry = pos_qry + op_len
+
+                    if left_shift != 0:
+                        seq = seq_qry[pos_qry:(pos_qry + op_len)]
+                        seq_upper = seq.upper()
+
+                    # Get positions in the original coordinates
+                    if is_rev:
+                        end_qry = seq_qry_len - pos_qry
+                        pos_qry = end_qry - op_len
+
+                    if debug:
+                        seq_exp = qry_fa.fetch(seq_qry_name, pos_qry, end_qry)
+
+                        if is_rev:
+                            seq_exp = str(Bio.Seq.Seq(seq_exp).reverse_complement())
+
+                        if seq != seq_exp:
+                            raise RuntimeError(f'Sequence mismatch at {align_index} (op_code={align.op.OP_CHAR_FUNC(op_code)}, op_len={op_arr[index, COL_OP_LEN]}, op_index={op_index}): seq="{seq}", expected="{seq_exp}"')
+
+                    # Find breakpoint homology
+                    hom_ref_l = call.left_homology(pos_ref - 1, seq_ref_upper, seq_upper)
+                    hom_ref_r = call.right_homology(pos_ref, seq_ref_upper, seq_upper)
+
+                    hom_qry_l = call.left_homology(pos_qry - 1, seq_qry_upper, seq_upper)
+                    hom_qry_r = call.right_homology(end_qry, seq_qry_upper, seq_upper)
+
+                    # Add variant
+                    df_insdel_list.append(
+                        pd.Series(
+                            [
+                                seq_ref_name, pos_ref, pos_ref + 1,
+                                np.nan, 'INS', op_len,
+                                filter,
+                                hap,
+                                f'{seq_qry_name}:{pos_qry + 1}-{end_qry}', strand,
+                                0,
+                                align_index,
+                                left_shift, f'{hom_ref_l},{hom_ref_r}', f'{hom_qry_l},{hom_qry_r}',
+                                CALL_SOURCE,
+                                seq
+                            ],
+                            index=[
+                                '#CHROM', 'POS', 'END',
+                                'ID', 'SVTYPE', 'SVLEN',
+                                'FILTER',
+                                'HAP',
+                                'QRY_REGION', 'QRY_STRAND',
+                                'CI',
+                                'ALIGN_INDEX',
+                                'LEFT_SHIFT', 'HOM_REF', 'HOM_TIG',
+                                'CALL_SOURCE',
+                                'SEQ'
+                            ]
+                        )
+                    )
+
+                elif op_code == align.op.D:
+                    # Call DEL
+
+                    pos_qry = op_arr[index, COL_QRY_POS]
+                    pos_ref = op_arr[index, COL_REF_POS]
+
+                    # Get sequence
+                    seq = seq_ref[pos_ref:(pos_ref + op_len)]
+                    seq_upper = seq.upper()
+
+                    # Left shift
+                    left_shift = (
+                        np.min([
+                            op_arr[index - 1, COL_OP_LEN],
+                            call.left_homology(pos_ref - 1, seq_ref_upper, seq_upper)  # SV/breakpoint upstream homology
+                        ])
+                    ) if index > 0 and op_arr[index - 1, COL_OP_CODE] == align.op.EQ else 0
+
+                    if debug and left_shift < 0:
+                        raise RuntimeError(f'Negative left shift at {align_index} (op_code={op_code}({align.op.OP_CHAR_FUNC(op_code)}), op_len={op_arr[index, COL_OP_LEN]}, op_index={op_index}): left_shift={left_shift}')
+
+                    pos_ref -= left_shift
+                    end_ref = pos_ref + op_len
+
+                    pos_qry -= left_shift
+
+                    # Get positions in the original coordinates
+                    if is_rev:
+                        pos_qry = seq_qry_len - pos_qry
+
+                    if debug:
+                        seq_exp = ref_fa.fetch(seq_ref_name, pos_ref, end_ref)
+
+                        if seq != seq_exp:
+                            raise RuntimeError(f'Sequence mismatch at {align_index} (op_code={align.op.OP_CHAR_FUNC(op_code)}, op_len={op_arr[index, COL_OP_LEN]}, op_index={op_index}): seq="{seq}", expected="{seq_exp}"')
+
+                    # Find breakpoint homology
+                    hom_ref_l = call.left_homology(pos_ref - 1, seq_ref_upper, seq_upper)
+                    hom_ref_r = call.right_homology(pos_ref + 1, seq_ref_upper, seq_upper)
+
+                    hom_qry_l = call.left_homology(pos_qry - 1, seq_qry_upper, seq_upper)
+                    hom_qry_r = call.right_homology(pos_qry, seq_qry_upper, seq_upper)
+
+                    # Add variant
+                    df_insdel_list.append(pd.Series(
+                        [
+                            seq_ref_name, pos_ref, end_ref,
+                            np.nan, 'DEL', op_len,
+                            filter,
+                            hap,
+                            f'{seq_qry_name}:{pos_qry + 1}-{pos_qry + 1}', strand,
+                            0,
+                            align_index,
+                            left_shift, f'{hom_ref_l},{hom_ref_r}', f'{hom_qry_l},{hom_qry_r}',
+                            CALL_SOURCE,
+                            seq
+                        ],
+                        index=[
+                            '#CHROM', 'POS', 'END',
+                            'ID', 'SVTYPE', 'SVLEN',
+                            'FILTER',
+                            'HAP',
+                            'QRY_REGION', 'QRY_STRAND',
+                            'CI',
+                            'ALIGN_INDEX',
+                            'LEFT_SHIFT', 'HOM_REF', 'HOM_TIG',
+                            'CALL_SOURCE',
+                            'SEQ'
+                        ]
+                    ))
+
+    # Merge tables
+    if len(df_snv_list) > 0:
+        df_snv = pd.concat(df_snv_list, axis=1).T
+
+        df_snv.sort_values(['#CHROM', 'POS', 'END', 'ID'], inplace=True)
+
+        df_snv['ID'] = svpoplib.variant.get_variant_id(df_snv, apply_version=version_id)
+
+    else:
+        df_snv = pd.DataFrame(
+            [],
+            columns=[
+                '#CHROM', 'POS', 'END',
+                'ID', 'SVTYPE', 'SVLEN',
+                'REF', 'ALT',
+                'FILTER',
+                'HAP',
+                'QRY_REGION', 'QRY_STRAND',
+                'CI',
+                'ALIGN_INDEX',
+                'CALL_SOURCE'
+            ]
+        )
+
+
+    if len(df_insdel_list) > 0:
+        df_insdel = pd.concat(df_insdel_list, axis=1).T
+
+        df_insdel.sort_values(['#CHROM', 'POS', 'END', 'ID'], inplace=True)
+
+        df_insdel['ID'] = svpoplib.variant.get_variant_id(df_insdel, apply_version=version_id)
+
+    else:
+        df_insdel = pd.DataFrame(
+            [],
+            columns=[
+                '#CHROM', 'POS', 'END',
+                'ID', 'SVTYPE', 'SVLEN',
+                'FILTER',
+                'HAP',
+                'QRY_REGION', 'QRY_STRAND',
+                'CI',
+                'ALIGN_INDEX',
+                'LEFT_SHIFT', 'HOM_REF', 'HOM_TIG',
+                'CALL_SOURCE',
+                'SEQ'
+            ]
+        )
 
     # Return tables
     return df_snv, df_insdel

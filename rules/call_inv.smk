@@ -195,6 +195,8 @@ rule call_inv_part:
 
         if df_flag.shape[0] == 0:
             # No records in partition
+            if pav_params.debug:
+                print(f'No records in partition {part}')
 
             pd.DataFrame(
                 [], columns=INV_CALL_COLUMNS
@@ -210,7 +212,7 @@ rule call_inv_part:
             svpoplib.ref.get_df_fai(input.fai_qry)
         )
 
-        kde = pavlib.kde.KdeTruncNorm(
+        kde_model = pavlib.kde.KdeTruncNorm(
             pav_params.inv_kde_bandwidth, pav_params.inv_kde_trunc_z, pav_params.inv_kde_func
         )
 
@@ -219,13 +221,17 @@ rule call_inv_part:
 
         with open(log.log, 'w') as log_file:
             for index, row in df_flag.iterrows():
+                if pav_params.debug:
+                    print(f'Calling inversions at flagged region: {row["ID"]} (type={row["TYPE"]})')
 
                 # Scan for inversions
                 region_flag = pavlib.seq.Region(row['#CHROM'], row['POS'], row['END'])
 
                 try:
                     inv_call = pavlib.inv.scan_for_inv(
-                        region_flag, REF_FA, input.fa_qry,
+                        region_flag=region_flag,
+                        ref_fa_name=REF_FA,
+                        qry_fa_name=input.fa_qry,
                         align_lift=align_lift,
                         k_util=k_util,
                         nc_ref=None,
@@ -235,7 +241,7 @@ rule call_inv_part:
                         init_expand=pav_params.inv_init_expand,
                         min_kmers=pav_params.inv_min_kmers,
                         max_ref_kmer_count=pav_params.inv_max_ref_kmer_count,
-                        kde=kde,
+                        kde_model=kde_model,
                         log=log_file
                     )
 
@@ -245,6 +251,8 @@ rule call_inv_part:
 
                 # Save inversion call
                 if inv_call is not None:
+                    if pav_params.debug:
+                        print(f'Found inversion: {inv_call}')
 
                     # Get seq
                     seq = pavlib.seq.region_seq_fasta(
@@ -636,9 +644,9 @@ rule call_inv_cluster:
         cluster_win_min = pav_params.inv_sig_cluster_win
 
         if wildcards.vartype == 'indel':
-            cluster_min = pav_params.inv_sig_cluster_min_indel
+            cluster_min = pav_params.inv_sig_cluster_indel_min
         elif wildcards.vartype == 'snv':
-            cluster_min = pav_params.inv_sig_cluster_min_snv
+            cluster_min = pav_params.inv_sig_cluster_snv_min
         else:
             raise RuntimeError('Bad variant type {}: Expected "indel" or "snv"')
 

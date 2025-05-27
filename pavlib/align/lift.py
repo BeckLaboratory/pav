@@ -435,51 +435,42 @@ class AlignLift:
         row = self.df.loc[index]
 
         # Build lift trees
-        ref_bp = row['POS']
-        qry_bp = 0
+        ref_pos = row['POS']
+        qry_pos = 0
 
         itree_ref = intervaltree.IntervalTree()
         itree_qry = intervaltree.IntervalTree()
 
-        # Get CIGAR and check query start position
-        cigar_op_list = list(op.as_tuples(self.df.loc[index]))
-
-        clipped_bp = 0
-
-        cigar_index = 0
-
-        while cigar_index < len(cigar_op_list) and cigar_op_list[cigar_index][0] in op.CLIP_SET:
-            clipped_bp += cigar_op_list[cigar_index][1]
-            cigar_index += 1
+        op_arr = op.cigar_as_array(self.df.loc[index, 'CIGAR'])
 
         # Build trees
-        for cigar_op, cigar_len in cigar_op_list:
+        for cigar_op, cigar_len in op_arr:
 
             if cigar_op in op.ALIGN_SET:
+                ref_end = ref_pos + cigar_len
+                qry_end = qry_pos + cigar_len
 
-                itree_ref[ref_bp:(ref_bp + cigar_len)] = (qry_bp, qry_bp + cigar_len)
-                itree_qry[qry_bp:(qry_bp + cigar_len)] = (ref_bp, ref_bp + cigar_len)
+                itree_ref[ref_pos:ref_end] = (qry_pos, qry_end)
+                itree_qry[qry_pos:qry_end] = (ref_pos, ref_end)
 
-                ref_bp += cigar_len
-                qry_bp += cigar_len
+                ref_pos = ref_end
+                qry_pos = qry_end
 
             elif cigar_op == op.I:
 
-                itree_qry[qry_bp:(qry_bp + cigar_len)] = (ref_bp, ref_bp + 1)
+                qry_end = qry_pos + cigar_len
 
-                qry_bp += cigar_len
+                itree_qry[qry_pos:qry_end] = (ref_pos, ref_pos + 1)
+
+                qry_pos = qry_end
 
             elif cigar_op == op.D:
-
-                itree_ref[ref_bp:(ref_bp + cigar_len)] = (qry_bp, qry_bp + 1)
-
-                ref_bp += cigar_len
+                ref_end = ref_pos + cigar_len
+                itree_ref[ref_pos:ref_end] = (qry_pos, qry_pos + 1)
+                ref_pos = ref_end
 
             elif cigar_op in op.CLIP_SET:
-
-                qry_bp += cigar_len
-
-                clipped_bp += cigar_len
+                qry_pos += cigar_len
 
             else:
                 row = self.df.loc[index]

@@ -75,7 +75,7 @@ def get_colors_pass_fail(color_dict, lighten_amt=0.25):
     }
 
     for key, color in color_dict.items():
-        color_dict_out[(key, False)] = pavlib.fig.util.lighten_color(color, lighten_amt)
+        color_dict_out[(key, False)] = pavlib.fig.lighten_color(color, lighten_amt)
 
     return color_dict_out
 
@@ -701,6 +701,13 @@ rule tracks_lgsv_insdelinv_bed:
             ]
         ).sort_values(['#CHROM', 'POS', 'END'])
 
+        if 'DUP_REGION' in df.columns:
+            # TEMP: Eliminate once DUP_REGION has been renamed by the LGSV caller
+            df.columns = [{'DUP_REGION': 'TEMPL_REGION'}.get(col, col) for col in df.columns]
+
+        elif 'TEMPL_REGION' not in df.columns:
+            df['TEMPL_REGION'] = np.nan
+
         # Read FAI and table columns
         df_fai = svpoplib.ref.get_df_fai(input.fai)
 
@@ -712,7 +719,33 @@ rule tracks_lgsv_insdelinv_bed:
             )['FIELD']
         )
 
-        df = df.loc[:, [col for col in df.columns if col in field_set]]
+        col_order = [col for col in df.columns if col in field_set]
+
+        df = df.loc[:, col_order]
+
+        # Add templated loci
+        df_templ_list = list()
+
+        for index, row in df.loc[~ pd.isnull(df['TEMPL_REGION'])].iterrows():
+
+            templ_region_list = [
+                pavlib.seq.region_from_string(val_strip) for val in row['TEMPL_REGION'].split(',') if (val_strip := val.strip())
+            ]
+
+            n_region = len(templ_region_list)
+            n = 0
+
+            for templ_region in templ_region_list:
+                n += 1
+                templ_row = row.copy()
+
+                templ_row['ID'] = row['ID'].strip() + f' templ ({n} / {n_region})'
+                templ_row['SVTYPE'] = 'DUP'
+
+                df_templ_list.append(templ_row)
+
+        if len(df_templ_list) > 0:
+            df = pd.concat([df, pd.DataFrame(df_templ_list)]).sort_values(['#CHROM', 'POS', 'END'])
 
         # Make BigBed
         track_name = 'LGSVVariantTableSV'

@@ -11,6 +11,7 @@ COL	uint	reserved	"Blue (insertion), red (deletion), green (inversion)"	"Blue (i
 SVTYPE	string	svType	SV type	Variant type
 SVLEN	uint	svLen	SV length	Variant size
 FILTER	string	filter	Filter	Variant filter (PASS or a comma-separated list of fail keywords).
+RESOLVED_TEMPL	string	resTEmpl	Templ. Resolved	"True if templated sites are resolved, False if large regions of the SV are unaligned."
 HAP	string	haplotype	Haplotype	Haplotype variant was discovered on.
 QRY_REGION	lstring	qryRegion	Query region	Query region
 QRY_STRAND	char[1]	qryStrand	Query orientation	Orientation vs reference of lead contig
@@ -32,3 +33,4 @@ REGION_QRY_INNER	lstring	rgnQryInner	Rgn Qry Inner	INV inner region (qry)
 REGION_QRY_OUTER	lstring	rgnQryOuter	Rgn Qry Outer	INV outer region (qry)
 ALIGN_SIZE_GAP	string	alnGap	Align gap	Difference between reference and query regions for INV
 INTERVAL	lstring	lgInterval	Align record interavl	Interval in the alignment records  (mostly used for debugging).
+TEMPL_REGION	lstring	templReg	Templ. Region	Comma-separated list of regions that were templated.

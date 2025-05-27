@@ -805,6 +805,8 @@ rule call_cigar:
         bed_snv=temp('temp/{asm_name}/cigar/partition/snv_{hap}_{part}-of-{part_count}.bed.gz')
     run:
 
+        pav_config = pavlib.pavconfig.ConfigParams(wildcards.asm_name, config, ASM_TABLE)
+
         # noinspection PyUnresolvedReferences
         partition = int(wildcards.part)
 
@@ -818,17 +820,24 @@ rule call_cigar:
         df_align = df_align.loc[df_align['#CHROM'].isin(chrom_set)]
 
         # Call
-        df_snv, df_insdel = pavlib.cigarcall.make_insdel_snv_calls(df_align, REF_FA, input.qry_fa_name, wildcards.hap, version_id=False)
+        df_snv, df_insdel = pavlib.cigarcall.make_insdel_snv_calls(
+            df_align=df_align,
+            ref_fa_name=REF_FA,
+            qry_fa_name=input.qry_fa_name,
+            hap=wildcards.hap,
+            version_id=False,
+            debug=pav_config.debug
+        )
 
-        # Read trimmed alignments
-        df_trim = pd.read_csv(
-            input.bed_trim, sep='\t', usecols=['QRY_POS', 'QRY_END', 'INDEX'],
-            index_col='INDEX'
-        ).astype(int)
-
-        # Set TRIM filter
-        df_snv['FILTER'] = pavlib.call.filter_by_align(df_snv, df_trim, 'TRIM')
-        df_insdel['FILTER'] = pavlib.call.filter_by_align(df_insdel, df_trim, 'TRIM')
+        # # Read trimmed alignments
+        # df_trim = pd.read_csv(
+        #     input.bed_trim, sep='\t', usecols=['QRY_POS', 'QRY_END', 'INDEX'],
+        #     index_col='INDEX'
+        # ).astype(int)
+        #
+        # # Set TRIM filter
+        # df_snv['FILTER'] = pavlib.call.filter_by_align(df_snv, df_trim, 'TRIM')
+        # df_insdel['FILTER'] = pavlib.call.filter_by_align(df_insdel, df_trim, 'TRIM')
 
         # Write
         df_insdel.to_csv(output.bed_insdel, sep='\t', index=False, compression='gzip')

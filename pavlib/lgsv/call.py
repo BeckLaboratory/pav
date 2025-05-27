@@ -118,18 +118,28 @@ class VarRegionKde:
                 self.try_var = True
                 return
 
-            if self.df_kde is not None:
+            self.df_rl = kde.rl_encoder(self.df_kde)
 
-                kmer_n_kde = self.df_kde.shape[0]  # Number of k-mers not dropped by KDE (found in both query and ref in either orientation)
+            # Subset the run-length (RL) table to those in just the variant region, cut the flanks.
+            expand_l = interval.region_qry.pos - region_qry_exp.pos
+            expand_r = region_qry_exp.end - interval.region_qry.end
 
-                self.df_rl = kde.rl_encoder(self.df_kde)
+            df_kde_noexp = self.df_kde.loc[
+                (self.df_kde['INDEX'] > expand_l) & (self.df_kde['INDEX'] < len(region_qry_exp) - expand_r)
+            ].reset_index(drop=True)
 
-                qry_len_rl = np.sum(self.df_rl['LEN_QRY'])
+            if df_kde_noexp.shape[0] > 0:
+
+                df_rl_sv = kde.rl_encoder(df_kde_noexp)
+
+                kmer_n_kde = df_rl_sv.shape[0]  # Number of k-mers not dropped by KDE (found in both query and ref in either orientation)
+
+                qry_len_rl = np.sum(df_rl_sv['LEN_QRY'])
 
                 if qry_len_rl > 0:
-                    prop_rev = np.sum(self.df_rl.loc[self.df_rl['STATE'] == inv.KDE_STATE_REV, 'LEN_KDE']) / qry_len_rl
-                    prop_fwdrev = np.sum(self.df_rl.loc[self.df_rl['STATE'] == inv.KDE_STATE_FWDREV, 'LEN_KDE']) / qry_len_rl
-                    prop_fwd = np.sum(self.df_rl.loc[self.df_rl['STATE'] == inv.KDE_STATE_FWD, 'LEN_KDE']) / qry_len_rl
+                    prop_rev = np.sum(df_rl_sv.loc[df_rl_sv['STATE'] == inv.KDE_STATE_REV, 'LEN_KDE']) / qry_len_rl
+                    prop_fwdrev = np.sum(df_rl_sv.loc[df_rl_sv['STATE'] == inv.KDE_STATE_FWDREV, 'LEN_KDE']) / qry_len_rl
+                    prop_fwd = np.sum(df_rl_sv.loc[df_rl_sv['STATE'] == inv.KDE_STATE_FWD, 'LEN_KDE']) / qry_len_rl
                 else:
                     prop_rev = 0.0
                     prop_fwdrev = 0.0
@@ -138,7 +148,7 @@ class VarRegionKde:
                 # If forward k-mers make most of the original sequence, do not try a variant. The alignment dropped here, but
                 # sequences are similar. Additional methods are needed to refine the missing alignments for these sequences,
                 # which PAV currently does not have. This prevents false substitution CSVs (INS + DEL) will be created.
-                if np.sum(self.df_kde['STATE'] == 0) / kmer_n > qry_ref_max_ident:
+                if np.sum(df_rl_sv['STATE'] == 0) / kmer_n > qry_ref_max_ident:
                     return
 
                 # Try a non-INV variant call if tests to this point have passed.
@@ -177,6 +187,9 @@ class VarRegionKde:
 
                         if prop_mer < 0.5:
                             self.try_inv = False
+            else:
+                # Non-expanded KDE skipped
+                self.try_var = True
 
         else:
             # KDE skipped
@@ -313,12 +326,9 @@ def call_from_interval(start_index, end_index, df_align, caller_resources, min_s
         variant_call = try_variant(
             ComplexVariant, interval, caller_resources, variant_call, var_region_kde
         )
+
     else:
         variant_call = PatchVariant(interval)
-
-    if not variant_call.is_null():
-        if (not interval.is_anchor_pass) or interval.aligned_pass_prop < caller_resources.pav_params.lg_cpx_min_aligned_prop:
-            variant_call.filter = interval.align_filters if interval.align_filters else align.records.FILTER_LCALIGN
 
     if caller_resources.verbose:
         print(f'Call ({variant_call.filter}): interval=({interval.chain_node.start_index}, {interval.chain_node.end_index}), var={variant_call}', file=caller_resources.log_file, flush=True)

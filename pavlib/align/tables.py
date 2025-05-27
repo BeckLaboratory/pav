@@ -695,9 +695,6 @@ def align_bed_to_depth_bed(df, df_fai=None, index_sep=',', retain_filtered=False
 
     align_list = sorted(align_list)
 
-    if align_list[0][2] != 1:
-        raise RuntimeError(f'First alignment is not a record start: {",".join([str(val) for val in align_list[0]])}')
-
     # Setup to process BED records
     df_bed_list = list()
 
