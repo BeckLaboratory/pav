@@ -79,7 +79,7 @@ class Region(object):
         :return: Coordinate string in 1-based closed coordinates (Samtools, UCSC browser).
         """
 
-        return self.to_base1_string()
+        return '{}:{}-{}'.format(self.chrom, self.pos + 1, self.end)
 
     def to_base1_string(self):
         """
@@ -383,12 +383,12 @@ def region_seq_fasta(region, fa_file_name, rev_compl=None):
 
         return sequence
 
-def variant_seq_from_region(df, fa_file_name, region_col='QRY_REGION', strand_col='QRY_STRAND', id_col='ID', seq_upper=False):
+def variant_seq_from_region(df, fa_filename, region_col=('QRY_ID', 'QRY_POS', 'QRY_END'), strand_col='QRY_STRAND', id_col='ID', seq_upper=False):
     """
     Get sequence from an indexed FASTA file. FASTA must have ".fai" index.
 
     :param df: Variant DataFrame.
-    :param fa_file_name: FASTA file name.
+    :param fa_filename: FASTA file name.
     :param region_col: Region column name.
     :param strand_col: Strand column name. If column is "-" or `True`, the sequence is reverse complemented. Must be
         "+", "-", `True`, or `False`. The boolean values allow "IS_REV" column to be used where the sequence is on
@@ -402,16 +402,13 @@ def variant_seq_from_region(df, fa_file_name, region_col='QRY_REGION', strand_co
     if df is None:
         raise RuntimeError('Variant DataFrame is missing')
 
-    fa_file_name = fa_file_name.strip() if fa_file_name is not None else None
+    fa_file_name = fa_filename.strip() if fa_filename is not None else None
 
     if fa_file_name is None or len(fa_file_name) == 0:
         raise RuntimeError('FASTA file name is missing')
 
     if not os.path.isfile(fa_file_name):
         raise RuntimeError(f'FASTA file does not exist or is not a regular file: {fa_file_name}')
-
-    if region_col not in df.columns:
-        raise RuntimeError(f'Region column not found in DataFrame: "{region_col}"')
 
     if strand_col is not None and strand_col not in df.columns:
         raise RuntimeError(f'Strand column not found in DataFrame: "{strand_col}"')
@@ -431,11 +428,26 @@ def variant_seq_from_region(df, fa_file_name, region_col='QRY_REGION', strand_co
         dup_ids = ', '.join(dup_ids[3:]) + (', ...' if n_dup > 3 else '')
         raise RuntimeError(f'Found {n_dup} duplicate IDs in DataFrame: "{id_col}": {dup_ids}')
 
+    # Get regions
+    if isinstance(region_col, str):
+        if region_col not in df.columns:
+            raise RuntimeError(f'Region column not found in DataFrame: "{region_col}"')
+
+        df_region = df[region_col].apply(region_from_string)
+
+    elif isinstance(region_col, (list, tuple)):
+        if len(region_col) != 3:
+            raise RuntimeError(f'Expected 3 columns for region column: "{region_col}"')
+
+        df_region = df[list(region_col)].apply(lambda row: Region(*row), axis=1)
+
+    else:
+        raise RuntimeError(f'Unrecognized region column type: "{region_col}"')
+
+    # Extract sequences
     with io.FastaReader(fa_file_name) as fa_file:
 
-        for index, row in df.iterrows():
-
-            region = region_from_string(row[region_col])
+        for region, qry_strand, var_id in zip(df_region, df[strand_col], df[id_col]):
 
             seq = Bio.Seq.Seq(fa_file.fetch(region.chrom, region.pos, region.end))
 
@@ -443,12 +455,11 @@ def variant_seq_from_region(df, fa_file_name, region_col='QRY_REGION', strand_co
                 seq = seq.upper()
 
             if strand_col is not None:
-                if row[strand_col] in {'-', True}:
+                if qry_strand in {'-', True}:
                     seq = seq.reverse_complement()
-                elif row[strand_col] not in {'+', False}:
+                elif qry_strand not in {'+', False}:
                     raise RuntimeError(f'Unrecognized strand in record {row[id_col]}: "{row[strand_col]}"')
 
             yield Bio.SeqRecord.SeqRecord(
-                seq, id=row[id_col], description=''
+                seq, id=var_id, description='', name=''
             )
-

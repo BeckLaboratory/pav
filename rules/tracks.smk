@@ -504,7 +504,7 @@ rule tracks_lgsv_all:
 rule tracks_lgsv_cpx_bed:
     input:
         bed_cpx='results/{asm_name}/lgsv/sv_cpx_{hap}.bed.gz',
-        bed_cpx_seg='results/{asm_name}/lgsv/segment_cpx_{hap}.bed.gz',
+        bed_seg='results/{asm_name}/lgsv/segment_{hap}.bed.gz',
         bed_cpx_ref='results/{asm_name}/lgsv/reftrace_cpx_{hap}.bed.gz',
         fai=REF_FAI
     output:
@@ -536,7 +536,7 @@ rule tracks_lgsv_cpx_bed:
             usecols=['#CHROM', 'POS', 'END', 'ID', 'TYPE', 'DEPTH', 'INDEX', 'FWD_COUNT', 'REV_COUNT']
         )[['#CHROM', 'POS', 'END', 'ID', 'TYPE', 'DEPTH', 'INDEX', 'FWD_COUNT', 'REV_COUNT']]
 
-        df_seg_all = pd.read_csv(input.bed_cpx_seg, sep='\t', low_memory=False)
+        df_seg_all = pd.read_csv(input.bed_seg, sep='\t', low_memory=False)
 
         # Read FAI and table columns
         df_fai = svpoplib.ref.get_df_fai(input.fai)

@@ -125,7 +125,8 @@ def get_inv_from_record(row):
         raise RuntimeError(f'Missing columns in row: {", ".join(missing_col)}')
 
     region_ref = seq.Region(row['#CHROM'], row['POS'], row['END'])
-    region_qry = seq.region_from_string(row['QRY_REGION'], is_rev=row['QRY_STRAND'] == '-')
+    region_qry = seq.Region(row['QRY_ID'], row['QRY_POS'], row['QRY_END'], is_rev=row['QRY_STRAND'] == '-')
+    # region_qry = seq.region_from_string(row['QRY_REGION'], is_rev=row['QRY_STRAND'] == '-')
 
     return InvCall(
         region_ref=region_ref,

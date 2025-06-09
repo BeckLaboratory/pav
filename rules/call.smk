@@ -5,10 +5,12 @@ Call variants from aligned contigs.
 import Bio.bgzf
 import Bio.SeqIO
 import collections
+import gzip
 import intervaltree
 import numpy as np
 import os
 import pandas as pd
+import polars as pl
 import sys
 
 import pavlib
@@ -31,27 +33,32 @@ localrules: call_all_bed
 
 rule call_all_bed:
     input:
-        bed=lambda wildcards: pavlib.pipeline.expand_pattern(
+        bed_pass=lambda wildcards: pavlib.pipeline.expand_pattern(
             'results/{asm_name}/bed_merged/{filter}/{vartype_svtype}.bed.gz', ASM_TABLE, config,
-            vartype_svtype=('svindel_ins', 'svindel_del', 'sv_inv', 'snv_snv'), filter=('pass', 'fail')
+            vartype_svtype=('svindel_ins', 'svindel_del', 'sv_inv', 'snv_snv'), filter=('pass',)
+        ),
+        bed_fail=lambda wildcards: pavlib.pipeline.expand_pattern(
+            'results/{asm_name}/bed_merged/{filter}/{vartype_svtype}.bed.gz', ASM_TABLE, config,
+            vartype_svtype=('svindel_ins', 'svindel_del', 'sv_inv', 'snv_snv'), filter=('fail',)
         )
+
 
 
 # Concatenate variant BED files from batched merges - non-SNV (has variant FASTA).
 # noinspection PyTypeChecker
 rule call_merge_haplotypes:
     input:
-        bed_batch=lambda wildcards: [
-            'temp/{asm_name}/bed/batch/{filter}/{vartype_svtype}/{part}-of-{part_count}.bed.gz'.format(
-                asm_name=wildcards.asm_name, filter=wildcards.filter, vartype_svtype=wildcards.vartype_svtype, part=part, part_count=part_count
-            ) for part in range(get_config("merge_partitions", wildcards)) for part_count in (get_config("merge_partitions", wildcards),)
-        ]
+        bed_batch=lambda wildcards: pavlib.pipeline.expand_pattern(
+            'temp/{asm_name}/bed/merge_hap/{filter}/{vartype_svtype}/{part}-of-{part_count}.bed.gz', ASM_TABLE, config,
+            part=range(get_config("merge_partitions", wildcards)), part_count=(get_config("merge_partitions", wildcards),),
+            filter=wildcards.filter, vartype_svtype=wildcards.vartype_svtype
+        )
     output:
         bed='results/{asm_name}/bed_merged/{filter}/{vartype_svtype}.bed.gz',
         fa='results/{asm_name}/bed_merged/{filter}/fa/{vartype_svtype}.fa.gz'
     wildcard_constraints:
         filter='pass|fail',
-        vartype_svtype='svindel_ins|svindel_del|sv_inv'
+        vartype_svtype='svindel_ins|svindel_del|sv_inv|sv_cpx'
     run:
 
         df_list = [pd.read_csv(file_name, sep='\t') for file_name in input.bed_batch if os.stat(file_name).st_size > 0]
@@ -74,11 +81,11 @@ rule call_merge_haplotypes:
 # Concatenate variant BED files from batched merges - SNV (no variant FASTA).
 rule call_merge_haplotypes_snv:
     input:
-        bed_batch=lambda wildcards: [
-            'temp/{asm_name}/bed/batch/{filter}/snv_snv/{part}-of-{part_count}.bed.gz'.format(
-                asm_name=wildcards.asm_name, filter=wildcards.filter, part=part, part_count=part_count
-            ) for part in range(get_config("merge_partitions", wildcards)) for part_count in (get_config("merge_partitions", wildcards),)
-        ]
+        bed_batch=lambda wildcards: pavlib.pipeline.expand_pattern(
+            'temp/{asm_name}/bed/merge_hap/{filter}/snv_snv/{part}-of-{part_count}.bed.gz', ASM_TABLE, config,
+            part=range(get_config("merge_partitions", wildcards)), part_count=(get_config("merge_partitions", wildcards),),
+            filter=wildcards.filter
+        )
     output:
         bed='results/{asm_name}/bed_merged/{filter}/snv_snv.bed.gz'
     wildcard_constraints:
@@ -97,72 +104,80 @@ rule call_merge_haplotypes_snv:
         )
 
 # Merge by batches.
-# noinspection PyTypeChecker
-# noinspection PyUnresolvedReferences
 rule call_merge_haplotypes_batch:
     input:
-        tsv_part=lambda wildcards: f'data/ref/partition_{get_config("merge_partitions", wildcards)}.tsv.gz',
-        bed_var=lambda wildcards: [
-            'results/{asm_name}/bed_hap/{filter}/{hap}/{vartype_svtype}.bed.gz'.format(hap=hap, **wildcards)
-                for hap in pavlib.pipeline.get_hap_list(wildcards.asm_name, ASM_TABLE)
-        ],
-        fa_var=lambda wildcards: [
-            'results/{asm_name}/bed_hap/{filter}/{hap}/fa/{vartype_svtype}.fa.gz'.format(hap=hap, **wildcards)
-                for hap in pavlib.pipeline.get_hap_list(wildcards.asm_name, ASM_TABLE)
-        ] if wildcards.vartype_svtype != 'snv_snv' else [],
-        bed_callable=lambda wildcards: [
-            'results/{asm_name}/callable/callable_regions_{hap}_500.bed.gz'.format(hap=hap, **wildcards)
-                for hap in pavlib.pipeline.get_hap_list(wildcards.asm_name, ASM_TABLE)
-        ]
+        tsv_part=lambda wildcards: f'data/ref/partition_{get_config('merge_partitions', wildcards)}.tsv.gz',
+        bed_var=lambda wildcards: pavlib.pipeline.expand_pattern(
+            (
+                'results/{asm_name}/bed_hap/{hap}/pass_{vartype_svtype}.bed.parquet'
+                    if wildcards.filter == 'pass' else
+                        'results/{asm_name}/bed_hap/{hap}/fail/fail_{vartype_svtype}.bed.parquet'
+            ), ASM_TABLE, config,
+            asm_name=wildcards.asm_name, vartype_svtype=wildcards.vartype_svtype, hap=pavlib.pipeline.get_hap_list(wildcards.asm_name, ASM_TABLE)
+        ),
+        bed_callable=lambda wildcards: pavlib.pipeline.expand_pattern(
+            'results/{asm_name}/callable/callable_regions_{hap}_500.bed.gz', ASM_TABLE, config,
+                asm_name=wildcards.asm_name, hap=pavlib.pipeline.get_hap_list(wildcards.asm_name, ASM_TABLE)
+        )
     output:
-        bed='temp/{asm_name}/bed/batch/{filter}/{vartype_svtype}/{part}-of-{part_count}.bed.gz'
+        bed='temp/{asm_name}/bed/merge_hap/{filter}/{vartype_svtype}/{part}-of-{part_count}.bed.gz'
     wildcard_constraints:
-        filter='pass|fail'
+        filter='pass|fail',
+        vartype_svtype='svindel_ins|svindel_del|sv_inv|sv_cpx|snv_snv'
     threads: 12
     run:
 
+        pav_params = pavlib.pavconfig.ConfigParams(wildcards.asm_name, config, ASM_TABLE)
+
+        config_def = pavlib.call.get_merge_params(wildcards.vartype_svtype.split('_')[1], pav_params)
+
+        variant_pattern = (
+            'results/{asm_name}/bed_hap/{hap}/pass_{vartype_svtype}.bed.parquet'
+                if wildcards.filter == 'pass' else
+                    'results/{asm_name}/bed_hap/{hap}/fail/fail_{vartype_svtype}.bed.parquet'
+        )
+
+        callable_pattern = 'results/{asm_name}/callable/callable_regions_{hap}_500.bed.gz'
+
         hap_list = pavlib.pipeline.get_hap_list(wildcards.asm_name, ASM_TABLE)
 
+        is_cpx = wildcards.vartype_svtype == 'sv_cpx'
+
+        # Get a list of chromosomes in this batch
+        chrom_list = pl.scan_csv(
+            input.tsv_part, separator='\t'
+        ).filter(
+            pl.col('PARTITION') == int(wildcards.part)
+        ).select(
+            pl.col('CHROM').unique()
+        ).collect().to_series().sort().to_list()
+
         # Read batch table
-        df_part = pd.read_csv(input.tsv_part, sep='\t')
-        df_part = df_part.loc[df_part['BATCH'] == int(wildcards.batch)]
+        bed_list = [
+            pl.scan_parquet(
+                variant_pattern.format(hap=hap, **wildcards)
+            ).filter(
+                pl.col('#CHROM').is_in(
+                    chrom_list
+                )
+            ).collect(
+            ).to_pandas(
+            ).set_index(
+                'ID', drop=False
+            )
+                for hap in hap_list
+        ]
 
-        subset_chrom = set(df_part['CHROM'])
-
-        # Get variant type
-        var_svtype_list = wildcards.vartype_svtype.split('_')
-
-        if len(var_svtype_list) != 2:
-            raise RuntimeError('Wildcard "vartype_svtype" must be two elements separated by an underscore: {}'.format(wildcards.vartype_svtype))
-
-        # Read variant tables
-        bed_list = list()
-
-        for index in range(len(hap_list)):
-
-            # Read variant table
-            df = pd.read_csv(input.bed_var[index], sep='\t', dtype={'#CHROM': str}, low_memory=False)
-            df = df.loc[df['#CHROM'].isin(subset_chrom)]
-
-            df.set_index('ID', inplace=True, drop=False)
+        for df in bed_list:
             df.index.name = 'INDEX'
 
-            # Read SEQ
-            if df.shape[0] > 0 and len(input.fa_var) > 0:
-                df['SEQ'] = pd.Series({
-                    record.id: str(record.seq)
-                        for record in svpoplib.seq.fa_to_record_iter(
-                            input.fa_var[index], record_set=set(df['ID'])
-                        )
-                })
-            else:
-                df['SEQ'] = np.nan
-
-            bed_list.append(df)
+        # Transform CPX
+        if is_cpx:
+            for df in bed_list:
+                df['_END_ORG'] = df['END']
+                df['END'] = df['POS'] + df['SVLEN']
 
         # Get configured merge definition
-        config_def = pavlib.call.get_merge_params(wildcards, get_config(wildcards))
-
         print('Merging with def: ' + config_def)
         sys.stdout.flush()
 
@@ -175,6 +190,13 @@ rule call_merge_haplotypes_batch:
             threads=threads
         )
 
+        # Restore CPX transformation
+        if is_cpx:
+            for df in bed_list:
+                df['END'] = df['_END_ORG']
+                del df['_END_ORG']
+
+        # Write
         df.to_csv(output.bed, sep='\t', index=False, compression='gzip')
 
 
@@ -238,265 +260,433 @@ localrules: call_all_bed_hap
 
 rule call_all_bed_hap:
     input:
-        bed=lambda wildcards: pavlib.pipeline.expand_pattern(
-            'results/{asm_name}/bed_hap/{filter}/{hap}/{vartype_svtype}.bed.gz', ASM_TABLE, config,
-            filter=('pass', 'fail'), vartype_svtype=('svindel_ins', 'svindel_del', 'sv_inv', 'snv_snv')
+        bed_pass=lambda wildcards: pavlib.pipeline.expand_pattern(
+            'results/{asm_name}/bed_hap/{hap}/pass_{vartype_svtype}.bed.parquet', ASM_TABLE, config,
+            vartype_svtype=('svindel_ins', 'svindel_del', 'sv_inv', 'snv_snv', 'sv_cpx')
         ),
-        fa=lambda wildcards: pavlib.pipeline.expand_pattern(
-            'results/{asm_name}/bed_hap/fail/{hap}/fa/{vartype_svtype}.fa.gz', ASM_TABLE, config,
-            vartype_svtype=('svindel_ins', 'svindel_del', 'sv_inv')
-        ),
-        fa_red=lambda wildcards: pavlib.pipeline.expand_pattern(
-            'results/{asm_name}/bed_hap/fail/{hap}/redundant/fa/{vartype_svtype}.fa.gz', ASM_TABLE, config,
-            vartype_svtype=('svindel_ins', 'svindel_del', 'sv_inv')
-        )
-
-# Create PASS BEDs
-localrules: call_all_bed_pass
-
-rule call_all_bed_pass:
-    input:
-        bed=lambda wildcards: pavlib.pipeline.expand_pattern(
-            'results/{asm_name}/bed_hap/pass/{hap}/{vartype_svtype}.bed.gz', ASM_TABLE, config,
+        bed_fail=lambda wildcards: pavlib.pipeline.expand_pattern(
+            'results/{asm_name}/bed_hap/{hap}/fail/fail_{vartype_svtype}.bed.parquet', ASM_TABLE, config,
             vartype_svtype=('svindel_ins', 'svindel_del', 'sv_inv', 'snv_snv')
         )
 
-# Write FASTA files for non-PASS variants (not in the redundant set)
-rule call_integrate_fail_fa:
+# Create PASS BEDs
+localrules: call_all_bed_hap_pass
+
+rule call_all_bed_hap_pass:
     input:
-        bed='results/{asm_name}/bed_hap/fail/{hap}/{vartype_svtype}.bed.gz',
-        fa='temp/{asm_name}/bed_hap/fail/{hap}/fa/{vartype_svtype}.fa.gz'
-    output:
-        fa='results/{asm_name}/bed_hap/fail/{hap}/fa/{vartype_svtype}.fa.gz'
-    run:
-
-        id_set = set(pd.read_csv(input.bed, sep='\t', usecols=['ID',])['ID'])
-
-        with Bio.bgzf.BgzfWriter(output.fa) as out_file:
-            Bio.SeqIO.write(
-                svpoplib.seq.fa_to_record_iter(input.fa, record_set=id_set),
-                out_file, 'fasta'
-            )
-
-# Write FASTA files for non-PASS variants (not in the redundant set)
-rule call_integrate_fail_redundant_fa:
-    input:
-        bed='results/{asm_name}/bed_hap/fail/{hap}/redundant/{vartype_svtype}.bed.gz',
-        fa='temp/{asm_name}/bed_hap/fail/{hap}/fa/{vartype_svtype}.fa.gz'
-    output:
-        fa='results/{asm_name}/bed_hap/fail/{hap}/redundant/fa/{vartype_svtype}.fa.gz'
-    run:
-
-        id_set = set(pd.read_csv(input.bed, sep='\t', usecols=['ID',])['ID'])
-
-        with Bio.bgzf.BgzfWriter(output.fa) as out_file:
-            Bio.SeqIO.write(
-                svpoplib.seq.fa_to_record_iter(input.fa, record_set=id_set),
-                out_file, 'fasta'
-            )
-
-# Separate multiple calls removed by the TRIM filter at the same site. Calls are separated to the "redundant"
-# if they intersect a PASS variant. If there are multiple failed calls that do not intersect a PASS variant, then
-# the one from the best alignment (highest QV, then longest alignment, then earliest start position) is chosen.
-rule call_integrate_filter_redundant:
-    input:
-        bed='temp/{asm_name}/bed_hap/fail/{hap}/{vartype_svtype}.bed.gz',
-        tsv='results/{asm_name}/bed_hap/fail/{hap}/redundant/intersect_{vartype_svtype}.tsv.gz'
-    output:
-        bed_nr='results/{asm_name}/bed_hap/fail/{hap}/{vartype_svtype}.bed.gz',
-        bed_red='results/{asm_name}/bed_hap/fail/{hap}/redundant/{vartype_svtype}.bed.gz'
-    run:
-
-        # Read all FAIL variants
-        df = pd.read_csv(input.bed, sep='\t', dtype={'#CHROM': str}, low_memory=False)
-
-        # Initialize IDs acceptned into the NR (nonredundant) set with non-TRIM variants from df
-        id_set = set(df.loc[df['FILTER'].apply(lambda val: 'TRIM' not in val.split(',')), 'ID'])
-
-        # Get lead variant IDs for each set
-        df_int = pd.read_csv(input.tsv, sep='\t', low_memory=False)
-
-        df_int = df_int.loc[df_int['VARIANTS'].apply(lambda val: len(set(val.split(',')) & id_set) == 0)]  # Remove records that were already accepted into the NR set
-
-        df_int = df_int.loc[df_int['SOURCE'].apply(lambda val: not val.startswith('PASS'))]  # Drop PASS records appearing in the PASS set
-
-        id_set |= set(df_int['VARIANTS'].apply(lambda val: val.split(',')[0]))  # Choose the first of the merged set to represent all the other failed variants from other aligned segments at this site
-
-        # Split variants and write
-        df_nr = df.loc[df['ID'].isin(id_set)]
-
-        df_red = df.loc[~ df.index.isin(set(df_nr.index))]
-
-        df_nr.to_csv(output.bed_nr, sep='\t', index=False, compression='gzip')
-        df_red.to_csv(output.bed_red, sep='\t', index=False, compression='gzip')
-
-
-# Concatenate variant BED files from batched merges.
-# noinspection PyTypeChecker
-rule call_intersect_fail:
-    input:
-        tsv=lambda wildcards: [
-            'temp/{asm_name}/bed_hap/fail/{hap}/intersect/{vartype_svtype}_{part}-of-{part_count}.tsv.gz'.format(
-                asm_name=wildcards.asm_name, hap=wildcards.hap, vartype_svtype=wildcards.vartype_svtype, part=part, part_count=pavlib.const.MERGE_PART_COUNT
-            ) for part in range(pavlib.const.MERGE_PART_COUNT)
-        ]
-    output:
-        tsv='results/{asm_name}/bed_hap/fail/{hap}/redundant/intersect_{vartype_svtype}.tsv.gz'
-    run:
-
-        df_list = [pd.read_csv(file_name, sep='\t') for file_name in input.tsv if os.stat(file_name).st_size > 0]
-
-        df = pd.concat(
-            df_list, axis=0
-        ).to_csv(
-            output.tsv, sep='\t', index=False, compression='gzip'
+        bed_pass=lambda wildcards: pavlib.pipeline.expand_pattern(
+            'results/{asm_name}/bed_hap/{hap}/pass_{vartype_svtype}.bed.parquet', ASM_TABLE, config,
+            vartype_svtype=('svindel_ins', 'svindel_del', 'sv_inv', 'snv_snv', 'sv_cpx')
         )
 
-
-# Intersect failed calls with FILTER=PASS calls and other failed calls. Used to eliminate redundant failed call
-# annotations.
-# noinspection PyTypeChecker
-# noinspection PyUnresolvedReferences
-rule call_intersect_fail_batch:
+# Remove redundant variants from the FAIL BED.
+rule call_fail_redundant:
     input:
-        bed_pass='results/{asm_name}/bed_hap/pass/{hap}/{vartype_svtype}.bed.gz',
-        bed_fail='temp/{asm_name}/bed_hap/fail/{hap}/{vartype_svtype}.bed.gz',
-        fa_pass=lambda wildcards: ['results/{asm_name}/bed_hap/pass/{hap}/fa/{vartype_svtype}.fa.gz']
-            if wildcards.vartype_svtype != 'snv_snv' else [],
-        fa_fail=lambda wildcards: ['temp/{asm_name}/bed_hap/fail/{hap}/fa/{vartype_svtype}.fa.gz']
-            if wildcards.vartype_svtype != 'snv_snv' else [],
+        bed_pass_ins='results/{asm_name}/bed_hap/{hap}/pass_svindel_ins.bed.parquet',
+        bed_fail_ins='temp/{asm_name}/bed_hap/{hap}/fail_svindel_ins.bed.parquet',
+        bed_pass_del='results/{asm_name}/bed_hap/{hap}/pass_svindel_del.bed.parquet',
+        bed_fail_del='temp/{asm_name}/bed_hap/{hap}/fail_svindel_del.bed.parquet',
+        bed_pass_inv='results/{asm_name}/bed_hap/{hap}/pass_sv_inv.bed.parquet',
+        bed_fail_inv='temp/{asm_name}/bed_hap/{hap}/fail_sv_inv.bed.parquet',
         bed_align='results/{asm_name}/align/trim-none/align_qry_{hap}.bed.gz',
-        tsv_part='data/ref/partition_{part_count}.tsv.gz'
     output:
-        tsv=temp('temp/{asm_name}/bed_hap/fail/{hap}/intersect/{vartype_svtype}_{part}-of-{part_count}.tsv.gz')
-    threads: 1
+        bed_fail_ins='results/{asm_name}/bed_hap/{hap}/fail/fail_svindel_ins.bed.parquet',
+        bed_drop_ins='results/{asm_name}/bed_hap/{hap}/dropped/redundanttrim_svindel_ins.bed.parquet',
+        bed_fail_del='results/{asm_name}/bed_hap/{hap}/fail/fail_svindel_del.bed.parquet',
+        bed_drop_del='results/{asm_name}/bed_hap/{hap}/dropped/redundanttrim_svindel_del.bed.parquet',
+        bed_fail_inv='results/{asm_name}/bed_hap/{hap}/fail/fail_sv_inv.bed.parquet',
+        bed_drop_inv='results/{asm_name}/bed_hap/{hap}/dropped/redundanttrim_sv_inv.bed.parquet'
+    params:
+        ro_threshold_insdel=0.5,
+        ro_threshold_inv=0.2
     run:
 
-        # Get chromosome set for this batch
-        df_part = pd.read_csv(input.tsv_part, sep='\t', low_memory=False)
-        subset_chrom = set(df_part.loc[df_part['PARTITION'] == int(wildcards.part), 'CHROM'])
+        pav_params = pavlib.pavconfig.ConfigParams(wildcards.asm_name, config, ASM_TABLE)
 
-        del df_batch
-
-        if len(subset_chrom) > 0:
-            # Read
-            df_pass = pd.read_csv(
-                input.bed_pass, sep='\t', dtype={'#CHROM': str, 'ALIGN_INDEX': str},
-                usecols=['#CHROM', 'POS', 'END', 'ID', 'SVTYPE', 'SVLEN', 'ALIGN_INDEX', 'FILTER'] + (['ALT', 'REF'] if wildcards.vartype_svtype == 'snv_snv' else []),
-                low_memory=False
-            )
-
-            df_pass = df_pass.loc[df_pass['#CHROM'].isin(subset_chrom)].copy()
-
-            df_fail = pd.read_csv(
-                input.bed_fail, sep='\t',  dtype={'#CHROM': str, 'ALIGN_INDEX': str},
-                usecols=['#CHROM', 'POS', 'END', 'ID', 'SVTYPE', 'SVLEN', 'ALIGN_INDEX', 'FILTER'] + (['ALT', 'REF'] if wildcards.vartype_svtype == 'snv_snv' else []),
-                low_memory=False
-            )
-
-            df_fail = df_fail.loc[df_fail['#CHROM'].isin(subset_chrom)].copy()
-
-            # Add SEQ
-            df_pass.set_index('ID', inplace=True, drop=False)
-            df_pass.index.name = 'INDEX'
-
-            if df_pass.shape[0] > 0 and len(input.fa_pass) > 0:
-                df_pass['SEQ'] = pd.Series({
-                    record.id: str(record.seq)
-                        for record in svpoplib.seq.fa_to_record_iter(
-                            input.fa_pass[0], record_set=set(df_pass['ID'])
-                        )
-                })
-            else:
-                df_pass['SEQ'] = np.nan
-
-            df_fail.set_index('ID', inplace=True, drop=False)
-            df_fail.index.name = 'INDEX'
-
-            if df_fail.shape[0] > 0 and len(input.fa_fail) > 0:
-                df_fail['SEQ'] = pd.Series({
-                    record.id: str(record.seq)
-                        for record in svpoplib.seq.fa_to_record_iter(
-                            input.fa_fail[0], record_set=set(df_fail['ID'])
-                        )
-                })
-            else:
-                df_fail['SEQ'] = np.nan
-
-
-            # Split df_fail into TRIM and non-TRIM, append non-TRIM to df_pass
-            df_fail_trim = df_fail.loc[df_fail['FILTER'].apply(lambda filter_val: 'TRIM' in filter_val)]
-            index_set = set(df_fail_trim.index)
-            df_fail_notrim = df_fail.loc[[index not in index_set for index in df_fail.index]]
-
-            if df_fail_notrim.shape[0] > 0:
-                if df_pass.shape[0] > 0:
-                    df_pass = pd.concat([df_pass, df_fail_notrim], axis=0)
-                else:
-                    df_pass = df_fail_notrim
-
-            df_fail = df_fail_trim
-
-            # Prioritize alignments by MAPQ and length
-            df_align = pd.read_csv(
-                input.bed_align, sep='\t',
-                usecols=['INDEX', 'QRY_POS', 'QRY_END', 'MAPQ'],
-                dtype={'INDEX': int}
-            )
-
-            index_set = {
-                int(val) for val_str in df_fail['ALIGN_INDEX'] for val in str(val_str).split(',')
+        # Read alignment scores
+        df_align_score = pl.scan_csv(
+            input.bed_align, separator='\t',
+            schema_overrides={
+                'INDEX': pl.UInt32,
+                'SCORE': pl.Float32
             }
+        ).select(
+            pl.col.INDEX,
+            pl.col.SCORE.alias('_SCORE')  # Is added to variant frames by join, avoid name conflicts
+        ).collect()
 
-            df_align = df_align.loc[df_align['INDEX'].isin(index_set)]
+        for svtype in ('ins', 'del', 'inv'):
 
-            df_align['LEN'] = df_align['QRY_END'] - df_align['QRY_POS']
+            in_pass_filename = input[f'bed_pass_{svtype}']
+            in_fail_filename = input[f'bed_fail_{svtype}']
+            out_fail_filename = output[f'bed_fail_{svtype}']
+            out_drop_filename = output[f'bed_drop_{svtype}']
 
-            index_list = list(index for index in df_align.sort_values(['MAPQ', 'LEN', 'INDEX'])['INDEX'])
+            # If True, END is POS + SVLEN, otherwise, end is unaltered
+            is_ins_end = svtype == 'ins'
 
-            # For variants with multiple alignment indices, choose the least one.
-            for index_var in df_fail.index:
-                align_index_set = {int(val) for val in df_fail.loc[index_var, 'ALIGN_INDEX'].split(',')}
-                df_fail.loc[index_var, 'ALIGN_INDEX'] = [val for val in index_list if val in align_index_set][-1]
+            # Set RO threshold
+            if svtype == 'inv':
+                ro_threshold = params.ro_threshold_inv
+            else:
+                ro_threshold = params.ro_threshold_insdel
 
-            index_set = set(df_fail['ALIGN_INDEX'])
-            index_list = [val for val in index_list if val in index_set]
+            # Get a list of chromosomes
+            chroms = pl.scan_parquet(
+                in_fail_filename
+            ).select(
+                pl.col('#CHROM').unique()
+            ).collect().to_series().sort()
 
-            # Separate failed variants on alignment index
-            df_list = [(df_pass, 'PASS')]
+            # Process each chromosome
+            drop_index_list = list()
 
-            for index in index_list:
-                df_list.append((df_fail.loc[df_fail['ALIGN_INDEX'] == index], f'TRIM_{index}'))
+            for chrom in chroms:
+                if pav_params.debug:
+                    print(f'Processing {chrom}')
 
-            # Intersect
-            df_intersect = svpoplib.svmerge.merge_variants(
-                bed_list=[val[0] for val in df_list],
-                sample_names=[val[1] for val in df_list],
-                strategy=pavlib.call.get_merge_params(wildcards, get_config(wildcards)),
-                threads=threads
+                # Scan PASS variants
+                df_pass = pl.scan_parquet(
+                    in_pass_filename
+                ).select(
+                    pl.col('#CHROM'),
+                    pl.col('POS'),
+                    ((pl.col('POS') + pl.col('SVLEN')) if is_ins_end else pl.col('END')).alias('_END_RO'),
+                    pl.col('SVLEN')
+                ).filter(
+                    pl.col('#CHROM') == chrom
+                ).drop(pl.col('#CHROM'))
+
+                # Scan FAIL variants
+                df_fail = pl.scan_parquet(
+                    in_fail_filename
+                ).select(
+                    pl.col('#CHROM'),
+                    pl.col('POS'),
+                    pl.col('END'),
+                    pl.col('SVLEN'),
+                    pl.col('FILTER'),
+                    pl.col('ALIGN_INDEX')
+                ).with_row_index(
+                    '_index'
+                ).filter(
+                    pl.col('#CHROM') == chrom
+                ).drop(
+                    pl.col('#CHROM')
+                ).with_columns(
+                    ((pl.col('POS') + pl.col('SVLEN')) if is_ins_end else pl.col('END')).alias('_END_RO'),
+                )
+
+                # Split by TRIM-only filter (filter TRIM-only by overlaps, retain all non-TRIM-only)
+                df_fail = df_fail.with_columns(
+                    _IS_TRIM=(pl.col.FILTER.str.split(',').list.set_difference(['TRIMREF', 'TRIMQRY']).list.len() == 0).cast(pl.Boolean)
+                )
+
+                # Add non-TRIM-only records to PASS variants
+                df_pass = pl.concat([
+                    df_pass,
+                    df_fail.filter(
+                        ~pl.col._IS_TRIM
+                    ).select(
+                        pl.col('POS'), pl.col('_END_RO'), pl.col('SVLEN')
+                    )
+                ]).sort(
+                    pl.col('POS'), pl.col('_END_RO')
+                )
+
+                df_fail = df_fail.filter(pl.col._IS_TRIM).drop('_IS_TRIM')
+
+                # Get minimum alignment score for each FAIL record
+                df_fail = df_fail.with_columns(
+                    _ALIGN_INDEX=pl.col.ALIGN_INDEX.str.split(',').cast(pl.List(pl.UInt32))
+                ).explode(
+                    pl.col._ALIGN_INDEX
+                ).join(
+                    df_align_score.lazy(), left_on='_ALIGN_INDEX', right_on='INDEX', how='left'
+                ).filter(
+                    pl.all_horizontal(
+                        pl.col._SCORE == pl.col._SCORE.min(),
+                        pl.col._SCORE.is_first_distinct()
+                    ).over('_index')
+                ).drop(pl.col._ALIGN_INDEX)
+
+                # Filter by self intersect. Get indices to drop.
+                # Remove any records in the FAIL variants that overlap with another record in FAIL variants by RO threshold.
+                # For overlaps, prioritize by a higher alignment score (keep first if scores are equal).
+                drop_index_fail = df_fail.select(
+                    pl.col._index, pl.col.POS, pl.col._END_RO, pl.col.SVLEN, pl.col._SCORE
+                ).join_where(
+                    # Join overlapping records
+                    df_fail.select(
+                        pl.col._index, pl.col.POS, pl.col._END_RO, pl.col.SVLEN, pl.col._SCORE
+                    ),
+                    pl.col._index != pl.col._index_right,
+                    pl.col.POS < pl.col._END_RO_right,
+                    pl.col.POS_right < pl.col._END_RO
+                ).filter(
+                    (
+                        # Filter by RO
+                        (
+                            pl.min_horizontal([pl.col._END_RO, pl.col._END_RO_right]) - pl.max_horizontal([pl.col.POS, pl.col.POS_right])
+                        ) / (
+                            pl.max_horizontal([pl.col.SVLEN, pl.col.SVLEN_right])
+                        ) >= ro_threshold
+                    ) & (
+                        # Drop lower score; drop higher index if scores are equal (keep first)
+                        (pl.col._SCORE > pl.col._SCORE_right) | (
+                            (pl.col._SCORE == pl.col._SCORE_right) & (pl.col._index < pl.col._index_right)
+                        )
+                    )
+                ).select(
+                    pl.col._index_right
+                )
+
+                # Filter by PASS intersect. Get indices to drop.
+                drop_index_pass = df_fail.join_where(
+                    df_pass,
+                    pl.col.POS < pl.col._END_RO_right,
+                    pl.col.POS_right < pl.col._END_RO
+                ).filter(
+                    (
+                        pl.min_horizontal([pl.col._END_RO, pl.col._END_RO_right]) - pl.max_horizontal([pl.col.POS, pl.col.POS_right])
+                    ) / (
+                        pl.max_horizontal([pl.col.SVLEN, pl.col.SVLEN_right])
+                    ) >= ro_threshold
+                ).select(
+                    pl.col._index
+                )
+
+                # Collect and retain dropped indices
+                drop_index_list.append(
+                    drop_index_fail.collect(engine='streaming').to_series()
+                )
+
+                drop_index_list.append(
+                    drop_index_pass.collect(engine='streaming').to_series()
+                )
+
+            # Concatenate dropped indices
+            if not drop_index_list:
+                drop_index_list = [pl.Series([], dtype=pl.UInt32)]  # List of one empty series for concatenation
+
+            drop_index = pl.concat(
+                drop_index_list
+            ).unique().sort().to_list()
+
+            # Write output BED files
+            df_fail = pl.scan_parquet(
+                in_fail_filename
+            ).with_row_index(
+                '_index'
             )
 
-            # Reshape and write
-            df_intersect = df_intersect[['ID'] + [col for col in df_intersect.columns if col.startswith('MERGE_')]]
-
-            del df_intersect['MERGE_SRC']
-            del df_intersect['MERGE_SRC_ID']
-
-            df_intersect['MERGE_SAMPLES'] = df_intersect['MERGE_SAMPLES'].apply(lambda val_list:
-                ','.join([
-                    (val[5:] if val.startswith('TRIM_') else val) for val in val_list.split(',')
-                ])
+            df_fail_retain = df_fail.filter(
+                ~pl.col._index.is_in(drop_index)
+            ).drop(
+                pl.col._index
             )
 
-            df_intersect.columns = [col[6:] if col.startswith('MERGE_') else col for col in df_intersect.columns]
-            df_intersect.columns = ['SOURCE' if col == 'SAMPLES' else col for col in df_intersect.columns]
+            df_fail_drop = df_fail.filter(
+                pl.col._index.is_in(drop_index)
+            ).drop(
+                pl.col._index
+            )
 
-            df_intersect.to_csv(output.tsv, sep='\t', index=False, compression='gzip')
+            out_bed_retain = df_fail_retain.sink_parquet(
+                out_fail_filename,
+                lazy=True
+            )
 
-        else:
-            # Write empty file (skipped when batches are concatenated)
-            with open(output.tsv, 'wt') as out_file:
-                pass
+            out_bed_drop = df_fail_drop.sink_parquet(
+                out_drop_filename,
+                lazy=True
+            )
+
+            pl.collect_all([out_bed_retain, out_bed_drop])
+
+rule call_fail_redundant_snv:
+    input:
+        bed_pass='results/{asm_name}/bed_hap/{hap}/pass_snv_snv.bed.parquet',
+        bed_fail='temp/{asm_name}/bed_hap/{hap}/fail_snv_snv.bed.parquet',
+        bed_align='results/{asm_name}/align/trim-none/align_qry_{hap}.bed.gz',
+    output:
+        bed_fail='results/{asm_name}/bed_hap/{hap}/fail/fail_snv_snv.bed.parquet',
+        bed_drop='results/{asm_name}/bed_hap/{hap}/dropped/redundanttrim_snv_snv.bed.parquet'
+    run:
+
+        pav_params = pavlib.pavconfig.ConfigParams(wildcards.asm_name, config, ASM_TABLE)
+
+        # Read alignment scores
+        df_align_score = pl.scan_csv(
+            input.bed_align, separator='\t',
+            schema_overrides={
+                'INDEX': pl.UInt32,
+                'SCORE': pl.Float32
+            }
+        ).select(
+            pl.col.INDEX,
+            pl.col.SCORE.alias('_SCORE')  # Is added to variant frames by join, avoid name conflicts
+        ).collect()
+
+        # Get a list of chromosomes
+        chroms = pl.scan_parquet(
+            input.bed_fail
+        ).select(
+            pl.col('#CHROM').unique()
+        ).collect().to_series().sort()
+
+        # Process each chromosome
+        drop_index_list = list()
+
+        for chrom in chroms:
+            if pav_params.debug:
+                print(f'Processing {chrom}')
+
+            # Scan PASS variants
+            df_pass = pl.scan_parquet(
+                input.bed_pass,
+            ).select(
+                pl.col('#CHROM'),
+                pl.col('POS'),
+                pl.col('ALT').str.to_uppercase(),
+            ).filter(
+                pl.col('#CHROM') == chrom
+            ).drop(pl.col('#CHROM'))
+
+            # Scan FAIL variants
+            df_fail = pl.scan_parquet(
+                input.bed_fail
+            ).select(
+                pl.col('#CHROM'),
+                pl.col('POS'),
+                pl.col('ALT').str.to_uppercase(),
+                pl.col('FILTER'),
+                pl.col('ALIGN_INDEX')
+            ).with_row_index(
+                '_index'
+            ).filter(
+                pl.col('#CHROM') == chrom
+            ).drop(
+                pl.col('#CHROM')
+            )
+
+            # Split by TRIM-only filter (filter TRIM-only by overlaps, retain all non-TRIM-only)
+            df_fail = df_fail.with_columns(
+                _IS_TRIM=(pl.col.FILTER.str.split(',').list.set_difference(['TRIMREF', 'TRIMQRY']).list.len() == 0).cast(pl.Boolean)
+            ).drop('FILTER')
+
+            # Add non-TRIM-only records to PASS variants
+            df_pass = pl.concat([
+                df_pass,
+                df_fail.filter(
+                    ~pl.col._IS_TRIM
+                ).select(
+                    pl.col('POS'), pl.col('ALT')
+                )
+            ]).sort(
+                pl.col('POS'), pl.col('ALT')
+            )
+
+            df_fail = df_fail.filter(pl.col._IS_TRIM).drop('_IS_TRIM')
+
+            # Get minimum alignment score for each FAIL record
+            df_fail = df_fail.with_columns(
+                ALIGN_INDEX=pl.col.ALIGN_INDEX.str.split(',').cast(pl.List(pl.UInt32))
+            ).explode(
+                pl.col.ALIGN_INDEX
+            ).join(
+                df_align_score.lazy(), left_on='ALIGN_INDEX', right_on='INDEX', how='left'
+            ).filter(
+                pl.all_horizontal(
+                    pl.col._SCORE == pl.col._SCORE.min(),
+                    pl.col._SCORE.is_first_distinct()
+                ).over('_index')
+            ).drop(pl.col.ALIGN_INDEX)
+
+            # Filter by self intersect. Get indices to drop.
+            drop_index_fail = df_fail.select(
+                pl.col._index, pl.col.POS, pl.col.ALT, pl.col._SCORE
+            ).join_where(
+                # Join overlapping records
+                df_fail.select(
+                    pl.col._index, pl.col.POS, pl.col.ALT, pl.col._SCORE
+                ),
+                pl.col._index != pl.col._index_right,
+                pl.col.POS == pl.col.POS_right,
+                pl.col.ALT == pl.col.ALT_right
+            ).filter(
+                # Drop lower score; drop higher index if scores are equal (keep first)
+                (pl.col._SCORE > pl.col._SCORE_right) | (
+                    (pl.col._SCORE == pl.col._SCORE_right) & (pl.col._index < pl.col._index_right)
+                )
+            ).select(
+                pl.col._index_right
+            )
+
+            # Filter by PASS intersect. Get indices to drop.
+            drop_index_pass = df_fail.join(
+                df_pass,
+                on=[pl.col.POS, pl.col.ALT],
+                how='semi'
+            ).select(
+                pl.col._index
+            )
+
+            # Collect and retain dropped indices
+            drop_index_list.append(
+                drop_index_fail.collect(engine='streaming').to_series()
+            )
+
+            drop_index_list.append(
+                drop_index_pass.collect(engine='streaming').to_series()
+            )
+
+        # Concatenate dropped indices
+        if not drop_index_list:
+            drop_index_list = [pl.Series([], dtype=pl.UInt32)]  # List of one empty series for concatenation
+
+        drop_index = pl.concat(
+            drop_index_list
+        ).unique().sort().to_list()
+
+        # Write output BED files
+        df_fail = pl.scan_parquet(
+            input.bed_fail
+        ).with_row_index(
+            '_index'
+        )
+
+        df_fail_retain = df_fail.filter(
+            ~pl.col._index.is_in(drop_index)
+        ).drop(
+            pl.col._index
+        )
+
+        df_fail_drop = df_fail.filter(
+            pl.col._index.is_in(drop_index)
+        ).drop(
+            pl.col._index
+        )
+
+        out_bed_retain = df_fail_retain.sink_parquet(
+            output.bed_fail,
+            lazy=True
+        )
+
+        out_bed_drop = df_fail_drop.sink_parquet(
+            output.bed_drop,
+            lazy=True
+        )
+
+        pl.collect_all([out_bed_retain, out_bed_drop])
+
+localrules: call_integrate_all
+
+rule call_integrate_all:
+    input:
+        bed=lambda wildcards: pavlib.pipeline.expand_pattern(
+            'results/{asm_name}/bed_hap/{hap}/pass_svindel_ins.bed.parquet', ASM_TABLE, config
+        )
 
 # Filter variants from inside inversions
 rule call_integrate_sources:
@@ -506,109 +696,133 @@ rule call_integrate_sources:
         bed_lg_ins='results/{asm_name}/lgsv/svindel_ins_{hap}.bed.gz',
         bed_lg_del='results/{asm_name}/lgsv/svindel_del_{hap}.bed.gz',
         bed_lg_inv='results/{asm_name}/lgsv/sv_inv_{hap}.bed.gz',
+        bed_lg_cpx='results/{asm_name}/lgsv/sv_cpx_{hap}.bed.gz',
+        bed_seg='results/{asm_name}/lgsv/segment_{hap}.bed.gz',
         bed_inv='temp/{asm_name}/inv_caller/sv_inv_{hap}.bed.gz',
-        bed_depth_qry='results/{asm_name}/align/trim-qry/depth_ref_{hap}.bed.gz'
+        bed_depth_qry='results/{asm_name}/align/trim-qry/depth_ref_{hap}.bed.gz',
+        bed_align_none='results/{asm_name}/align/trim-none/align_qry_{hap}.bed.gz',
+        bed_align_qry='results/{asm_name}/align/trim-qry/align_qry_{hap}.bed.gz',
+        bed_align_qryref='results/{asm_name}/align/trim-qryref/align_qry_{hap}.bed.gz',
+        qry_fa='data/query/{asm_name}/query_{hap}.fa.gz'
     output:
-        bed_ins_pass='results/{asm_name}/bed_hap/pass/{hap}/svindel_ins.bed.gz',
-        bed_del_pass='results/{asm_name}/bed_hap/pass/{hap}/svindel_del.bed.gz',
-        bed_inv_pass='results/{asm_name}/bed_hap/pass/{hap}/sv_inv.bed.gz',
-        bed_snv_pass='results/{asm_name}/bed_hap/pass/{hap}/snv_snv.bed.gz',
-        fa_ins_pass='results/{asm_name}/bed_hap/pass/{hap}/fa/svindel_ins.fa.gz',
-        fa_del_pass='results/{asm_name}/bed_hap/pass/{hap}/fa/svindel_del.fa.gz',
-        fa_inv_pass='results/{asm_name}/bed_hap/pass/{hap}/fa/sv_inv.fa.gz',
-        bed_ins_fail=temp('temp/{asm_name}/bed_hap/fail/{hap}/svindel_ins.bed.gz'),
-        bed_del_fail=temp('temp/{asm_name}/bed_hap/fail/{hap}/svindel_del.bed.gz'),
-        bed_inv_fail=temp('temp/{asm_name}/bed_hap/fail/{hap}/sv_inv.bed.gz'),
-        bed_snv_fail=temp('temp/{asm_name}/bed_hap/fail/{hap}/snv_snv.bed.gz'),
-        fa_ins_fail=temp('temp/{asm_name}/bed_hap/fail/{hap}/fa/svindel_ins.fa.gz'),
-        fa_del_fail=temp('temp/{asm_name}/bed_hap/fail/{hap}/fa/svindel_del.fa.gz'),
-        fa_inv_fail=temp('temp/{asm_name}/bed_hap/fail/{hap}/fa/sv_inv.fa.gz')
+        bed_ins_pass='results/{asm_name}/bed_hap/{hap}/pass_svindel_ins.bed.parquet',
+        bed_del_pass='results/{asm_name}/bed_hap/{hap}/pass_svindel_del.bed.parquet',
+        bed_inv_pass='results/{asm_name}/bed_hap/{hap}/pass_sv_inv.bed.parquet',
+        bed_cpx_pass='results/{asm_name}/bed_hap/{hap}/pass_sv_cpx.bed.parquet',
+        bed_snv_pass='results/{asm_name}/bed_hap/{hap}/pass_snv_snv.bed.parquet',
+        bed_ins_fail=temp('temp/{asm_name}/bed_hap/{hap}/fail_svindel_ins.bed.parquet'),
+        bed_del_fail=temp('temp/{asm_name}/bed_hap/{hap}/fail_svindel_del.bed.parquet'),
+        bed_inv_fail=temp('temp/{asm_name}/bed_hap/{hap}/fail_sv_inv.bed.parquet'),
+        bed_cpx_fail='results/{asm_name}/bed_hap/{hap}/fail_sv_cpx.bed.parquet',
+        bed_snv_fail=temp('temp/{asm_name}/bed_hap/{hap}/fail_snv_snv.bed.parquet')
     run:
 
         pav_params = pavlib.pavconfig.ConfigParams(wildcards.asm_name, config, ASM_TABLE)
 
+        inv_min = pav_params.inv_min
+        inv_max = pav_params.inv_max
+
+        # Read non-trimmed alignments (temp)
+        df_align_none = pd.read_csv(
+            input.bed_align_none, sep='\t', usecols=lambda col: col not in {'CIGAR'}
+        )
+
+        # Read trimmed regions (regionsa are tuples of alignment records and coordinates within the record).
+        # IntervalTree where coordinates are tuples - (index, pos):(index, end)
+        trim_tree = pavlib.call.read_trim_regions(
+            df_align_none,
+            pd.read_csv(input.bed_align_qry, sep='\t'),
+            pd.read_csv(input.bed_align_qryref, sep='\t')
+        )
+
+        # Whole alignment record filters
+        record_filter = dict(
+            df_align_none.loc[df_align_none['FILTER'] != 'PASS', 'FILTER'].str.split(',').apply(set)
+        )
+
+        del df_align_none
+
         # Read query filter (if present)
-        qry_filter_tree = None
-
-        qry_filter_list = []
-
-        if pav_params.query_filter is not None:
-            qry_filter_list = [file_name.strip() for file_name in pav_params.query_filter.split(';') if file_name.strip()]
-
-        if len(qry_filter_list) > 0:
-
-            qry_filter_tree = collections.defaultdict(intervaltree.IntervalTree)
-
-            for filter_filename in qry_filter_list:
-                df_filter = pd.read_csv(filter_filename, sep='\t', header=None, comment='#', usecols=(0, 1, 2))
-                df_filter.columns = ['#CHROM', 'POS', 'END']
-
-                for index, row in df_filter.iterrows():
-                    qry_filter_tree[row['#CHROM']][row['POS']:row['END']] = True
+        # Dict keyed by assembly sequence ID (contig name) and each value is an interval tree of filtered coordinates.
+        qry_filter_tree = pavlib.call.read_filter_tree(pav_params.query_filter)
 
         # Create large variant filter tree (for filtering small variants inside larger ones)
-        compound_filter_tree = collections.defaultdict(intervaltree.IntervalTree)
+        # Dict keyed by assembly sequence ID (contig name) and each value is an interval tree of purged coordinates.
+        purge_filter_tree = collections.defaultdict(intervaltree.IntervalTree)
+
+        # Get a dict of alignment records internal to larger variants and update the purge filter tree for large
+        # variants. For large variants where there is a gap between anchors, the gap is added to the purge filter tree.
+        # For large variants with overlapping anchors, the region that would be trimmed by reference trimming is added
+        # to the inner tree.
+        #
+        # Return dict:
+        # * Key: Alignment index.
+        # * Value: Tuple of the variant ID and a set of filters.
+        inner_tree = pavlib.call.read_inner_tree(input.bed_seg, trim_tree, purge_filter_tree)
 
         # Tuple of (pass, drop) filenames for each variant type (variant pass, variant fail, fasta pass, fasta fail)
         out_filename_dict = {
-            'inv': (output.bed_inv_pass, output.bed_inv_fail, output.fa_inv_pass, output.fa_inv_fail),
-            'ins': (output.bed_ins_pass, output.bed_ins_fail, output.fa_ins_pass, output.fa_ins_fail),
-            'del': (output.bed_del_pass, output.bed_del_fail, output.fa_del_pass, output.fa_del_fail),
-            'snv': (output.bed_snv_pass, output.bed_snv_fail, None, None),
+            'ins': (output.bed_ins_pass, output.bed_ins_fail),
+            'del': (output.bed_del_pass, output.bed_del_fail),
+            'inv': (output.bed_inv_pass, output.bed_inv_fail),
+            'cpx': (output.bed_cpx_pass, output.bed_cpx_fail),
+            'snv': (output.bed_snv_pass, output.bed_snv_fail),
+            'lg_cpx': (output.bed_cpx_pass, output.bed_cpx_fail)
         }
 
         #
         # Integrate and filter variants
         #
 
-        df_insdel_list = list()  # Collect ins/del tables into this list until they are merged and written
+        df_insdel_list = list()  # Collect INS/DEL tables into this list until they are merged and written
+        df_inv_list = list()     # Collect INV tables into this list until they are merged and written
+        df_dup_list = list()     # Collect DUP loci
 
-        for vartype in ('inv', 'lg_del', 'lg_ins', 'insdel', 'snv'):
+        param_dict = { # do_write, is_insdel, is_inv, is_lg, add_purge, filter_purge, filter_inner, filename
+            'lg_cpx':  ( True,     False,     False,  True,  False,     False,        False,        input.bed_lg_cpx ),
+            'lg_ins':  ( False,    True,      False,  True,  False,     False,        False,        input.bed_lg_ins ),
+            'lg_del':  ( False,    True,      False,  True,  False,     False,        False,        input.bed_lg_del ),
+            'lg_inv':  ( False,    False,     True,   True,  False,     False,        False,        input.bed_lg_inv ),
+            'inv':     ( True,     False,     True,   False, True,      False,        True,         input.bed_inv ),
+            'insdel':  ( True,     True,      False,  False, False,     True,         True,         input.bed_cigar_insdel ),
+            'snv':     ( True,     False,     False,  False, False,     True,         True,         input.bed_cigar_snv )
+        }
+
+        # do_write: Write variant call table. Set to False for INS/DEL or INV variants until they are all collected
+        # is_insdel: Variant is an INS/DEL type, append to df_insdel_list
+        # is_inv: Variant is an inversion, apply inversion filtering steps and append to df_inv_list
+        # is_lg: Large variant (may have inner variants).
+        # add_purge: Add variant regions to the PURGE regions.
+        # filter_purge: Apply PURGE filter.
+        # filter_inner: Apply INNER filter.
+        # filename: Input variant filename.
+
+        for vartype in ('lg_cpx', 'lg_ins', 'lg_del', 'lg_inv', 'inv', 'insdel', 'snv'):
+            if pav_params.debug:
+                print(f'Processing {vartype}')
+
+            if vartype not in param_dict:
+                raise RuntimeError(f'vartype in control loop does not match a known value: {vartype}')
+
+            do_write, is_insdel, is_inv, is_lg, add_purge, filter_purge, filter_inner, filename = param_dict[vartype]
 
             # Read
-            do_write = True         # Write variant call table. Set to False for INS/DEL variants until they are all collected into df_insdel_list.
-            is_insdel = False       # Variant is an INS/DEL type, append to df_insdel_list (list is merged and written when both is_insdel and do_write are True).
-            is_inv = False          # Variant is an inversion, apply inversion filtering steps.
-            add_compound = True     # Add variant regions to the compound filter if True. Does not need to be set for small variants (just consumes CPU time and memory).
-            filter_compound = True  # Apply compound filter
-            no_flag_core = False    # Only add inner inversion regions to the filter for inversions detected by flagging loci
+            df, filter_dict = pavlib.call.read_variant_table(filename, True)
 
-            if vartype == 'inv':
-                df, filter_dict, compound_dict = pavlib.call.read_variant_table([input.bed_inv, input.bed_lg_inv], True)
-                is_inv = True
+            if len(set(df.columns) & {'QRY_ID', 'QRY_POS', 'QRY_END'}) != 3:
+                raise RuntimeError(f'Missing QRY_ID, QRY_POS, and/or QRY_END columns: {filename}')
 
-            elif vartype == 'lg_del':
-                df, filter_dict, compound_dict = pavlib.call.read_variant_table(input.bed_lg_del, True)
-                do_write = False
-                is_insdel = True
+            if 'SEQ' not in df.columns:
+                df['SEQ'] = [str(seq.seq) for seq in pavlib.seq.variant_seq_from_region(df, input.qry_fa)]
 
-            elif vartype == 'lg_ins':
-                df, filter_dict, compound_dict = pavlib.call.read_variant_table(input.bed_lg_ins, True)
-                do_write = False
-                is_insdel = True
+            # Set info dictionaries for filters
+            purge_dict = collections.defaultdict(set)
+            inner_dict = collections.defaultdict(set)
 
-            elif vartype == 'insdel':
-                df, filter_dict, compound_dict = pavlib.call.read_variant_table(input.bed_cigar_insdel, True)
-                do_write = True
-                is_insdel = True
-                add_compound = False
-
-            elif vartype == 'snv':
-                df, filter_dict, compound_dict = pavlib.call.read_variant_table(input.bed_cigar_snv, True)
-                add_compound = False
-
-            else:
-                assert False, f'vartype in control loop does not match a known value: {vartype}'
-
-            # Override add_compound
+            # Override purging
             if pav_params.redundant_callset:
-                filter_compound = False
-                add_compound = False
-
-            raise NotImplementedError(
-                'Filtering under inversions needs to be updated to account for differences in inversion detection '
-                '(e.g. only drop variants if the alignment was not inverted'
-            )
+                filter_lgpruge = False
+                add_purge = False
 
             # Apply filters
             if df.shape[0] > 0:
@@ -616,54 +830,77 @@ rule call_integrate_sources:
                 # Apply query filtered regions
                 pavlib.call.apply_qry_filter_tree(df, qry_filter_tree, filter_dict)
 
-                # SVLEN min
-                if is_inv and inv_min is not None:
-                    for index in df.index[df['SVLEN'] < inv_min]:
-                        filter_dict[index].add('SVLEN')
+                if is_inv:
 
-                # SVLEN max
-                if is_inv and inv_max is not None and inv_max > 0:
-                    for index in df.index[df['SVLEN'] > inv_max]:
-                        filter_dict[index].add('SVLEN')
+                    # SVLEN min
+                    if inv_min is not None:
+                        for index in df.index[df['SVLEN'] < inv_min]:
+                            filter_dict[index].add('SVLEN')
 
-                # Filter compound
-                if filter_compound:
-                    pavlib.call.apply_compound_filter(
+                    # SVLEN max
+                    if inv_max is not None and inv_max > 0:
+                        for index in df.index[df['SVLEN'] > inv_max]:
+                            filter_dict[index].add('SVLEN')
+
+                # Filter PURGE
+                if filter_purge:
+                    pavlib.call.apply_purge_filter(
                         df=df,
-                        compound_filter_tree=compound_filter_tree,
+                        purge_filter_tree=purge_filter_tree,
                         filter_dict=filter_dict,
-                        compound_dict=compound_dict,
-                        update=add_compound
+                        purge_dict=purge_dict,
+                        update=add_purge
                     )
 
-            # Compound filter
-            pavlib.call.update_filter_compound_fields(df, filter_dict, compound_dict)
+                elif add_purge:
+                    for index, row in df.iterrows():
+                        purge_filter_tree[row['#CHROM']][row['POS']:row['END']] = row['ID']
+
+                # Filter TRIMREF & TRIMQRY
+                if not (is_lg or is_inv):
+                    pavlib.call.apply_trim_filter(
+                        df=df,
+                        filter_dict=filter_dict,
+                        trim_tree=trim_tree
+                    )
+
+                # Filter INNER
+                if filter_inner:
+                    pavlib.call.apply_inner_filter(
+                        df=df,
+                        filter_dict=filter_dict,
+                        inner_tree=inner_tree,
+                        inner_dict=inner_dict
+                    )
+
+            # Update PURGE fields
+            pavlib.call.update_fields(df, filter_dict, purge_dict, inner_dict)
 
             del filter_dict
-            del compound_dict
-
-            # Alignment depth
-            df['COV_MEAN'] = np.nan
-            df['COV_PROP'] = np.nan
-            df['COV_QRY'] = ''
-
-            # noinspection SmkUndeclaredSection
-            depth_container = pavlib.call.DepthContainer(pd.read_csv(input.bed_depth_qry, sep='\t', dtype={'#CHROM': str}))
-
-            for index, row in df.iterrows():
-                df.loc[index, 'COV_MEAN'], df.loc[index, 'COV_PROP'], df.loc[index, 'COV_QRY'] = depth_container.get_depth(row)
-
-            del depth_container
+            del purge_dict
+            del inner_dict
 
             # Version variant IDs prioritizing PASS over non-PASS (avoid version suffixes on PASS).
             df['ID'] = pavlib.call.version_variant_bed_id(df)
 
-            # Add to df_insdel_list
+            # Remove fields
+            for col in ['QRY_ID', 'QRY_POS', 'QRY_END']:
+                if col in df.columns:
+                    del df[col]
+
+            # Aggregate if type is split over multiple inputs
             if is_insdel:
                 df_insdel_list.append(df)
 
+            if is_inv:
+                df_inv_list.append(df)
+
             # Write
             if do_write:
+
+                if is_inv:
+                    df = pd.concat(df_inv_list, axis=0).sort_values(['#CHROM', 'POS'])
+
                 if is_insdel:
                     # Merge
                     df = pd.concat(df_insdel_list, axis=0).sort_values(['#CHROM', 'POS'])
@@ -673,66 +910,45 @@ rule call_integrate_sources:
                     # Separate INS and DEL, then write
                     for svtype in ('ins', 'del'):
 
+                        filename_pass, filename_fail = out_filename_dict[svtype]
+
                         # Pass
-                        subdf = df.loc[
-                            (df['SVTYPE'] == svtype.upper()) & (df['FILTER'] == 'PASS')
-                        ]
-
-                        with Bio.bgzf.BgzfWriter(out_filename_dict[svtype][2]) as out_file:
-                            Bio.SeqIO.write(svpoplib.seq.bed_to_seqrecord_iter(subdf), out_file, 'fasta')
-
-                        del subdf['SEQ']
-
-                        subdf.to_csv(out_filename_dict[svtype][0], sep='\t', index=False, compression='gzip')
-
-                        # Fail
-                        subdf = df.loc[
-                            (df['SVTYPE'] == svtype.upper()) & (df['FILTER'] != 'PASS')
-                        ]
-
-                        with Bio.bgzf.BgzfWriter(out_filename_dict[svtype][3]) as out_file:
-                            Bio.SeqIO.write(svpoplib.seq.bed_to_seqrecord_iter(subdf), out_file, 'fasta')
-
-                        del(subdf['SEQ'])
-
-                        subdf.to_csv(
-                            out_filename_dict[svtype][1], sep='\t', index=False, compression='gzip'
+                        pavlib.call.pandas_to_polars(
+                            df.loc[
+                                (df['SVTYPE'] == svtype.upper()) & (df['FILTER'] == 'PASS')
+                            ]
+                        ).write_parquet(
+                            filename_pass
                         )
 
-                        del subdf
+                        # Fail
+                        pavlib.call.pandas_to_polars(
+                            df.loc[
+                                (df['SVTYPE'] == svtype.upper()) & (df['FILTER'] != 'PASS')
+                            ]
+                        ).write_parquet(
+                            filename_fail
+                        )
 
                 else:
+                    filename_pass, filename_fail = out_filename_dict[vartype]
 
                     # Pass
-
-                    subdf = df.loc[df['FILTER'] == 'PASS']
-
-                    if out_filename_dict[vartype][2] is not None:
-                        with Bio.bgzf.BgzfWriter(out_filename_dict[vartype][2]) as out_file:
-                            Bio.SeqIO.write(svpoplib.seq.bed_to_seqrecord_iter(subdf), out_file, 'fasta')
-
-                        del(subdf['SEQ'])
-
-                    subdf.to_csv(out_filename_dict[vartype][0], sep='\t', index=False, compression='gzip')
-
-                    # Fail
-                    subdf = df.loc[df['FILTER'] != 'PASS']
-
-                    if out_filename_dict[vartype][3] is not None:
-                        with Bio.bgzf.BgzfWriter(out_filename_dict[vartype][3]) as out_file:
-                            Bio.SeqIO.write(svpoplib.seq.bed_to_seqrecord_iter(subdf), out_file, 'fasta')
-
-                        del(subdf['SEQ'])
-
-                    subdf.to_csv(
-                        out_filename_dict[vartype][1], sep='\t', index=False, compression='gzip'
+                    pavlib.call.pandas_to_polars(
+                        df.loc[df['FILTER'] == 'PASS']
+                    ).write_parquet(
+                        filename_pass
                     )
 
-                    del subdf
+                    # Fail
+                    pavlib.call.pandas_to_polars(
+                        df.loc[df['FILTER'] != 'PASS']
+                    ).write_parquet(
+                        filename_fail
+                    )
 
             # Clean
             del df
-
 
 #
 # Call from CIGAR
@@ -828,16 +1044,6 @@ rule call_cigar:
             version_id=False,
             debug=pav_config.debug
         )
-
-        # # Read trimmed alignments
-        # df_trim = pd.read_csv(
-        #     input.bed_trim, sep='\t', usecols=['QRY_POS', 'QRY_END', 'INDEX'],
-        #     index_col='INDEX'
-        # ).astype(int)
-        #
-        # # Set TRIM filter
-        # df_snv['FILTER'] = pavlib.call.filter_by_align(df_snv, df_trim, 'TRIM')
-        # df_insdel['FILTER'] = pavlib.call.filter_by_align(df_insdel, df_trim, 'TRIM')
 
         # Write
         df_insdel.to_csv(output.bed_insdel, sep='\t', index=False, compression='gzip')

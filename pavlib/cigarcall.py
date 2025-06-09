@@ -94,8 +94,8 @@ def make_insdel_snv_calls(df_align, ref_fa_name, qry_fa_name, hap, version_id=Tr
                 seq_qry_upper = seq_qry.upper()
 
             # Get alignment operations and starting positions
-            op_arr = op.op_arr_add_coords(
-                op_arr=op.align.op.cigar_as_array(row['CIGAR']),
+            op_arr = align.op.op_arr_add_coords(
+                op_arr=align.op.cigar_as_array(row['CIGAR']),
                 pos_ref=row['POS'],
                 add_index=True
             )
@@ -127,7 +127,7 @@ def make_insdel_snv_calls(df_align, ref_fa_name, qry_fa_name, hap, version_id=Tr
             #     np.expand_dims(np.arange(op_arr.shape[0]), axis=1)
             # ], axis=1)
 
-            op_arr = op_arr[np.isin(op_arr[:, 0], OP.VAR_ARR)]
+            op_arr = op_arr[np.isin(op_arr[:, 0], align.op.VAR_ARR)]
 
             for index in range(len(op_arr)):
 
@@ -173,7 +173,7 @@ def make_insdel_snv_calls(df_align, ref_fa_name, qry_fa_name, hap, version_id=Tr
                                     base_ref, base_qry,
                                     filter,
                                     hap,
-                                    f'{seq_qry_name}:{pos_qry + 1}-{pos_qry + 1}', strand,
+                                    seq_qry_name, pos_qry, pos_qry + 1, strand,
                                     0,
                                     align_index,
                                     CALL_SOURCE
@@ -184,7 +184,7 @@ def make_insdel_snv_calls(df_align, ref_fa_name, qry_fa_name, hap, version_id=Tr
                                     'REF', 'ALT',
                                     'FILTER',
                                     'HAP',
-                                    'QRY_REGION', 'QRY_STRAND',
+                                    'QRY_ID', 'QRY_POS', 'QRY_END', 'QRY_STRAND',
                                     'CI',
                                     'ALIGN_INDEX',
                                     'CALL_SOURCE'
@@ -250,7 +250,7 @@ def make_insdel_snv_calls(df_align, ref_fa_name, qry_fa_name, hap, version_id=Tr
                                 np.nan, 'INS', op_len,
                                 filter,
                                 hap,
-                                f'{seq_qry_name}:{pos_qry + 1}-{end_qry}', strand,
+                                seq_qry_name, pos_qry, end_qry, strand,
                                 0,
                                 align_index,
                                 left_shift, f'{hom_ref_l},{hom_ref_r}', f'{hom_qry_l},{hom_qry_r}',
@@ -262,7 +262,7 @@ def make_insdel_snv_calls(df_align, ref_fa_name, qry_fa_name, hap, version_id=Tr
                                 'ID', 'SVTYPE', 'SVLEN',
                                 'FILTER',
                                 'HAP',
-                                'QRY_REGION', 'QRY_STRAND',
+                                'QRY_ID', 'QRY_POS', 'QRY_END', 'QRY_STRAND',
                                 'CI',
                                 'ALIGN_INDEX',
                                 'LEFT_SHIFT', 'HOM_REF', 'HOM_TIG',
@@ -322,7 +322,7 @@ def make_insdel_snv_calls(df_align, ref_fa_name, qry_fa_name, hap, version_id=Tr
                             np.nan, 'DEL', op_len,
                             filter,
                             hap,
-                            f'{seq_qry_name}:{pos_qry + 1}-{pos_qry + 1}', strand,
+                            seq_qry_name, pos_qry, pos_qry + 1, strand,
                             0,
                             align_index,
                             left_shift, f'{hom_ref_l},{hom_ref_r}', f'{hom_qry_l},{hom_qry_r}',
@@ -334,7 +334,7 @@ def make_insdel_snv_calls(df_align, ref_fa_name, qry_fa_name, hap, version_id=Tr
                             'ID', 'SVTYPE', 'SVLEN',
                             'FILTER',
                             'HAP',
-                            'QRY_REGION', 'QRY_STRAND',
+                            'QRY_ID', 'QRY_POS', 'QRY_END', 'QRY_STRAND',
                             'CI',
                             'ALIGN_INDEX',
                             'LEFT_SHIFT', 'HOM_REF', 'HOM_TIG',
@@ -360,7 +360,7 @@ def make_insdel_snv_calls(df_align, ref_fa_name, qry_fa_name, hap, version_id=Tr
                 'REF', 'ALT',
                 'FILTER',
                 'HAP',
-                'QRY_REGION', 'QRY_STRAND',
+                'QRY_ID', 'QRY_POS', 'QRY_END', 'QRY_STRAND',
                 'CI',
                 'ALIGN_INDEX',
                 'CALL_SOURCE'
@@ -383,7 +383,7 @@ def make_insdel_snv_calls(df_align, ref_fa_name, qry_fa_name, hap, version_id=Tr
                 'ID', 'SVTYPE', 'SVLEN',
                 'FILTER',
                 'HAP',
-                'QRY_REGION', 'QRY_STRAND',
+                'QRY_ID', 'QRY_POS', 'QRY_END', 'QRY_STRAND',
                 'CI',
                 'ALIGN_INDEX',
                 'LEFT_SHIFT', 'HOM_REF', 'HOM_TIG',

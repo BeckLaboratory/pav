@@ -49,6 +49,11 @@ class ConfigParams(object):
     lg_gap_scale: float
     lg_smooth_segments: float
     lg_cpx_min_aligned_prop: float
+    merge_insdel: str
+    merge_inv: str
+    merge_snv: str
+    merge_cpx: str
+    merge_dup: str
     inv_sig_cluster_win: int
     inv_sig_cluster_win_min: int
     inv_sig_cluster_snv_min: int
@@ -474,7 +479,28 @@ CONFIG_PARAM_LIST = [
                 min=(0.0, True), max=(1.0, True),
                 description='For complex variant calls, require this proportion of the total SV length to be aligned '
                             'to the reference sequence.',
-                advanced=True),
+                advanced=True
+    ),
+    ConfigParamElement('merge_insdel', 'str', 'nr::ro(0.5):szro(0.5,200,2):match',
+               description='Parameters for merging INS and DEL variants.',
+               advanced=True
+    ),
+    ConfigParamElement('merge_inv', 'str', 'nr::ro(0.2)',
+               description='Parameters for merging INV variants.',
+               advanced=True
+    ),
+    ConfigParamElement('merge_snv', 'str', 'nrsnv::exact',
+               description='Parameters for merging SNV variants.',
+               advanced=True
+    ),
+    ConfigParamElement('merge_cpx', 'str', 'nr::ro(0.5):szro(0.5,200,2):match',
+               description='Parameters for merging CPX (Complex) variants.',
+               advanced=True
+    ),
+    ConfigParamElement('merge_dup', 'str', 'nr::ro(0.5):szro(0.5,200,2):match',
+               description='Parameters for merging DUP (Duplication) variants.',
+               advanced=True
+    ),
 
     # Inversion site flagging from variant call clusters
     ConfigParamElement('inv_sig_cluster_win', 'int', 200,

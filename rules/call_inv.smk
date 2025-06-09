@@ -32,15 +32,15 @@ INV_CALL_COLUMNS = [
     '#CHROM', 'POS', 'END',
     'ID', 'SVTYPE', 'SVLEN',
     'HAP',
-    'QRY_REGION', 'QRY_STRAND',
+    'QRY_ID', 'QRY_POS', 'QRY_END', 'QRY_STRAND',
     'CI',
-    'RGN_REF_INNER', 'RGN_QRY_INNER',
+    'RGN_REF_OUTER', 'RGN_QRY_OUTER',
     'FLAG_TYPE',
     'ALIGN_INDEX',
     'CALL_SOURCE', 'VAR_SCORE',
     'FILTER',
     'SEQ'
-]
+ ]
 
 
 def _input_call_inv_cluster(wildcards):
@@ -277,9 +277,9 @@ rule call_inv_part:
                     # Save call
                     call_list.append(pd.Series(
                         [
-                            inv_call.region_ref_outer.chrom,
-                            inv_call.region_ref_outer.pos,
-                            inv_call.region_ref_outer.end,
+                            inv_call.region_ref.chrom,
+                            inv_call.region_ref.pos,
+                            inv_call.region_ref.end,
 
                             inv_call.id,
                             'INV',
@@ -287,13 +287,13 @@ rule call_inv_part:
 
                             wildcards.hap,
 
-                            inv_call.region_qry_outer.to_base1_string(),
+                            inv_call.region_qry.chrom, inv_call.region_qry.pos, inv_call.region_qry.end,
                             '-' if inv_call.region_qry_outer.is_rev else '+',
 
                             0,
 
-                            inv_call.region_ref.to_base1_string(),
-                            inv_call.region_qry.to_base1_string(),
+                            inv_call.region_ref_outer.to_base1_string(),
+                            inv_call.region_qry_outer.to_base1_string(),
 
                             row['TYPE'],
 
@@ -310,9 +310,9 @@ rule call_inv_part:
                             '#CHROM', 'POS', 'END',
                             'ID', 'SVTYPE', 'SVLEN',
                             'HAP',
-                            'QRY_REGION', 'QRY_STRAND',
+                            'QRY_ID', 'QRY_POS', 'QRY_END', 'QRY_STRAND',
                             'CI',
-                            'RGN_REF_INNER', 'RGN_QRY_INNER',
+                            'RGN_REF_OUTER', 'RGN_QRY_OUTER',
                             'FLAG_TYPE',
                             'ALIGN_INDEX',
                             'CALL_SOURCE', 'VAR_SCORE',

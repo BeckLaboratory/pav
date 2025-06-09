@@ -43,7 +43,7 @@ rule call_lg_discover:
         bed_del='results/{asm_name}/lgsv/svindel_del_{hap}.bed.gz',
         bed_inv='results/{asm_name}/lgsv/sv_inv_{hap}.bed.gz',
         bed_cpx='results/{asm_name}/lgsv/sv_cpx_{hap}.bed.gz',
-        bed_cpx_seg='results/{asm_name}/lgsv/segment_cpx_{hap}.bed.gz',
+        bed_seg='results/{asm_name}/lgsv/segment_{hap}.bed.gz',
         bed_cpx_ref='results/{asm_name}/lgsv/reftrace_cpx_{hap}.bed.gz',
         dot_tar='results/{asm_name}/lgsv/lgsv_graph_{asm_name}_{hap}.tar'
     log:
@@ -165,10 +165,10 @@ rule call_lg_discover:
             else:
                 df_cpx = pd.DataFrame([], columns=pavlib.lgsv.variant.ComplexVariant(None, None).row().index)
 
-            df_ins.sort_values(['#CHROM', 'POS', 'END', 'ID', 'QRY_REGION'], inplace=True)
-            df_del.sort_values(['#CHROM', 'POS', 'END', 'ID', 'QRY_REGION'], inplace=True)
-            df_inv.sort_values(['#CHROM', 'POS', 'END', 'ID', 'QRY_REGION'], inplace=True)
-            df_cpx.sort_values(['#CHROM', 'POS', 'END', 'ID', 'QRY_REGION'], inplace=True)
+            df_ins.sort_values(['#CHROM', 'POS', 'END', 'ID', 'QRY_ID', 'QRY_POS', 'QRY_END'], inplace=True)
+            df_del.sort_values(['#CHROM', 'POS', 'END', 'ID', 'QRY_ID', 'QRY_POS', 'QRY_END'], inplace=True)
+            df_inv.sort_values(['#CHROM', 'POS', 'END', 'ID', 'QRY_ID', 'QRY_POS', 'QRY_END'], inplace=True)
+            df_cpx.sort_values(['#CHROM', 'POS', 'END', 'ID', 'QRY_ID', 'QRY_POS', 'QRY_END'], inplace=True)
 
             # Write variant tables
             df_ins.to_csv(output.bed_ins, sep='\t', index=False, compression='gzip')
@@ -181,17 +181,15 @@ rule call_lg_discover:
             df_reftrace_list = list()
 
             for var in lgsv_list:
-                if var.svtype != 'CPX':
-                    continue
 
                 df_segment = var.interval.df_segment.copy()
                 df_segment.insert(3, 'ID', var.variant_id)
-
-                df_reftrace = var.df_ref_trace.copy()
-                df_reftrace.insert(3, 'ID', var.variant_id)
-
                 df_segment_list.append(df_segment)
-                df_reftrace_list.append(df_reftrace)
+
+                if var.svtype == 'CPX':
+                    df_reftrace = var.df_ref_trace.copy()
+                    df_reftrace.insert(3, 'ID', var.variant_id)
+                    df_reftrace_list.append(df_reftrace)
 
             if len(df_segment_list) > 0:
                 df_segment = pd.concat(df_segment_list, axis=0)
@@ -207,7 +205,7 @@ rule call_lg_discover:
                     pavlib.lgsv.variant.REF_TRACE_COLUMNS[:3] + ['ID'] + pavlib.lgsv.variant.REF_TRACE_COLUMNS[3:]
                 ))
 
-            df_segment.to_csv(output.bed_cpx_seg, sep='\t', index=False, compression='gzip')
+            df_segment.to_csv(output.bed_seg, sep='\t', index=False, compression='gzip')
             df_reftrace.to_csv(output.bed_cpx_ref, sep='\t', index=False, compression='gzip')
 
             # Compress graph dot files

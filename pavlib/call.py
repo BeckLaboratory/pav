@@ -7,29 +7,79 @@ import collections
 import intervaltree
 import numpy as np
 import pandas as pd
+import polars as pl
 import re
+
+from collections.abc import Callable
 
 import svpoplib
 
-from . import const
-from . import seq
+from . import align
+from . import util
+from . import pavconfig
 
 
 # Explanations for filter codes
 FILTER_REASON = {
+    align.records.FILTER_LCALIGN: 'Variant inside a low-confidence alignment record',
+    align.records.FILTER_ALIGN: 'Variant inside an alignment record that had a filtered flag (matches 0x700 in alignment flags) or did not meet a minimum MAPQ (not set by default)',
     'PASS': 'Variant passed filters',
-    'QRY_FILTER': 'Query filter region',
-    'COMPOUND': 'Inside larger variant',
-    'SVLEN': 'Variant size out of bounds',
-    'TRIM': 'Alignment trimming removed variant region'
+    'QRY_FILTER': 'Query filter region (regions provided to PAV at runtime)',
+    'PURGE': 'Inside larger variant',  # Previously "COMPOUND"
+    'INNER': 'Part of a larger variant call (i.e. a variant inside of a larger duplication)',
+    'SVLEN': 'Variant size out of set bounds (sizes set in the PAV config file)',
+    'TRIMREF': 'Alignment trimming in reference coordinates removed variant',
+    'TRIMQRY': 'Alignment trimming in query coordinates removed variant'
+}
+
+# Types for known Pandas columns
+PD_COL_TYPES = {
+    '#CHROM': np.str_,
+    'POS': np.uint32,
+    'END': np.uint32,
+    'ID': np.str_,
+    'SVTYPE': np.str_,
+    'SVLEN': np.uint32,
+    'FILTER': np.str_,
+    'HAP': np.str_,
+    'QRY_ID': np.str_,
+    'QRY_POS': np.uint32,
+    'QRY_END': np.uint32,
+    'QRY_STRAND': np.str_,
+    'CI': np.str_,
+    'ALIGN_INDEX': np.str_,
+    'LEFT_SHIFT': np.uint32,
+    'HOM_REF': np.str_,
+    'HOM_TIG': np.str_,
+    'CALL_SOURCE': np.str_,
+    'SEQ': np.str_,
+    'REF': np.str_,
+    'ALT': np.str_,
+    'RESOLVED_TEMPL': np.str_,
+    'SVSUBTYPE': np.str_,
+    'TEMPL_REGION': np.str_,
+    'VAR_SCORE': np.float32,
+    'ANCHOR_SCORE_MIN': np.float32,
+    'ANCHOR_SCORE_MAX': np.float32,
+    'INTERVAL': np.str_,
+    'REGION_REF_OUTER': np.str_,
+    'REGION_QRY_OUTER': np.str_,
+    'RGN_REF_OUTER': np.str_,
+    'RGN_QRY_OUTER': np.str_,
+    'ALIGN_SIZE_GAP': np.uint32,
+    'SEG_N': np.uint32,
+    'STRUCT_REF': np.str_,
+    'STRUCT_QRY': np.str_,
+    'FLAG_TYPE': np.str_,
+    'VAR_SOURCE': np.str_
 }
 
 
 def version_variant_bed_id(df, re_version=False):
     """
-    Version IDs in a variant call BED table (pd.Series). Table should have "ID", "FILTER", and "QRY_REGION" fields. If
-    ID is missing, it will be generated from the table. Variants are prioritized by FILTER=PASS with "dot" versions
-    (e.g. ID.1, ID.2) being preferrentially added to the variant call that do not have FILTER=PASS.
+    Version IDs in a variant call BED table (pd.Series). Table should have "ID", "FILTER", "QRY_REGION", "QRY_POS", and
+    "QRY_END" fields. If ID is missing, it will be generated from the table. Variants are prioritized by FILTER=PASS
+    with "dot" versions (e.g. ID.1, ID.2) being preferentially added to the variant call that do not have FILTER=PASS.
 
     :param df: Variant call DataFrame.
     :param re_version: If True, eliminate existing versions from IDs before re-versioning.
@@ -38,7 +88,7 @@ def version_variant_bed_id(df, re_version=False):
     """
 
     # Determine which columns are available for sorting.
-    get_cols = [col for col in ['ID', 'FILTER', 'QRY_REGION'] if col in df.columns]
+    get_cols = [col for col in ['ID', 'FILTER', 'QRY_ID', 'QRY_POS', 'QRY_END'] if col in df.columns]
 
     if 'ID' not in get_cols:
         id_col = svpoplib.variant.get_variant_id(df, apply_version=False)
@@ -63,9 +113,6 @@ def version_variant_bed_id(df, re_version=False):
     if 'FILTER' not in get_cols:
         df_re['FILTER'] = 'PASS'
 
-    if 'QRY_REGION' not in get_cols:
-        df_re['QRY_REGION'] = 'chrUn:0-0'
-
     # Remove versions (.1, .2, etc) if present
     if re_version:
         df_re['ID'] = df_re['ID'].apply(lambda val: val.rsplit('.', 1)[0])
@@ -73,12 +120,6 @@ def version_variant_bed_id(df, re_version=False):
     # Sort by ID, FILTER, then query region
     df_re['FILTER'].fillna('')
     df_re['FILTER'] = df_re['FILTER'].apply(lambda val: ('a' if val == 'PASS' else 'b') + val)  # Force PASS to sort
-
-    qry_region = df_re['QRY_REGION'].apply(seq.region_from_string)
-    df_re['QRY_ID'] = qry_region.apply(lambda val: val.chrom)
-    df_re['QRY_POS'] = qry_region.apply(lambda val: val.pos)
-
-    del(qry_region)
 
     df_re.sort_values(['ID', 'FILTER', 'QRY_ID', 'QRY_POS'], inplace=True)
 
@@ -150,78 +191,77 @@ def val_per_hap(df, df_dict, col_name, delim=';'):
     )
 
 
-def filter_by_ref_tree(row, filter_tree, reason, match_tig=False):
-    """
-    Filter DataFrame by a dict (keyed by chromosome) of interval trees.
+# def filter_by_ref_tree(row, filter_tree, reason, match_tig=False):
+#     """
+#     Filter DataFrame by a dict (keyed by chromosome) of interval trees.
+#
+#     `filter_tree` is a dictionary with one key per chromosome and an IntervalTree object as the value for each
+#     chromosome. IntervalTrees have a start, end, and data. Elements in the filter tree are usually constructed from
+#     the genomic locations of variant calls. The data should be a tuple of two elements: 1) The contig where the variant
+#     was called from, and 2) The ID of the variant. The first element is needed for `match_tig`, and the second is needed
+#     to annotate why variants are being dropped if they are inside another.
+#
+#     :param row: Variant call row.
+#     :param filter_tree: Dict of trees, one entry per chromosome.
+#     :param reason: Filter reason. "FILTER" is set to `reason` if it is "PASS", otherwise, it is appended to the
+#         filter column with a comma. (e.g. "REASON1,REASON2").
+#     :param match_tig: Match QRY_REGION contig name to the value in the filter tree for intersected intervals (filter
+#         tree values should be contig names for the interval). When set, only filters variants inside regions with a
+#         matching contig. This causes PAV to treat each contig as a separate haplotype.
+#
+#     :return: Filtered DataFrame.
+#     """
+#
+#     intersect_set = filter_tree[row['#CHROM']][row['POS']:row['END']]
+#
+#     if intersect_set and match_tig:
+#         intersect_set = {record for record in intersect_set if record.data[0] != row['QRY_ID']}
+#
+#     if intersect_set:
+#         row['FILTER'] = 'COMPOUND'
+#         row['COMPOUND'] = ','.join(val.data[1] for val in intersect_set)
+#
+#         if row['FILTER'] == 'PASS':
+#             return reason
+#
+#         return row['FILTER'] + f',{reason}'
+#
+#     return row['REASON']  # Leave unaltered
 
-    `filter_tree` is a dictionary with one key per chromosome and an IntervalTree object as the value for each
-    chromosome. IntervalTrees have a start, end, and data. Elements in the filter tree are usually constructed from
-    the genomic locations of variant calls. The data should be a tuple of two elements: 1) The contig where the variant
-    was called from, and 2) The ID of the variant. The first element is needed for `match_tig`, and the second is needed
-    to annotate why variants are being dropped if they are inside another.
 
-    :param row: Variant call row.
-    :param filter_tree: Dict of trees, one entry per chromosome.
-    :param reason: Filter reason. "FILTER" is set to `reason` if it is "PASS", otherwise, it is appended to the
-        filter column with a comma. (e.g. "REASON1,REASON2").
-    :param match_tig: Match QRY_REGION contig name to the value in the filter tree for intersected intervals (filter
-        tree values should be contig names for the interval). When set, only filters variants inside regions with a
-        matching contig. This causes PAV to treat each contig as a separate haplotype.
-
-    :return: Filtered DataFrame.
-    """
-
-    intersect_set = filter_tree[row['#CHROM']][row['POS']:row['END']]
-
-    if intersect_set and match_tig:
-        tig_name = row['QRY_REGION'].split(':', 1)[0]
-        intersect_set = {record for record in intersect_set if record.data[0] != tig_name}
-
-    if intersect_set:
-        row['FILTER'] = 'COMPOUND'
-        row['COMPOUND'] = ','.join(val.data[1] for val in intersect_set)
-
-        if row['FILTER'] == 'PASS':
-            return reason
-
-        return row['FILTER'] + f',{reason}'
-
-    return row['REASON']  # Leave unaltered
-
-
-def filter_by_tig_tree(row, filter_tree, reason):
-    """
-    Filter records from a callset DataFrame by matching "QRY_REGION" with regions in an IntervalTree.
-
-    :param row: DataFrame to filter. Must contain field "QRY_REGION" and "FILTER" initialized to "PASS" (may contain
-        other non-PASS values).
-    :param filter_tree: A `collections.defaultdict` of `intervaltree.IntervalTree` (indexed by contig name) of
-        no-call regions. Variants with a tig region intersecting these records will be removed (any intersect). If
-        `None`, then `df` is not filtered.
-    :param reason: Filter reason. "FILTER" is set to `reason` if it is "PASS", otherwise, it is appended to the
-        filter column with a comma. (e.g. "REASON1,REASON2").
-
-    :return: Filter column value.
-    """
-
-    match_obj = re.match(r'^([^:]+):(\d+)-(\d+)$', row['QRY_REGION'])
-
-    if match_obj is None:
-        raise RuntimeError('Unrecognized QRY_REGION format for record {}: {}'.format(row.name, row['QRY_REGION']))
-
-    if filter_tree[match_obj[1]][int(match_obj[2]) - 1:int(match_obj[3])]:
-        if row['FILTER'] == 'PASS':
-            return reason
-
-        return row['FILTER'] + f',{reason}'
-
-    return row['FILTER']  # Leave unaltered
+# def filter_by_tig_tree(row, filter_tree, reason):
+#     """
+#     Filter records from a callset DataFrame by matching "QRY_REGION" with regions in an IntervalTree.
+#
+#     :param row: DataFrame to filter. Must contain field "QRY_REGION" and "FILTER" initialized to "PASS" (may contain
+#         other non-PASS values).
+#     :param filter_tree: A `collections.defaultdict` of `intervaltree.IntervalTree` (indexed by contig name) of
+#         no-call regions. Variants with a tig region intersecting these records will be removed (any intersect). If
+#         `None`, then `df` is not filtered.
+#     :param reason: Filter reason. "FILTER" is set to `reason` if it is "PASS", otherwise, it is appended to the
+#         filter column with a comma. (e.g. "REASON1,REASON2").
+#
+#     :return: Filter column value.
+#     """
+#
+#     match_obj = re.match(r'^([^:]+):(\d+)-(\d+)$', row['QRY_REGION'])
+#
+#     if match_obj is None:
+#         raise RuntimeError('Unrecognized QRY_REGION format for record {}: {}'.format(row.name, row['QRY_REGION']))
+#
+#     if filter_tree[match_obj[1]][int(match_obj[2]) - 1:int(match_obj[3])]:
+#         if row['FILTER'] == 'PASS':
+#             return reason
+#
+#         return row['FILTER'] + f',{reason}'
+#
+#     return row['FILTER']  # Leave unaltered
 
 
 def read_variant_table(filename_list, drop_dup_id=False, version_id=True):
     """
-    Read a variant table and prepare for callset integration. Returns the table and two `collections.defaultdict(set)`
-    objects (one for filters, and one for compound variant IDs). Callset integration uses these objects to track
+    Read a variant table and prepare for callset integration. Returns the table and a `collections.defaultdict(set)`
+    object one for filters found in the callset. Callset integration uses these objects to track
     variant filters (filters) and IDs of variants that cover this variant (compound) (i.e. the ID of a large DEL a
     small variant appears in will appear in the small variant's COMPOUND column and "COMPOUND" will be added to
     filters).
@@ -240,8 +280,7 @@ def read_variant_table(filename_list, drop_dup_id=False, version_id=True):
     df_list = [
         pd.read_csv(
             filename, sep='\t',
-            low_memory=False, keep_default_na=False,
-            dtype={'#CHROM': str, 'QRY_ID': str}
+            low_memory=False, keep_default_na=False
         )
         for filename in filename_list
     ]
@@ -257,9 +296,6 @@ def read_variant_table(filename_list, drop_dup_id=False, version_id=True):
         ['#CHROM', 'POS', 'END', 'ID']
     ).reset_index(drop=True)
 
-    if 'FILTER' not in df.columns:
-        df['FILTER'] = 'PASS'
-
     if drop_dup_id:
         df.drop_duplicates('ID', keep='first', inplace=True)
 
@@ -269,222 +305,255 @@ def read_variant_table(filename_list, drop_dup_id=False, version_id=True):
     df.set_index('ID', inplace=True, drop=False)
     df.index.name = 'INDEX'
 
+    # Set filters
     filter_dict = collections.defaultdict(set)
-    compound_dict = collections.defaultdict(set)
 
-    if 'COMPOUND' in df.columns:
-        for index, row in df.loc[~ pd.isnull(df['COMPOUND'])].iterrows():
-            compound_dict[index] |= {val.strip() for val in row['COMPOUND'].split(',') if len(val.strip()) > 0}
+    if 'FILTER' not in df.columns:
+        df['FILTER'] = 'PASS'
 
-        del(df['COMPOUND'])
+    else:
+        df['FILTER'] = df['FILTER'].fillna('PASS').astype(str).str.upper().str.strip()
 
-    for index, row in df.iterrows():
-        if row['FILTER'] != 'PASS':
-            filter_dict[index].add(row['FILTER'])
+        for var_id, filter_str in df['FILTER'].items():
+            filter_set = set(filter_str.split(',')) - {'PASS', ''}
 
-    return df, filter_dict, compound_dict
+            if filter_set:
+                filter_dict[var_id] = filter_set
+
+    return df, filter_dict
 
 
-class DepthContainer:
+# class DepthContainer:
+#     """
+#     Computes average alignment depth and coverage at SV sites from a coverage BED file.
+#     """
+#
+#     def __init__(self, df_cov):
+#         self.df_cov = df_cov
+#
+#         if df_cov is None or df_cov.shape[0] == 0:
+#             raise RuntimeError('Coverage table is missing or empty')
+#
+#         # Make a table of indexes into df_cov
+#         chrom = None
+#
+#         last_end = 0
+#         first_index = 0
+#
+#         self.index_dict = dict()
+#
+#         for index in range(df_cov.shape[0]):
+#             row = df_cov.iloc[index]
+#
+#             if row['#CHROM'] != chrom:
+#
+#                 if chrom is not None:
+#                     self.index_dict[chrom] = (first_index, index)
+#
+#                 if row['#CHROM'] in self.index_dict:
+#                     raise RuntimeError(f'Discontiguous chromosome order: Found {row["#CHROM"]} in multiple blocks')
+#
+#                 if row['POS'] != 0:
+#                     raise RuntimeError(f'First record for chromosome {row["#CHROM"]} is not 0: {row["POS"]} (record location {index})')
+#
+#                 chrom = row['#CHROM']
+#                 last_end = row['END']
+#                 first_index = index
+#
+#             else:
+#                 if row['POS'] != last_end:
+#                     raise RuntimeError(f'Discontiguous or out of order record in {row["#CHROM"]} (record location {index}): POS={row["POS"]}, expected POS={last_end}')
+#
+#                 last_end = row['END']
+#
+#         assert chrom is not None, 'Missing chromosome at the end of the coverage table'
+#
+#         self.index_dict[chrom] = (first_index, df_cov.shape[0])
+#
+#         # Set state to the first chromosome
+#         row = self.df_cov.iloc[0]
+#
+#         self.chrom = row['#CHROM']
+#         self.index, self.last_index = self.index_dict[self.chrom]
+#
+#         self.pos = row['POS']
+#         self.end = row['END']
+#         self.depth = row['DEPTH']
+#         self.qry_id = set(row['QRY_ID'].split(',')) if not pd.isnull(row['QRY_ID']) else set()
+#
+#     def get_depth(self, row):
+#
+#         # Switch chromosomes
+#         if row['#CHROM'] != self.chrom:
+#
+#             if row['#CHROM'] not in self.index_dict:
+#                 sv_id = row['ID'] if 'ID' in row.index else '<UNKNOWN>'
+#                 raise RuntimeError(f'Variant "{sv_id}" (variant row index {row.name}) assigned to chromosome that is not in the depth table: {row["#CHROM"]}')
+#
+#             self.chrom = row['#CHROM']
+#             self.index, self.last_index = self.index_dict[self.chrom]
+#
+#             self.pos = self.df_cov.iloc[self.index]['POS']
+#             self.end = self.df_cov.iloc[self.index]['END']
+#             self.depth = self.df_cov.iloc[self.index]['DEPTH']
+#             self.qry_id = set(self.df_cov.iloc[self.index]['QRY_ID'].split(',')) if not pd.isnull(self.df_cov.iloc[self.index]['QRY_ID']) else set()
+#
+#         # Catch up to the coverage record where this record begins
+#         #assert False, 'WORKING ON DEPTH CONTAINER'
+#
+#         is_end_ins = False
+#
+#         while row['POS'] >= self.end:
+#             self.index += 1
+#
+#             if self.index >= self.last_index:
+#
+#                 # Rescue insertions added to the end of the chromosome. This can happen if the contig aligns up to
+#                 # the end of the reference chromosome without clipping and with extra sequence added as an insertion
+#                 # operation to the end of the alignment (CIGAR string). In this case, the "depth" is the number of
+#                 # query records reaching the end of the reference chromosome that this insertion could have been
+#                 # appended to.
+#
+#                 # self.pos, self.end, self.depth, and self.qry_id are already set
+#
+#                 if not (self.index == self.last_index and row['SVTYPE'] == 'INS' and row['END'] == row['POS'] + 1):
+#                     # Variant is not in the bounds of this reference chromosome
+#                     sv_id = row['ID'] if 'ID' in row.index else '<UNKNOWN>'
+#                     raise RuntimeError(f'Ran out of depth records on "{self.chrom}" to the beginning of variant record {sv_id} (variant row index {row.name})')
+#
+#                 self.index -= 1
+#                 is_end_ins = True
+#                 break
+#
+#             self.pos = self.df_cov.iloc[self.index]['POS']
+#             self.end = self.df_cov.iloc[self.index]['END']
+#             self.depth = self.df_cov.iloc[self.index]['DEPTH']
+#
+#             self.qry_id = set(self.df_cov.iloc[self.index]['QRY_ID'].split(',')) if not pd.isnull(self.df_cov.iloc[self.index]['QRY_ID']) else set()
+#
+#         # If the variant fully contained within this coverage record, return stats from this region
+#         if row['END'] < self.end or is_end_ins:
+#             return self.depth, 1 if self.depth > 0 else 0, ','.join(sorted(self.qry_id))
+#
+#         # Get coverage from the variant position to the end of this coverage record
+#         # sum_depth = self.depth * (self.end - row['POS'])
+#         # sum_align = (1 if self.depth > 0 else 0) * (self.end - row['POS'])
+#         # qry_id = set(self.qry_id.split(',')) if not pd.isnull(self.qry_id) else set()
+#
+#         sum_depth = 0
+#         sum_align = 0
+#         qry_id = set()
+#
+#         step_index = self.index
+#
+#         svlen = 0
+#
+#         last_end = self.df_cov.iloc[step_index]['POS']
+#
+#         # Get coverage from all coverage records fully contained within the variant record
+#         while row['END'] > last_end:
+#             if step_index >= self.last_index:
+#                 sv_id = row['ID'] if 'ID' in row.index else '<UNKNOWN>'
+#                 raise RuntimeError(f'Ran out of depth records on "{self.chrom}" to the end of variant record {sv_id} (variant row index {row.name})')
+#
+#             record_len = min(
+#                 [row['END'], self.df_cov.iloc[step_index]['END']]
+#             ) - max(
+#                 [row['POS'], self.df_cov.iloc[step_index]['POS']]
+#             )
+#
+#             last_end = self.df_cov.iloc[step_index]['END']
+#
+#             svlen += record_len
+#
+#             sum_depth += self.df_cov.iloc[step_index]['DEPTH'] * record_len
+#
+#             sum_align += record_len if self.df_cov.iloc[step_index]['DEPTH'] > 0 else 0
+#
+#             if not pd.isnull(self.df_cov.iloc[step_index]['QRY_ID']):
+#                 qry_id |= set(self.df_cov.iloc[step_index]['QRY_ID'].split(',')) if not pd.isnull(self.df_cov.iloc[step_index]['QRY_ID']) else {}
+#
+#             step_index += 1
+#
+#             assert svlen == row['END'] - row['POS'], f'Record length for "{row["ID"] if "ID" in row.index else "<UNKNOWN>"}" after scanning a variant spanning multiple records does not match the expected variant length: Found {record_len}, expected {svlen}: Scanned depth table from index {self.index} to {step_index - 1} (inclusive)'
+#
+#         return (
+#             sum_depth / svlen,
+#             sum_align / svlen,
+#             ','.join(sorted(qry_id)) if len(qry_id) > 0 else np.nan
+#         )
+
+def update_fields(
+        df: pd.DataFrame,
+        filter_dict: dict,
+        purge_dict: dict,
+        inner_dict: dict
+) -> None:
     """
-    Computes average alignment depth and coverage at SV sites from a coverage BED file.
-    """
-
-    def __init__(self, df_cov):
-        self.df_cov = df_cov
-
-        if df_cov is None or df_cov.shape[0] == 0:
-            raise RuntimeError('Coverage table is missing or empty')
-
-        # Make a table of indexes into df_cov
-        chrom = None
-
-        last_end = 0
-        first_index = 0
-
-        self.index_dict = dict()
-
-        for index in range(df_cov.shape[0]):
-            row = df_cov.iloc[index]
-
-            if row['#CHROM'] != chrom:
-
-                if chrom is not None:
-                    self.index_dict[chrom] = (first_index, index)
-
-                if row['#CHROM'] in self.index_dict:
-                    raise RuntimeError(f'Discontiguous chromosome order: Found {row["#CHROM"]} in multiple blocks')
-
-                if row['POS'] != 0:
-                    raise RuntimeError(f'First record for chromosome {row["#CHROM"]} is not 0: {row["POS"]} (record location {index})')
-
-                chrom = row['#CHROM']
-                last_end = row['END']
-                first_index = index
-
-            else:
-                if row['POS'] != last_end:
-                    raise RuntimeError(f'Discontiguous or out of order record in {row["#CHROM"]} (record location {index}): POS={row["POS"]}, expected POS={last_end}')
-
-                last_end = row['END']
-
-        assert chrom is not None, 'Missing chromosome at the end of the coverage table'
-
-        self.index_dict[chrom] = (first_index, df_cov.shape[0])
-
-        # Set state to the first chromosome
-        row = self.df_cov.iloc[0]
-
-        self.chrom = row['#CHROM']
-        self.index, self.last_index = self.index_dict[self.chrom]
-
-        self.pos = row['POS']
-        self.end = row['END']
-        self.depth = row['DEPTH']
-        self.qry_id = set(row['QRY_ID'].split(',')) if not pd.isnull(row['QRY_ID']) else set()
-
-    def get_depth(self, row):
-
-        # Switch chromosomes
-        if row['#CHROM'] != self.chrom:
-
-            if row['#CHROM'] not in self.index_dict:
-                sv_id = row['ID'] if 'ID' in row.index else '<UNKNOWN>'
-                raise RuntimeError(f'Variant "{sv_id}" (variant row index {row.name}) assigned to chromosome that is not in the depth table: {row["#CHROM"]}')
-
-            self.chrom = row['#CHROM']
-            self.index, self.last_index = self.index_dict[self.chrom]
-
-            self.pos = self.df_cov.iloc[self.index]['POS']
-            self.end = self.df_cov.iloc[self.index]['END']
-            self.depth = self.df_cov.iloc[self.index]['DEPTH']
-            self.qry_id = set(self.df_cov.iloc[self.index]['QRY_ID'].split(',')) if not pd.isnull(self.df_cov.iloc[self.index]['QRY_ID']) else set()
-
-        # Catch up to the coverage record where this record begins
-        #assert False, 'WORKING ON DEPTH CONTAINER'
-
-        is_end_ins = False
-
-        while row['POS'] >= self.end:
-            self.index += 1
-
-            if self.index >= self.last_index:
-
-                # Rescue insertions added to the end of the chromosome. This can happen if the contig aligns up to
-                # the end of the reference chromosome without clipping and with extra sequence added as an insertion
-                # operation to the end of the alignment (CIGAR string). In this case, the "depth" is the number of
-                # query records reaching the end of the reference chromosome that this insertion could have been
-                # appended to.
-
-                # self.pos, self.end, self.depth, and self.qry_id are already set
-
-                if not (self.index == self.last_index and row['SVTYPE'] == 'INS' and row['END'] == row['POS'] + 1):
-                    # Variant is not in the bounds of this reference chromosome
-                    sv_id = row['ID'] if 'ID' in row.index else '<UNKNOWN>'
-                    raise RuntimeError(f'Ran out of depth records on "{self.chrom}" to the beginning of variant record {sv_id} (variant row index {row.name})')
-
-                self.index -= 1
-                is_end_ins = True
-                break
-
-            self.pos = self.df_cov.iloc[self.index]['POS']
-            self.end = self.df_cov.iloc[self.index]['END']
-            self.depth = self.df_cov.iloc[self.index]['DEPTH']
-
-            self.qry_id = set(self.df_cov.iloc[self.index]['QRY_ID'].split(',')) if not pd.isnull(self.df_cov.iloc[self.index]['QRY_ID']) else set()
-
-        # If the variant fully contained within this coverage record, return stats from this region
-        if row['END'] < self.end or is_end_ins:
-            return self.depth, 1 if self.depth > 0 else 0, ','.join(sorted(self.qry_id))
-
-        # Get coverage from the variant position to the end of this coverage record
-        # sum_depth = self.depth * (self.end - row['POS'])
-        # sum_align = (1 if self.depth > 0 else 0) * (self.end - row['POS'])
-        # qry_id = set(self.qry_id.split(',')) if not pd.isnull(self.qry_id) else set()
-
-        sum_depth = 0
-        sum_align = 0
-        qry_id = set()
-
-        step_index = self.index
-
-        svlen = 0
-
-        last_end = self.df_cov.iloc[step_index]['POS']
-
-        # Get coverage from all coverage records fully contained within the variant record
-        while row['END'] > last_end:
-            if step_index >= self.last_index:
-                sv_id = row['ID'] if 'ID' in row.index else '<UNKNOWN>'
-                raise RuntimeError(f'Ran out of depth records on "{self.chrom}" to the end of variant record {sv_id} (variant row index {row.name})')
-
-            record_len = min(
-                [row['END'], self.df_cov.iloc[step_index]['END']]
-            ) - max(
-                [row['POS'], self.df_cov.iloc[step_index]['POS']]
-            )
-
-            last_end = self.df_cov.iloc[step_index]['END']
-
-            svlen += record_len
-
-            sum_depth += self.df_cov.iloc[step_index]['DEPTH'] * record_len
-
-            sum_align += record_len if self.df_cov.iloc[step_index]['DEPTH'] > 0 else 0
-
-            if not pd.isnull(self.df_cov.iloc[step_index]['QRY_ID']):
-                qry_id |= set(self.df_cov.iloc[step_index]['QRY_ID'].split(',')) if not pd.isnull(self.df_cov.iloc[step_index]['QRY_ID']) else {}
-
-            step_index += 1
-
-            assert svlen == row['END'] - row['POS'], f'Record length for "{row["ID"] if "ID" in row.index else "<UNKNOWN>"}" after scanning a variant spanning multiple records does not match the expected variant length: Found {record_len}, expected {svlen}: Scanned depth table from index {self.index} to {step_index - 1} (inclusive)'
-
-        return (
-            sum_depth / svlen,
-            sum_align / svlen,
-            ','.join(sorted(qry_id)) if len(qry_id) > 0 else np.nan
-        )
-
-def update_filter_compound_fields(df, filter_dict, compound_dict):
-    """
-    Update FILTER and COMPOUND fields in a variant call DataFrame.
+    Update FILTER, PURGE, and INNER fields in a variant call table.
 
     :param df: Variant call DataFrame.
     :param filter_dict: Dict keyed by variant IDs containing sets of FILTER strings.
-    :param compound_dict: Dict keyed by variant IDs containing IDs of variants intersecting this variant.
+    :param purge_dict: Dict keyed by variant IDs containing IDs of variants causing the record to be purged.
 
-    :return: `df` with FILTER updated and COMPOUND added after the filter column.
+    :return: `df` with FILTER updated and PURGE added after the filter column.
     """
 
+    # FILTER: If both TRIMREF and INNER, remove TRIMREF
+    filter_dict = {
+        key: (
+            filter_set if len(filter_set & {'TRIMREF', 'INNER'}) == 2 else (
+                filter_set - {'TRIMREF'}
+            )
+        )
+            for key, filter_set in filter_dict.items()
+    }
+
     df['FILTER'] = pd.Series(filter_dict).apply(
-        lambda vals: ','.join(sorted(vals))
+        lambda vals: ','.join(sorted(vals)) if vals else 'PASS'
     ).reindex(df.index, fill_value='PASS')
 
-    col_compound = pd.Series(compound_dict).apply(
+    col_purge = pd.Series(purge_dict).apply(
         lambda vals: ','.join(sorted(vals))
     ).reindex(df.index, fill_value='')
 
-    if 'COMPOUND' in df.columns:
-        df['COMPOUND'] = col_compound
+    col_inner = pd.Series(inner_dict).apply(
+        lambda vals: ','.join(sorted(vals))
+    ).reindex(df.index, fill_value='')
+
+    if 'PURGE' in df.columns:
+        df['PURGE'] = col_purge
     else:
         df.insert(
             [index for col, index in zip(df.columns, range(df.shape[1])) if col == 'FILTER'][0] + 1,
-            'COMPOUND',
-            col_compound
+            'PURGE',
+            col_purge
+        )
+
+    if 'INNER' in df.columns:
+        df['INNER'] = col_inner
+    else:
+        df.insert(
+            [index for col, index in zip(df.columns, range(df.shape[1])) if col == 'PURGE'][0] + 1,
+            'INNER',
+            col_inner
         )
 
 
-def apply_compound_filter(df, compound_filter_tree, filter_dict, compound_dict, update=True, filter_str='COMPOUND'):
+def apply_purge_filter(
+        df, purge_filter_tree, filter_dict, purge_dict, update=True, filter_str='PURGE'
+):
     """
-    Apply the compound-variant filter. If a variant intersects one already seen, then "COMPOUND" is added to the filter
-    (`filter_dict`) for that variant and the variant it intersected is added to `compound_dict` for that variant. This
-    tracks which variants are being removed because they are in a larger event (such as small variants in a deletion)
+    Apply the purge variant filter. If a variant intersects one already seen in reference coordinates (i.e. a small
+    variant inside a deletion), then "PURGE" is added to the filter (`filter_dict`) for that variant and the variant
+    it intersected is added to `purge_dict` for that variant (key is variant ID, value is a set of variant IDs covering
+    it).
 
     :param df: Variant DataFrame to filter.
-    :param compound_filter_tree: Tree of existing variants to intersect.
+    :param purge_filter_tree: Tree of existing variants to intersect.
     :param filter_dict: Filter dict matching variants in `df` keyed by variant IDs. Contains sets of filters for each
         variant. Adds `filter_str` for variants filtered by this method.
-    :param compound_dict: Compound dict matching variants in `df` keyed by variant IDs. Contains sets of variant IDs
+    :param purge_dict: Dictionary matching variants in `df` keyed by variant IDs. Contains sets of variant IDs
         "covering" this event (i.e. large variants already in the callset a variant intersected). The result of this
         can be used to reclaim smaller variants filtered by COMPOUND if all the variant IDs in it's `compound_dict`
         entry were removed from the callset. This dict is updated by this method.
@@ -506,28 +575,25 @@ def apply_compound_filter(df, compound_filter_tree, filter_dict, compound_dict, 
 
     # Apply filter
     for index, row in df.sort_values(['SVLEN', 'POS'], ascending=(False, True)).iterrows():
-        intersect_set = compound_filter_tree[row['#CHROM']][row['POS']:row['END']]
+        intersect_set = purge_filter_tree[row['#CHROM']][row['POS']:row['END']]
+        filter_set = filter_dict.get(index, set())
+
+        # Skip variants that are part of a larger variant
+        if 'INNER' in filter_set:
+            continue
 
         if len(intersect_set) > 0:
             # Filter variant
             filter_dict[index].add(filter_str)
-            compound_dict[index] |= {val.data for val in intersect_set}
+            purge_dict[index] |= {val.data for val in intersect_set}
         else:
             # Add to filter regions if variant was not filtered
-            if update and index not in filter_dict.keys():
-                if row['SVTYPE'] == 'INV' and row['CALL_SOURCE'].split(':', 1)[0] == 'FLAG':
-                    # Filter by inner INV regions
-                    inner_region = seq.region_from_string(row['RGN_REF_INNER'])
-                    compound_filter_tree[inner_region.chrom][inner_region.pos:inner_region.end] = row['ID']
-
-                else:
-                    # Filter by whole region
-                    compound_filter_tree[row['#CHROM']][row['POS']:row['END']] = row['ID']
-
+            if update and not filter_set:
+                purge_filter_tree[row['#CHROM']][row['POS']:row['END']] = row['ID']
 
 def apply_qry_filter_tree(df, qry_filter_tree, filter_dict):
     """
-    Match QRY_REGION from variant calls to a filter tree in query coordinates.
+    Match the query coordinates from variant calls to a filter tree in query coordinates.
 
     :param df: Variant call dataframe.
     :param qry_filter_tree: Filter (dict keyed by query IDs with intervaltree objects covering filtered loci). If
@@ -538,13 +604,13 @@ def apply_qry_filter_tree(df, qry_filter_tree, filter_dict):
 
     if qry_filter_tree is not None:
 
-        filter_set = df.apply(lambda row: seq.region_from_string(row['QRY_REGION']), axis=1).apply(
-            lambda region: len(qry_filter_tree[region.chrom][region.pos:region.end]) > 0
+        filter_set = df.apply(
+            lambda row: len(qry_filter_tree[row['QRY_ID']][row['QRY_POS']:row['QRY_END']]) > 0,
+            axis=1
         )
 
         for index in filter_set[filter_set].index:
             filter_dict[index].add('QRY_FILTER')
-
 
 def left_homology(pos_tig, seq_tig, seq_sv):
     """
@@ -654,7 +720,14 @@ def right_homology(pos_tig, seq_tig, seq_sv):
     return hom_len
 
 
-def merge_haplotypes(bed_list, callable_list, hap_list, config_def, threads=1, subset_chrom=None):
+def merge_haplotypes(
+    bed_list,
+    callable_list,
+    hap_list,
+    config_def,
+    threads=1,
+    subset_chrom=None
+):
     """
     Merge haplotypes for one variant type.
 
@@ -697,7 +770,7 @@ def merge_haplotypes(bed_list, callable_list, hap_list, config_def, threads=1, s
     df.columns = [re.sub('^MERGE_', 'HAP_', val) for val in df.columns]
     df.columns = ['HAP' if val == 'HAP_SAMPLES' else val for val in df.columns]
 
-    # Change , to ; from merger
+    # Get values per haplotype
     for col in ('HAP', 'HAP_VARIANTS', 'HAP_RO', 'HAP_SZRO', 'HAP_OFFSET', 'HAP_OFFSZ', 'HAP_MATCH'):
         if col in df.columns:
             df[col] = df[col].apply(lambda val: ';'.join(val.split(',')))
@@ -739,84 +812,342 @@ def merge_haplotypes(bed_list, callable_list, hap_list, config_def, threads=1, s
     return df
 
 
-def get_merge_params(wildcards, config):
+def get_merge_params(
+        svtype: str,
+        pav_params: pavconfig.ConfigParams
+) -> str:
     """
     Get merging parameters.
 
-    :param wildcards: Rule wildcards.
-    :param config: Config parameters.
+    :param svtype: SV type.
+    :param pav_params: PAV parameters.
 
     :return: An SV-Pop merge definition string describing how variants should be intersected.
     """
 
-    # Get svtype
-    vartype, svtype = wildcards.vartype_svtype.split('_')
+    svtype = svtype.lower().strip()
 
-    # Get merge parameters
-    config_def = None
+    if svtype in {'ins', 'del', 'insdel'}:
+        return pav_params.merge_insdel
 
-    if svtype in {'ins', 'del', 'inv'}:  # Search config for a matching override
-        if f'merge_{svtype}' in config:
-            config_def = config[f'merge_{svtype}']
-        elif 'merge_insdel' in config:
-            config_def = config['merge_insdel']
-        elif 'merge_insdelinv' in config:
-            config_def = config['merge_insdelinv']
+    if svtype == 'inv':
+        return pav_params.merge_inv
 
-    elif svtype == 'snv' and 'merge_snv' in config:
-        config_def = config['merge_snv']
+    if svtype == 'snv':
+        return pav_params.merge_snv
 
-    if config_def is None:  # Get default
-        config_def = const.MERGE_PARAM_DEFAULT.get(svtype, None)
+    if svtype == 'cpx':
+        return pav_params.merge_cpx
 
-    if config_def is None:
-        raise RuntimeError(f'No merge parameters for svtype: {svtype}')
+    if svtype == 'dup':
+        return pav_params.merge_dup
 
-    # Return config definition
-    return config_def
+    raise RuntimeError(f'Unknown SV type: {svtype}')
 
 
-def filter_by_align(df, df_align, filter_reason='TRIM'):
+def apply_trim_filter(
+    df: pd.DataFrame,
+    filter_dict: dict,
+    trim_tree: intervaltree.IntervalTree
+):
     """
-    Filter variants in `df` against a table of trimmed alignments. The variants in `df` are called from a less-
-    trimmed alignment set (i.e. trim "none"), and compared against a more trimmed alignment set (i.e. trim "qryref").
-    If the variant is in an alignment record that was not trimmed, then it gets "PASS", otherwise, FILTER is set
-    to "TRIM".
+    Apply trim filters to a filter dictionary.
 
-    For each variant in `df`, the alignment index ("INDEX") column is compared to an alignment index in `df_align`. If
-    the contig coordinates of the variant (columns "QRY_POS" and "QRY_END") are in an alignment record `df_align` for
-    that index, the variant gets FILTER "PASS", otherwise, it gets FILTER "TRIM".
-
-    :param df: Variant table.
-    :param df_align: Table of trimmed alignments.
-    :param filter_reason: Reason for filtered variants (defaults to "TRIM").
-
-    :return: A variant filter column (pandas.Series)
+    :param df: Variant call table.
+    :param filter_dict: Filter dictionary.
+    :param trim_tree: Interval tree of trimmed regions.
     """
 
-    region_pattern = re.compile(r'.*:(\d+)-(\d+)$')
+    pos_arry = df[['ALIGN_INDEX', 'QRY_POS', 'QRY_END']].values
+    id_arr = df['ID'].values
 
-    def region_tuple(region):
-        match = re.search(region_pattern, region)
+    for arr_index in range(pos_arry.shape[0]):
+        index, qry_pos, qry_end = pos_arry[arr_index]
+        var_id = id_arr[arr_index]
+
+        for match in trim_tree[(index, qry_pos):(index, qry_end)]:
+            filter_dict[var_id].add(match.data)
+
+def read_filter_tree(filter_list, default_none=True):
+    """
+    Read a list of BED files into an interval tree.
+
+    :param filter_list: List of BED file names (type `list`) or a semi-colon separated list of bed file names
+        (type `str`).
+    :param default_none: If there are no filters, return `None` if `True`, otherwise retrun an empty interval tree.
+    """
+
+    if isinstance(filter_list, str):
+        filter_list = [filename for val in filter_list.split(';') if (filename := val.strip()) != '']
+    elif isinstance(filter_list, list):
+        filter_list = [filename for val in filter_list if (filename := val.strip()) != '']
+    elif filter_list is None:
+        filter_list = []
+    else:
+        raise RuntimeError(f'Expected filter_list to be a list, string, or None, received {type(filter_list)}')
+
+    if len(filter_list) == 0:
+        if default_none:
+            return None
+        else:
+            return collections.defaultdict(intervaltree.IntervalTree)
+
+    filter_tree = collections.defaultdict(intervaltree.IntervalTree)
+
+    for filter_filename in filter_list:
+        df_filter = pd.read_csv(filter_filename, sep='\t', header=None, comment='#', usecols=(0, 1, 2))
+        df_filter.columns = ['#CHROM', 'POS', 'END']
+
+        for index, row in df_filter.iterrows():
+            filter_tree[row['#CHROM']][row['POS']:row['END']] = True
+
+    return filter_tree
+
+def read_trim_regions(
+    df_none: pd.DataFrame,
+    df_qry: pd.DataFrame,
+    df_qryref: pd.DataFrame
+) -> intervaltree.IntervalTree:
+    """
+    Get an intervaltree describing trimmed alignment filters.
+
+    :param df_none: Alignment table with no trimming.
+    :param df_qry: Alignment table after query trimming.
+    :param df_qryref: Alignment table after query and reference trimming.
+    """
+
+    trim_tree = intervaltree.IntervalTree()
+
+    for filter_str in ('TRIMQRY', 'TRIMREF'):
+
+        # Choose left (pre-trim) and right (post-trim) alignment records
+        if filter_str == 'TRIMQRY':
+            df_l = df_none
+            df_r = df_qry
+        elif filter_str == 'TRIMREF':
+            df_l = df_qry
+            df_r = df_qryref
+        else:
+            raise RuntimeError(f'Expected filter_str to be "TRIMQRY" or "TRIMQRYREF", received {filter_str}')
+
+        # Get array of coordinates (start_l, pos_r, end_l, end_r), -1 on r coordinates means the whole record was trimmed
+        coord_arr = df_l[['INDEX', 'QRY_POS', 'QRY_END']].set_index('INDEX').join(
+            df_r[['INDEX', 'QRY_POS', 'QRY_END']].set_index('INDEX'),
+            how='left', lsuffix='_L', rsuffix='_R'
+        ).reset_index(drop=False)[
+            ['QRY_POS_L', 'QRY_POS_R', 'QRY_END_L', 'QRY_END_R', 'INDEX']
+        ].fillna(-1).astype(int).values
+
+        # Fill tree with trimmed regions
+        for index in range(coord_arr.shape[0]):
+            align_index = coord_arr[index, 4]
+
+            if coord_arr[index, 1] >= 0:
+                if coord_arr[index, 1] > coord_arr[index, 0]:
+                    # Left side was trimmed
+                    trim_tree[(align_index, coord_arr[index, 0]):(align_index, coord_arr[index, 1])] = filter_str
+
+                if coord_arr[index, 3] < coord_arr[index, 2]:
+                    # Right side was trimmed
+                    trim_tree[(align_index, coord_arr[index, 3]):(align_index, coord_arr[index, 2])] = filter_str
+
+            else:
+                # Right record was  fully trimmed
+                trim_tree[(align_index, coord_arr[index, 0]):(align_index, coord_arr[index, 2])] = filter_str
+
+    return trim_tree
+
+def read_inner_tree(
+        seg_filename: str,
+        trim_tree: intervaltree.IntervalTree,
+        purge_filter_tree: collections.defaultdict=None
+) -> intervaltree.IntervalTree:
+    """
+    Get a dictionary of alignment records internal to larger variants.
+
+    :param seg_filename: Segment table filename.
+    :param trim_tree: Filter tree for trimmed alignments.
+    :param purge_filter_tree: Filter tree for alignments to purge.
+    """
+
+    inner_tree = intervaltree.IntervalTree()
+
+    # Read segment table for large variants
+    df_seg = pd.read_csv(
+        seg_filename,
+        sep='\t',
+        usecols=['ID', '#CHROM', 'POS', 'END', 'FILTER', 'INDEX', 'QRY_POS', 'QRY_END', 'IS_ALIGNED', 'IS_ANCHOR']
+    )
+
+    df_seg = df_seg.loc[
+        df_seg['IS_ALIGNED']
+    ]
+
+    # Separate anchors and aligned variant segments
+    df_anchor = df_seg.loc[df_seg['IS_ANCHOR']]
+    df_seg = df_seg.loc[~df_seg['IS_ANCHOR']]
+
+    # Do not allow duplicated segments
+    dup_index = {
+        align_index for align_index, count in
+            zip(*np.unique(df_seg['INDEX'], return_counts=True))
+                if count > 1
+    }
+
+    if dup_index:
+        n = len(dup_index)
+        index_list = ', '.join(sorted(dup_index)[:3]) + ('...' if n > 3 else '')
+        raise RuntimeError(f'Found {n} duplicate alignment indices in the segment table: {index_list}')
+
+    # Set filter
+    if 'FILTER' not in df_seg.columns:
+        df_seg['FILTER'] = 'PASS'
+
+    df_seg['FILTER'] = df_seg['FILTER'].fillna('PASS').astype(str)
+
+    # Set inner dict
+    for index, row in df_seg.iterrows():
+        inner_tree[
+            (row['INDEX'], row['QRY_POS']): (row['INDEX'], row['QRY_END'])
+        ] = (
+            row['ID'],
+            {val.strip() for val in row['FILTER'].split(',')} - {'PASS', ''}
+        )
+
+    # Update purge filter
+    update_purge_filter = purge_filter_tree is not None
+
+    for var_id, subdf in df_anchor.groupby('ID'):
+        if subdf.shape[0] != 2:
+            continue # Shouldn't occur, all LG-SVs should have two anchors
+
+        row_l, row_r = subdf.iloc[0], subdf.iloc[1]
+
+        # Update purge filter if there is a gap between anchors
+        if update_purge_filter and row_r['POS'] > row_l['END']:
+            purge_filter_tree[row_l['#CHROM']][row_l['END']:row_r['POS']] = var_id
+
+        # Update inner dict if the anchors overlap (tandem DUP over anchors).
+        # Add regions that would be trimmed by reference trimming
+        if row_r['POS'] < row_l['END']:
+
+            filter_set = (set(row_l['FILTER'].split(',')) | set(row_r['FILTER'].split(','))) - {'PASS', ''}
+
+            for region in trim_tree[
+                (row_l['INDEX'], row_l['QRY_POS']):(row_l['INDEX'], row_l['QRY_END'])
+            ] | trim_tree[
+                (row_r['INDEX'], row_r['QRY_POS']):(row_r['INDEX'], row_r['QRY_END'])
+            ]:
+                if region.data != 'TRIMREF':
+                    continue
+
+                align_index = region.begin[0]
+                qry_pos = region.begin[1]
+                qry_end = region.end[1]
+
+                inner_tree[
+                    (align_index, region.begin[1]):(align_index, region.end[1])
+                ] = (var_id, filter_set)
+
+    return inner_tree
+
+def apply_inner_filter(
+    df: pd.DataFrame,
+    filter_dict: dict,
+    inner_tree: intervaltree.IntervalTree,
+    inner_dict: dict,
+    filter_str: str='INNER'
+) -> None:
+    """
+    Apply filter for inner variants.
+
+    :param df: Variant call table.
+    :param filter_dict: Filter dictionary.
+    :param inner_tree: Interval tree of inner regions.
+    :param inner_dict: Dict keyed by variant IDs containing sets of FILTER strings.
+    :param filter_str: String to atd to `filter_dict` for inner variants.
+    """
+
+    pos_arry = df[['ALIGN_INDEX', 'QRY_POS', 'QRY_END']].values
+    id_arr = df['ID'].values
+
+    for arr_index in range(pos_arry.shape[0]):
+        index, qry_pos, qry_end = pos_arry[arr_index]
+        var_id = id_arr[arr_index]
+
+        for match in inner_tree[(index, qry_pos):(index, qry_end)]:
+            inner_dict[var_id].add(match.data[0])
+            filter_dict[var_id].update(match.data[1])
+
+            filter_dict[var_id].add(filter_str)
+
+def pandas_to_polars(df: pd.DataFrame) -> pl.DataFrame:
+    """
+    Convert a Pandas DataFrame to Polars. Handle types for known columns and set missing values appropriately to
+    null in the Polars DataFrame.
+
+    :param df: Pandas DataFrame to convert.
+
+    :return: Polars DataFrame
+    """
+
+    col_list = list()
+
+    for col_name in df.columns:
 
         try:
-            return int(match[1]) - 1, int(match[2])
-        except TypeError:
-            if match is None:
-                raise RuntimeError(f'Expected match object with numeric values, received None')
+            col = df[col_name].copy()
+            dtype = PD_COL_TYPES.get(col_name, np.str_)
 
-            raise RuntimeError(f'Expected numeric values in match: Received {type(match[1])} and {type(match[2])}')
+            null_vals = col.isnull()
 
-    return pd.concat([
-        df['ALIGN_INDEX'],
-        df['QRY_REGION'].apply(region_tuple),
-    ], axis=1).apply(
-        lambda row:
-            (
-                'PASS' if (
-                    (row['QRY_REGION'][0] >= df_align.loc[row['ALIGN_INDEX'], 'QRY_POS']) &
-                    (row['QRY_REGION'][1] <= df_align.loc[row['ALIGN_INDEX'], 'QRY_END'])
-                ) else filter_reason  # Align index present, but variant not within it
-            ) if row['ALIGN_INDEX'] in df_align.index else filter_reason,  # Align index not present (whole alignment record removed)
-        axis=1
-    )
+            if np.issubdtype(dtype, np.floating):
+                null_vals |= col == ''
+                col[null_vals] = np.nan
+
+            elif np.issubdtype(dtype, np.integer):
+                null_vals |= col == ''
+                col[null_vals] = 0
+
+            elif np.issubdtype(dtype, np.bool):
+                null_vals |= col == ''
+                col[null_vals] = False
+
+                if np.issubdtype(col.dtype, np.str_):
+                    col = col.apply(util.as_bool)
+
+            elif np.issubdtype(dtype, np.str_):
+                if not np.issubdtype(col.dtype, np.str_):
+                    col = col.astype(str)
+
+                col[null_vals] = ''
+
+            else:
+                raise RuntimeError(f'Unhandled dtype: {dtype}')
+
+            col = pl.from_pandas(
+                col.astype(dtype)
+            )
+
+            if null_vals.any():
+                col.to_frame(
+                ).with_row_index(
+                    '_index'
+                ).join(
+                    pl.from_pandas(null_vals).rename('_is_null').to_frame().with_row_index('_index'),
+                    on='_index',
+                    how='left'
+                ).select(
+                    pl.when(pl.col._is_null).then(None).otherwise(pl.col(col.name)).alias(col.name)
+                ).to_series()
+
+            col_list.append(col)
+
+        except Exception as e:
+            raise RuntimeError(f'Failed to convert column {col_name} to polars: {e}')
+
+    try:
+        return pl.DataFrame(col_list)
+
+    except Exception as e:
+        raise RuntimeError(f'Failed transforming converted columns to polars dataframe: {e}')

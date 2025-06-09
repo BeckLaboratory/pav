@@ -172,7 +172,7 @@ def op_arr_add_coords(op_arr, pos_ref=0, add_index=True):
     """
 
     adv_ref_arr = op_arr[:, 1] * np.isin(op_arr[:, 0], ADV_REF_ARR)
-    adv_qry_arr = op_arr[:, 1] * np.isin(op_arr[:, 0], ADV_QRP_ARR)
+    adv_qry_arr = op_arr[:, 1] * np.isin(op_arr[:, 0], ADV_QRY_ARR)
 
     ref_pos_arr = np.cumsum(adv_ref_arr) - adv_ref_arr + pos_ref
     qry_pos_arr = np.cumsum(adv_qry_arr) - adv_qry_arr

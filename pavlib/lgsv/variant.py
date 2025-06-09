@@ -373,20 +373,22 @@ class InsertionVariant(Variant):
             [
                 self.chrom, self.pos, self.end, self.variant_id, self.svtype, self.svlen,
                 self.filter, self.resolved_templ,
-                str(self.region_qry), self.strand,
+                self.region_qry.chrom, self.region_qry.pos, self.region_qry.end, self.strand,
                 self.svsubtype, str(self.templ_region) if self.templ_region is not None else np.nan,
                 self.score_variant,
                 self.call_source,
+                ','.join(self.interval.df_segment.loc[self.interval.df_segment['IS_ALIGNED'],  'INDEX'].astype(str)),
                 self.anchor_score_min, self.anchor_score_max,
                 f'{self.chain_start_index}-{self.chain_end_index}'
             ],
             index=[
                 '#CHROM', 'POS', 'END', 'ID', 'SVTYPE', 'SVLEN',
                 'FILTER', 'RESOLVED_TEMPL',
-                'QRY_REGION', 'QRY_STRAND',
+                'QRY_ID', 'QRY_POS', 'QRY_END', 'QRY_STRAND',
                 'SVSUBTYPE', 'TEMPL_REGION',
                 'VAR_SCORE',
                 'CALL_SOURCE',
+                'ALIGN_INDEX',
                 'ANCHOR_SCORE_MIN', 'ANCHOR_SCORE_MAX',
                 'INTERVAL'
             ]
@@ -494,18 +496,20 @@ class DeletionVariant(Variant):
             [
                 self.chrom, self.pos, self.end, self.variant_id, self.svtype, self.svlen,
                 self.filter, self.resolved_templ,
-                str(self.region_qry), self.strand,
+                self.region_qry.chrom, self.region_qry.pos, self.region_qry.end, self.strand,
                 self.score_variant,
                 self.call_source,
+                ','.join(self.interval.df_segment.loc[self.interval.df_segment['IS_ALIGNED'],  'INDEX'].astype(str)),
                 self.anchor_score_min, self.anchor_score_max,
                 f'{self.chain_start_index}-{self.chain_end_index}'
             ],
             index=[
                 '#CHROM', 'POS', 'END', 'ID', 'SVTYPE', 'SVLEN',
                 'FILTER', 'RESOLVED_TEMPL',
-                'QRY_REGION', 'QRY_STRAND',
+                'QRY_ID', 'QRY_POS', 'QRY_END', 'QRY_STRAND',
                 'VAR_SCORE',
                 'CALL_SOURCE',
+                'ALIGN_INDEX',
                 'ANCHOR_SCORE_MIN', 'ANCHOR_SCORE_MAX',
                 'INTERVAL'
             ]
@@ -722,22 +726,24 @@ class InversionVariant(Variant):
             [
                 self.chrom, self.pos, self.end, self.variant_id, self.svtype, self.svlen,
                 self.filter, self.resolved_templ,
-                str(self.region_qry_inner), self.strand,
+                self.region_qry_inner.chrom, self.region_qry_inner.pos, self.region_qry_inner.end, self.strand,
                 self.score_variant,
                 str(self.region_ref_outer), str(self.region_qry_outer),
                 self.size_gap,
                 f'{self.call_source}:{self.call_subtype}',
+                ','.join(self.interval.df_segment.loc[self.interval.df_segment['IS_ALIGNED'],  'INDEX'].astype(str)),
                 self.anchor_score_min, self.anchor_score_max,
                 f'{self.chain_start_index}-{self.chain_end_index}'
             ],
             index=[
                 '#CHROM', 'POS', 'END', 'ID', 'SVTYPE', 'SVLEN',
                 'FILTER', 'RESOLVED_TEMPL',
-                'QRY_REGION', 'QRY_STRAND',
+                'QRY_ID', 'QRY_POS', 'QRY_END', 'QRY_STRAND',
                 'VAR_SCORE',
                 'REGION_REF_OUTER', 'REGION_QRY_OUTER',
                 'ALIGN_SIZE_GAP',
                 'CALL_SOURCE',
+                'ALIGN_INDEX',
                 'ANCHOR_SCORE_MIN', 'ANCHOR_SCORE_MAX',
                 'INTERVAL'
             ]
@@ -809,18 +815,20 @@ class ComplexVariant(Variant):
             [
                 self.chrom, self.pos, self.end, self.variant_id, self.svtype, self.svlen,
                 self.filter, self.resolved_templ,
-                str(self.region_qry), self.strand,
+                self.region_qry.chrom, self.region_qry.pos, self.region_qry.end, self.strand,
                 self.seg_n, self.struct_ref, self.struct_qry,
                 self.score_variant,
+                ','.join(self.interval.df_segment.loc[self.interval.df_segment['IS_ALIGNED'],  'INDEX'].astype(str)),
                 self.anchor_score_min, self.anchor_score_max,
                 f'{self.chain_start_index}-{self.chain_end_index}'
             ],
             index=[
                 '#CHROM', 'POS', 'END', 'ID', 'SVTYPE', 'SVLEN',
                 'FILTER', 'RESOLVED_TEMPL',
-                'QRY_REGION', 'QRY_STRAND',
+                'QRY_ID', 'QRY_POS', 'QRY_END', 'QRY_STRAND',
                 'SEG_N', 'STRUCT_REF', 'STRUCT_QRY',
                 'VAR_SCORE',
+                'ALIGN_INDEX',
                 'ANCHOR_SCORE_MIN', 'ANCHOR_SCORE_MAX',
                 'INTERVAL'
             ]
