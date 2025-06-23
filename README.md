@@ -7,7 +7,7 @@
 PAV is a variant caller for genome assemblies. PAV will input a reference genome and one or more assemblies each
 sample.
 
-This is *Beta* version of PAV, and all features are not yet integrated into the final VCF. To generate CSV calls,
+This is *Development* version of PAV, and all features are not yet integrated. To generate CSV calls,
 run target `call_lg_all` and look  for results in `results/{asm_name}/lgsv/`.
 
 ## Configuring PAV
@@ -158,6 +158,24 @@ The output directory (`results/{asm_name}`) has several subdirectories:
 ## Haplotype merging
 
 Information about how PAV resolves two haplotypes as one diploid sample can be found in `HAP_MERGING.md`.
+
+## PAV versions
+
+PAV versions are in 3 dot-separated parts: major, minor, and patch.
+
+* Major: Major changes or new features.
+* Minor: Small changes, but may affect PAV's API or command-line interfaces.
+* Patch: Small changes and minor new features. Patch versions do break API or command-line compatibility, but may
+  add minor features or options to the API that were not previously supported.
+
+PAV follows Python's packaging versioning scheme (https://packaging.python.org/en/latest/discussions/versioning/).
+This framework allows compatible versions to be easily identified.
+
+PAV may use pre-release versions with a suffix for development releases (".devN"), alpha ("aN"), beta ("bN"), or
+release-candidate ("rcN") where "N" is an integer greater than 0. For example, "3.0.0.dev1" is a development version,
+and "3.0.0a1" is an early alpha version, and "3.0.0rc1" is a release candidate, all of which precede the "3.0.0"
+release.
+
 
 ## Cite PAV
 

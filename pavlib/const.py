@@ -5,9 +5,13 @@ Program constants
 # Version constants
 VERSION_MAJOR = 3     # Major change or a large number of minor changes
 VERSION_MINOR = 0     # A significant change it PAV or a large number of small incremental changes
-VERSION_DEV = 0       # Small changes, usually bug fixes
-VERSION_PATCH = 1     # Development and test versions, not for releases
+VERSION_PATCH = 0     # Small changes, usually bug fixes
 
+VERSION_DEV = 1       # Development and test versions, not for releases
+VERSION_DEV_PREFIX = '.dev'   # Set to ".dev' for development versions, "a" or alhpa releases, and "b" for beta releases
+
+assert VERSION_DEV_PREFIX in ('.dev', 'a', 'b', 'rc') or VERSION_DEV_PREFIX is None, 'VERSION_DEV_PREFIX must be ".dev", "a", "b", "rc", or None'
+assert VERSION_DEV == 0 or VERSION_DEV_PREFIX is not None, 'VERSION_DEV_PREFIX must defined if VERSION_DEV is not nonzero'
 
 # VERSION_PATCH is "None" for releases or set if:
 #
@@ -18,7 +22,6 @@ VERSION_PATCH = 1     # Development and test versions, not for releases
 # This is rarely used and only in special circumstances when a very large project is using a specific version but needs
 # bug without significant changes to PAV.
 
-
 def get_version_string():
     """
     Get PAV version as a string.
@@ -26,7 +29,7 @@ def get_version_string():
     :return: PAV version string.
     """
 
-    return f'{VERSION_MAJOR}.{VERSION_MINOR}.{VERSION_DEV}' + (f'.{VERSION_PATCH}' if VERSION_PATCH is not None else '')
+    return f'{VERSION_MAJOR}.{VERSION_MINOR}.{VERSION_PATCH}' + (f'{VERSION_DEV_PREFIX}{VERSION_DEV}' if VERSION_DEV is not None else '')
 
 
 #

@@ -883,10 +883,10 @@ rule call_integrate_sources:
             # Version variant IDs prioritizing PASS over non-PASS (avoid version suffixes on PASS).
             df['ID'] = pavlib.call.version_variant_bed_id(df)
 
-            # Remove fields
-            for col in ['QRY_ID', 'QRY_POS', 'QRY_END']:
-                if col in df.columns:
-                    del df[col]
+            # # Remove fields
+            # for col in ['QRY_ID', 'QRY_POS', 'QRY_END']:
+            #     if col in df.columns:
+            #         del df[col]
 
             # Aggregate if type is split over multiple inputs
             if is_insdel:
