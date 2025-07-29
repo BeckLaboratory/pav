@@ -261,12 +261,12 @@ localrules: call_all_bed_hap
 rule call_all_bed_hap:
     input:
         bed_pass=lambda wildcards: pavlib.pipeline.expand_pattern(
-            'results/{asm_name}/bed_hap/{hap}/pass_{vartype_svtype}.bed.parquet', ASM_TABLE, config,
-            vartype_svtype=('svindel_ins', 'svindel_del', 'sv_inv', 'snv_snv', 'sv_cpx')
+            'results/{asm_name}/bed_hap/{hap}/pass_{vartype_svtype}.bed.{ext}', ASM_TABLE, config,
+            vartype_svtype=('svindel_ins', 'svindel_del', 'sv_inv', 'snv_snv', 'sv_cpx'), ext=('parquet', 'gz')
         ),
         bed_fail=lambda wildcards: pavlib.pipeline.expand_pattern(
-            'results/{asm_name}/bed_hap/{hap}/fail/fail_{vartype_svtype}.bed.parquet', ASM_TABLE, config,
-            vartype_svtype=('svindel_ins', 'svindel_del', 'sv_inv', 'snv_snv')
+            'results/{asm_name}/bed_hap/{hap}/fail/fail_{vartype_svtype}.bed.{ext}', ASM_TABLE, config,
+            vartype_svtype=('svindel_ins', 'svindel_del', 'sv_inv', 'snv_snv'), ext=('parquet', 'gz')
         )
 
 # Create PASS BEDs

@@ -468,6 +468,18 @@ class DeletionVariant(Variant):
     def __init__(self, interval, caller_resources, var_region_kde=None):
         Variant.__init__(self, interval)
 
+        self.pos = None
+        self.end = None
+        self.svlen = None
+
+        self.region_qry = None
+
+        self.vartype = None
+        self.svtype = None
+
+        self.resolved_templ = True
+
+
         # Null variant (for creating table headers when no variants are found)
         if interval is None:
             return
@@ -496,7 +508,10 @@ class DeletionVariant(Variant):
             [
                 self.chrom, self.pos, self.end, self.variant_id, self.svtype, self.svlen,
                 self.filter, self.resolved_templ,
-                self.region_qry.chrom, self.region_qry.pos, self.region_qry.end, self.strand,
+                self.region_qry.chrom if self.region_qry is not None else None,
+                self.region_qry.pos if self.region_qry is not None else None,
+                self.region_qry.end if self.region_qry is not None else None,
+                self.strand,
                 self.score_variant,
                 self.call_source,
                 ','.join(self.interval.df_segment.loc[self.interval.df_segment['IS_ALIGNED'],  'INDEX'].astype(str)),
@@ -554,6 +569,8 @@ class InversionVariant(Variant):
 
         self.call_subtype = 'NA'
         self.size_gap = 0
+
+        self.resolved_templ = None
 
         # Base inversion checks
         if interval is None or interval.len_ref <= 0 or interval.len_qry <= 0:
@@ -726,12 +743,15 @@ class InversionVariant(Variant):
             [
                 self.chrom, self.pos, self.end, self.variant_id, self.svtype, self.svlen,
                 self.filter, self.resolved_templ,
-                self.region_qry_inner.chrom, self.region_qry_inner.pos, self.region_qry_inner.end, self.strand,
+                self.region_qry_inner.chrom if self.region_qry_inner is not None else None,
+                self.region_qry_inner.pos if self.region_qry_inner is not None else None,
+                self.region_qry_inner.end if self.region_qry_inner is not None else None,
+                self.strand,
                 self.score_variant,
                 str(self.region_ref_outer), str(self.region_qry_outer),
                 self.size_gap,
                 f'{self.call_source}:{self.call_subtype}',
-                ','.join(self.interval.df_segment.loc[self.interval.df_segment['IS_ALIGNED'],  'INDEX'].astype(str)),
+                ','.join(self.interval.df_segment.loc[self.interval.df_segment['IS_ALIGNED'], 'INDEX'].astype(str)) if self.interval is not None else None,
                 self.anchor_score_min, self.anchor_score_max,
                 f'{self.chain_start_index}-{self.chain_end_index}'
             ],

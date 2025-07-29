@@ -159,12 +159,14 @@ rule align_trim_qry:
         )
 
         if pav_params.align_agg_min_score < 0.0:
-            df = pavlib.align.tables.aggregate_alignment_records(
-                df, df_qry_fai,
-                score_model=score_model,
-                min_score=pav_params.align_agg_min_score,
-                noncolinear_penalty=pav_params.align_agg_noncolinear_penalty
-            )
+            raise NotImplementedError(f'align_agg_min_score is not implemented (set to 0.0 to disable): {pav_params.align_agg_min_score}')
+
+            # df = pavlib.align.tables.aggregate_alignment_records(
+            #     df, df_qry_fai,
+            #     score_model=score_model,
+            #     min_score=pav_params.align_agg_min_score,
+            #     noncolinear_penalty=pav_params.align_agg_noncolinear_penalty
+            # )
 
         if pav_params.debug:
             try:

@@ -2,6 +2,9 @@
 Pipeline control functions.
 """
 
+import gzip
+import polars as pl
+
 import pavlib
 
 global ASM_TABLE

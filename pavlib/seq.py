@@ -295,7 +295,7 @@ def region_from_string(rgn_str, is_rev=None, base0half=False):
     """
 
     rgn_str_no_comma = rgn_str.replace(',', '')
-    match_obj = re.match(r'^([^:]+):(\d+)-(\d+)$', rgn_str_no_comma)
+    match_obj = re.search(r'^(.+):(\d+)-(\d+)$', rgn_str_no_comma)
 
     if match_obj is None:
         raise RuntimeError('Region is not in expected format (chrom:pos-end): {}'.format(rgn_str))

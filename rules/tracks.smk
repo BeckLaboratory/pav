@@ -578,7 +578,7 @@ rule tracks_lgsv_cpx_bed:
                 df_rt = pd.concat([df_rt, pd.concat(trace_list, axis=1).T], axis=0)
 
             for col in ('FILTER', 'QRY_REGION', 'QRY_STRAND', 'SEG_N', 'STRUCT_REF', 'STRUCT_QRY', 'VAR_SCORE', 'ANCHOR_SCORE_MIN', 'ANCHOR_SCORE_MAX'):
-                df_rt[col] = row[col]
+                df_rt[col] = row[col] if col in row else np.nan
 
             df_rt.reset_index(drop=True, inplace=True)
 

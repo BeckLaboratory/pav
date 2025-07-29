@@ -409,7 +409,7 @@ CONFIG_PARAM_LIST = [
                             'input). This option is helpful if there are input FASTA irregularities that cause '
                             'downstream steps to fail, but it requires time and space to reformat and store input '
                             'files. Not recommended for most use cases.'),
-    ConfigParamElement('align_agg_min_score', 'float', -10000.0, max=0.0,
+    ConfigParamElement('align_agg_min_score', 'float', 0.0, max=0.0,
                 description='Aggregate alignment records that are adjacent if the sum of the gap scores (reference gap '
                             'and query gap) is not less than this value (gap scores are negative). Two or more '
                             'alignment records are merged into one. A value of 0.0 disables alignment aggregation. '
