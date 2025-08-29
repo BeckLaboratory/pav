@@ -1,3 +1,0 @@
-[submodule "dep/svpop"]
-	path = dep/svpop
-	url = https://github.com/EichlerLab/svpop.git

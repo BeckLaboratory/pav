@@ -1,5 +1,2 @@
 **/*.pyc
 **/__pycache__/
-
-local
-config

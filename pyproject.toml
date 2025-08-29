@@ -1,0 +1,65 @@
+[project]
+name = "pav"
+version = "0.0.0.dev3"
+description = "Assembly-based variant discovery"
+readme = "README.md"
+
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Science/Research",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.12",
+]
+
+requires-python = ">=3.12"
+
+dependencies = [
+    "biopython>=1.85",
+    "fastexcel>=0.14.0",
+    "frozendict>=2.4.6",
+    "intervaltree>=3.1.0",
+    "numpy>=2.3.2",
+    "polars>=1.31.0",
+    "pysam>=0.23.3",
+    "scipy>=1.16.1",
+    "snakemake>=9.9.0",
+]
+
+license = { file = "LICENSE" }
+
+[project.urls]
+#Homepage = "https://github.com/yourusername/myproject"
+Repository = "https://github.com/BeckLaboratory/pav"
+#Documentation = "https://myproject.readthedocs.io"
+
+[dependency-groups]
+dev = [
+    "adbc-driver-manager>=1.7.0",
+    "duckdb[adbc]>=1.3.2",
+    "edlib>=1.3.9.post1",
+    "ipython>=9.4.0",
+    "ply>=3.11",
+    "pylint>=3.3.7",
+    "pytest>=8.4.1",
+    "pytest-cov>=6.2.1",
+    "sphinx>=8.2.3",
+]
+
+[build-system]
+requires = ["setuptools"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.package-data]
+"data.lcmodel" = ["**/*"]
+
+[tool.setuptools.dynamic]
+version = {attr = "pavcall.__version__"}
+
+[tool.pytest.ini_options]
+testpaths = [
+    "tests"
+]
+
+[tool.pylint.'MESSAGES CONTROL']
+max-line-length = 120

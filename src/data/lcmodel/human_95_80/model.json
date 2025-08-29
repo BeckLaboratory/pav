@@ -1,0 +1,15 @@
+{
+    "name": "human_95_80",
+    "type": "logistic",
+    "description": "Low-confidence alignment model trained on HGSVC assemblies (Logsdon 2025)",
+    "features": [
+        "score_prop",
+        "match_prop",
+        "anchor_prop",
+        "qry_prop"
+    ],
+    "threshold": 0.5,
+    "type_version": 0,
+    "score_model": "affine::match=2.0,mismatch=4.0,gap=4.0:2.0;24.0:1.0",
+    "score_prop_conf": 0.8
+}
