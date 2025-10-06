@@ -3,6 +3,8 @@ Data files including reference and data tables for the reference.
 """
 
 import collections
+import os
+from pathlib import Path
 
 import agglovar
 import polars as pl
@@ -12,6 +14,7 @@ import pavcall
 
 global ASM_TABLE
 global PAV_CONFIG
+global POLARS_MAX_THREADS
 global shell
 
 
@@ -26,7 +29,7 @@ def data_init_targets(wildcards=None):
 
     :param wildcards: Ignored. Function signature needed for Snakemake input function.
 
-    :return: List of run targets.
+    :returns: List of run targets.
     """
 
     part_set = set()
@@ -118,78 +121,13 @@ rule align_get_qry_fa:
             f.write('\n'.join(fa_path_list) + '\n')
 
 
-# Partition table
-#
-# Create a table of reference sequences divided into partitions of approximately equal size
-localrules: data_ref_partition
-
-rule data_ref_partition:
-    input:
-        pq='data/ref/ref_info.parquet'
-    output:
-        pq='data/ref/partition_{part_count}.parquet'
-    run:
-
-        part_count = int(wildcards.part_count)
-
-        if part_count < 1:
-            raise RuntimeError(f'Number of partitions must be at least 1: {part_count}')
-
-        # Read and sort
-        df = (
-            pl.read_parquet(input.pq)
-            .select(['chrom', 'len'])
-            .sort('len', descending=True)
-        )
-
-        partition = {chrom: -1 for chrom in df['chrom']}
-
-        # Get a list of assignments for each partition
-        list_chr = collections.defaultdict(list)
-        list_size = collections.Counter()
-
-        def get_smallest():
-            """
-            Get the next smallest bin.
-            """
-
-            min_index = 0
-
-            for i in range(part_count):
-
-                if list_size[i] == 0:
-                    return i
-
-                if list_size[i] < list_size[min_index]:
-                    min_index = i
-
-            return min_index
-
-        for chrom in df['chrom']:
-            i = get_smallest()
-            partition[chrom] = i
-            list_size[i] += df.row(by_predicate=pl.col('chrom') == chrom, named=True)['len']
-
-        # Check
-        if any([partition[chrom] < 0 for chrom in df['chrom']]):
-            raise RuntimeError('Failed to assign all reference contigs to partitions (PROGRAM BUG)')
-
-        # Write parts
-        (
-            pl.DataFrame({
-                'chrom': partition.keys(),
-                'partition': partition.values()
-            })
-            .write_parquet(output.pq)
-        )
-
-
 # Reference info table
 rule data_ref_info_table:
     input:
         fofn='data/ref/ref.fofn'
     output:
         pq='data/ref/ref_info.parquet'
+    threads: POLARS_MAX_THREADS
     run:
 
         ref_fa = pavcall.pipeline.expand_fofn(input.fofn)[0]

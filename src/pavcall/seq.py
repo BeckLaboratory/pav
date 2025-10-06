@@ -1,39 +1,41 @@
-"""
-Routines for aligned contigs.
-"""
+"""Routines for aligned contigs."""
+
+__all__ = [
+    'ref_kmers',
+    'region_seq_fasta',
+    'variant_seq_from_region',
+    'seq_len',
+    'fa_to_record_iter',
+    'gfa_to_record_iter',
+]
 
 import collections
 import os
-from typing import Iterable, Iterator, Optional
+from typing import Iterable, Iterator, Optional, Self
 
+import agglovar
 import Bio.Seq
 import Bio.SeqIO
 import Bio.SeqRecord
 import polars as pl
 import pysam
 
-import agglovar
-
-from . import region
+from .region import Region
 
 
 def ref_kmers(
-        seq_region: region.Region,
+        seq_region: Region,
         fa_file_name: str,
         k_util: agglovar.kmer.util.KmerUtil
 ) -> collections.Counter:
+    """Get a counter keyed by k-mers.
+
+    :param seq_region: Region to extract.
+    :param fa_file_name: FASTA file to extract sequence from.
+    :param k_util: K-mer utility for k-merizing sequence.
+
+    :returns: A collections.Counter object key k-mer keys and counts.
     """
-    Get a counter keyed by k-mers.
-
-    Args:
-        seq_region: Region to extract.
-        fa_file_name: FASTA file to extract sequence from.
-        k_util: K-mer utility for k-merizing sequence.
-
-    Returns:
-        A collections.Counter object key k-mer keys and counts.
-    """
-
     ref_seq = region_seq_fasta(seq_region, fa_file_name, False)
 
     ref_mer_count = collections.Counter()
@@ -45,27 +47,23 @@ def ref_kmers(
 
 
 def region_seq_fasta(
-        seq_region: region.Region,
+        seq_region: Region,
         fa_file_name: str,
         rev_compl: Optional[bool] = None
 ) -> str:
+    """Get sequence from an indexed FASTA file. FASTA must have ".fai" index.
+
+    :param seq_region: Region object to extract a region, or a string with the record ID to extract a whole record.
+    :param fa_file_name: FASTA file name.
+    :param rev_compl: Reverse-complement sequence is `True`. If `None`, reverse-complement if `region.is_rev`.
+
+    :returns: String sequence.
     """
-    Get sequence from an indexed FASTA file. FASTA must have ".fai" index.
-
-    Args:
-        seq_region: Region object to extract a region, or a string with the record ID to extract a whole record.
-        fa_file_name: FASTA file name.
-        rev_compl: Reverse-complement sequence is `True`. If `None`, reverse-complement if `region.is_rev`.
-
-    Returns:
-        String sequence.
-    """
-
     with pysam.FastaFile(fa_file_name) as fa_file:
 
         if isinstance(seq_region, str):
             is_region = False
-        elif isinstance(seq_region, region.Region):
+        elif isinstance(seq_region, Region):
             is_region = True
         else:
             raise ValueError(f'Unrecognized region type: {type(seq_region)}: Expected Region or str')
@@ -84,6 +82,7 @@ def region_seq_fasta(
 
         return sequence
 
+
 def variant_seq_from_region(
         df: pl.DataFrame,
         fa_filename: str,
@@ -92,29 +91,24 @@ def variant_seq_from_region(
         id_col: str = 'id',
         seq_upper: bool = False
 ):
+    """Get sequence from an indexed FASTA file. FASTA must have ".fai" index.
+
+    :param df: Variant DataFrame.
+    :param fa_filename: FASTA file name.
+    :param region_col: Region column names. Columns must be in order: 1) Chromosome or query name, 2) Start position,
+        3) End position.
+    :param strand_col: Strand column name. If column is "-" or `True`, the sequence is reverse complemented. Must be
+        "+", "-", `True`, or `False`. The boolean values allow "is_rev" column to be used where the sequence is on
+        the negative strand if `True`. If `None`, no reverse complementing is performed.
+    :param id_col: ID column name.
+    :param seq_upper: Upper-case sequences if `True` (removes soft-mask annotations in the sequence string).
+
+    :returns: Iterator over Bio.Seq sequence objects with sequences in reference orientation.
+
+    :raises ValueError: If FASTA file name is missing.
+    :raises ValueError: If required columns are not found in the variant table.
+    :raises FileNotFoundError: If FASTA file does not exist or is not a regular file.
     """
-    Get sequence from an indexed FASTA file. FASTA must have ".fai" index.
-
-    Args:
-        df: Variant DataFrame.
-        fa_filename: FASTA file name.
-        region_col: Region column names. Columns must be in order: 1) Chromosome or query name, 2) Start position,
-            3) End position.
-        strand_col: Strand column name. If column is "-" or `True`, the sequence is reverse complemented. Must be
-            "+", "-", `True`, or `False`. The boolean values allow "is_rev" column to be used where the sequence is on
-            the negative strand if `True`. If `None`, no reverse complementing is performed.
-        id_col: ID column name.
-        seq_upper: Upper-case sequences if `True` (removes soft-mask annotations in the sequence string).
-
-    Returns:
-        Iterator over Bio.Seq sequence objects with sequences in reference orientation.
-
-    Raises:
-        ValueError: If FASTA file name is missing.
-        ValueError: If required columns are not found in the variant table.
-        FileNotFoundError: If FASTA file does not exist or is not a regular file.
-    """
-
     raise NotImplementedError
     #
     # if df is None:
@@ -191,31 +185,26 @@ def seq_len(
         col_chrom: Optional[str] = None,
         col_len: str = 'len'
 ) -> int:
+    """Get the length of a sequence from a FAI table.
+
+    :param name: Name of the sequence.
+    :param df_fai: DataFrame of FAI file.
+    :param col_chrom: Column name for the sequence name (typically "chrom" or "qry_id").
+    :param col_len: Column name for the sequence length.
+
+    :returns: Sequence length.
+
+    :raises ValueError: If the columns are not found in the FAI table.
+    :raises ValueError: If the sequence is not found in the FAI table.
     """
-    Get the length of a sequence from a FAI table.
-
-    Args:
-        name: Name of the sequence.
-        df_fai: DataFrame of FAI file.
-        col_chrom: Column name for the sequence name (typically "chrom" or "qry_id").
-        col_len: Column name for the sequence length.
-
-    Returns:
-        Sequence length.
-
-    Raises:
-        ValueError: If the columns are not found in the FAI table.
-        ValueError: If the sequence is not found in the FAI table.
-    """
-
     if col_chrom is None:
         col_list = list(set(df_fai.columns) & {'chrom', 'qry_id'})
 
         if len(col_list) == 0:
-            raise ValueError(f'No "chrom" or "qry_id" in DataFrame')
+            raise ValueError('No "chrom" or "qry_id" in DataFrame')
 
         if len(col_list) > 1:
-            raise ValueError(f'Found both "chrom" and "qry_id" in DataFrame')
+            raise ValueError('Found both "chrom" and "qry_id" in DataFrame')
 
         col_chrom = col_list[0]
     else:
@@ -243,29 +232,26 @@ def fa_to_record_iter(
         require_all: bool = True,
         input_format: str = 'fasta'
 ) -> Iterator[Bio.SeqRecord.SeqRecord]:
-    """
-    Open a FASTA file, iterate through records. Returns an iterator of SeqIO.Seq objects.
+    """Get an iterator for records in a FASTA file.
+
+    Returns an iterator of SeqIO.Seq objects.
 
     The optional `record_set` parameter can be used to filter and/or rename records. If `record_set` is a `set`, only
     extract records with IDs in this set. If `record_set` is a `dict`, rename record IDs (keys: original ID, values:
     new ID) and only extract records with IDs in this dict.
 
-    Args:
-        fa_file_name: FASTA file name. May be gzipped or plain text.
-        record_set: Set of record names to extract or dict for mapping records. If `None`, extract all records.
-        require_all: If `True`, raise an error if all records from record_set are not found.
-        input_format: Input file format. Must be "fasta" or "fastq" (case sensitive).
+    :param fa_file_name: FASTA file name. May be gzipped or plain text.
+    :param record_set: Set of record names to extract or dict for mapping records. If `None`, extract all records.
+    :param require_all: If `True`, raise an error if all records from record_set are not found.
+    :param input_format: Input file format. Must be "fasta" or "fastq" (case sensitive).
 
-    Yields:
-        Bio.SeqRecord.SeqRecord objects for each sequence record.
+    :yields: Bio.SeqRecord.SeqRecord objects for each sequence record.
 
-    Raises:
-        ValueError: If `record_set` is not a set or dict or is empty.
-        ValueError: If `input_format` is not "fasta" or "fastq".
-        ValueError: If multiple records with the same ID are found.
-        KeyError: If all records from `record_set` are not found.
+    :raises ValueError: If `record_set` is not a set or dict or is empty.
+    :raises ValueError: If `input_format` is not "fasta" or "fastq".
+    :raises ValueError: If multiple records with the same ID are found.
+    :raises KeyError: If all records from `record_set` are not found.
     """
-
     # Check file format
     if input_format not in {'fasta', 'fastq'}:
         raise ValueError(f'Unrecognized input format: "{input_format}"')
@@ -336,27 +322,22 @@ def gfa_to_record_iter(
         record_set: Optional[set[str] | dict[str, str]] = None,
         require_all: bool = True,
 ):
-    """
-    Open a GFA file and parse "S" lines into sequence records.
+    """Open a GFA file and parse "S" lines into sequence records.
 
     The optional `record_set` parameter can be used to filter and/or rename records. If `record_set` is a `set`, only
     extract records with IDs in this set. If `record_set` is a `dict`, rename record IDs (keys: original ID, values:
     new ID) and only extract records with IDs in this dict.
 
-    Args:
-        gfa_file_name: GFA file name. May be gzipped or plain text.
-        record_set: Set of record names to extract or dict for mapping records. If `None`, extract all records.
-        require_all: If `True`, raise an error if all records from record_set are not found.
+    :param gfa_file_name: GFA file name. May be gzipped or plain text.
+    :param record_set: Set of record names to extract or dict for mapping records. If `None`, extract all records.
+    :param require_all: If `True`, raise an error if all records from record_set are not found.
 
-    Yields:
-        Bio.SeqRecord.SeqRecord objects for each sequence record.
+    :yields: Bio.SeqRecord.SeqRecord objects for each sequence record.
 
-    Raises:
-        ValueError: If `record_set` is not a set or dict or is empty.
-        ValueError: If multiple records with the same ID are found.
-        KeyError: If all records from `record_set` are not found.
+    :raises ValueError: If `record_set` is not a set or dict or is empty.
+    :raises ValueError: If multiple records with the same ID are found.
+    :raises KeyError: If all records from `record_set` are not found.
     """
-
     # Setup record_set and record_dict for translating record names
     if record_set is not None:
         if isinstance(record_set, dict):
@@ -394,7 +375,10 @@ def gfa_to_record_iter(
                 continue
 
             if len(tok) < 3:
-                raise ValueError(f'Error reading GFA "S" record at line {line_count}: Expected at least 3 tab-separated columns: {gfa_file_name}')
+                raise ValueError(
+                    f'Error reading GFA "S" record at line {line_count}: '
+                    f'Expected at least 3 tab-separated columns: {gfa_file_name}'
+                )
 
             record_id = tok[1].strip()
             record_seq = tok[2].strip()
@@ -432,17 +416,9 @@ def gfa_to_record_iter(
 
 
 class LRUSequenceCache:
-    """
-    Cache for sequence records from an indexed FASTA file.
+    """Cache for sequence records from an indexed FASTA file.
 
     Caches the last `max_size` records and retrieves new sequences from the indexed FASTA file if they are not cached.
-
-    Attributes:
-        fa_filename: Indexed FASTA file name.
-        max_size: Maximum number of records to cache.
-        fa_file: pysam.FastaFile object for indexed FASTA file or None if file is not open.
-        cache_size: Number of records in the cache.
-        is_open: If True, the indexed FASTA file is open.
     """
 
     def __init__(
@@ -450,18 +426,16 @@ class LRUSequenceCache:
             fa_filename: str,
             max_size: int,
             upper: bool = False
-    ):
-        """
-        Args:
-            fa_filename: Indexed FASTA file name.
-            max_size: Maximum number of records to cache.
-            upper: If True, sequences are made upper-case.
+    ) -> None:
+        """Init a cache object.
 
-        Raises:
-            ValueError: If `fa_filename` is missing or empty.
-            FileNotFoundError: If `fa_filename` does not exist or is not a regular file.
-        """
+        :param fa_filename: Indexed FASTA file name.
+        :param max_size: Maximum number of records to cache.
+        :param upper: If True, sequences are made upper-case.
 
+        :raises ValueError: If `fa_filename` is missing or empty.
+        :raises FileNotFoundError: If `fa_filename` does not exist or is not a regular file.
+        """
         if fa_filename is None or (fa_filename := str(fa_filename).strip()) == '':
             raise ValueError('FASTA file name is missing or empty')
 
@@ -476,33 +450,37 @@ class LRUSequenceCache:
         self._max_size = max_size
         self._open_context = False
 
-
     @property
-    def fa_filename(self):
+    def fa_filename(self) -> str:
+        """FASTA file name."""
         return self._fa_filename
 
     @property
-    def upper(self):
+    def upper(self) -> bool:
+        """If True, sequences are made upper-case."""
         return self._upper
 
     @property
-    def fa_file(self):
+    def fa_file(self) -> Optional[pysam.FastaFile]:
+        """pysam.FastaFile object for indexed FASTA file or None if file is not open."""
         return self._fa_file
 
     @property
-    def max_size(self):
+    def max_size(self) -> int:
+        """Maximum number of records to cache."""
         return self._max_size
 
     @property
-    def is_open(self):
+    def is_open(self) -> bool:
+        """If True, the indexed FASTA file is open."""
         return self._fa_file is not None
 
-    def open(self):
-        """
-        Open file. Not recommended to call directly, use as context manager (with LRUSequenceCache() as seq_cache: ...).
+    def open(self) -> None:
+        """Open file.
 
-        Raises:
-            ValueError: If FASTA file is already open.
+        Not recommended to call directly, use as context manager (with LRUSequenceCache() as seq_cache: ...).
+
+        :raises ValueError: If FASTA file is already open.
         """
         if self._fa_file is not None:
             raise ValueError('FASTA file is already open')
@@ -510,13 +488,13 @@ class LRUSequenceCache:
         self._fa_file = pysam.FastaFile(self._fa_filename)
 
     def close(self):
-        """
-        Close file. Not recommended to call directly, use as context manager (with LRUSequenceCache() as seq_cache: ...).
+        """Close file.
 
-        Raises:
-            ValueError: If FASTA file was opened as a context manager.
-        """
+        Not recommended to call directly, use as context manager
+        (with LRUSequenceCache() as seq_cache: ...).
 
+        :raises ValueError: If FASTA file was opened as a context manager.
+        """
         if self._open_context:
             raise ValueError('FASTA file is open as context manager')
 
@@ -531,19 +509,15 @@ class LRUSequenceCache:
         """
         Get a sequence record from the FASTA file.
 
-        Args:
-            key: Sequence record ID or a tuple of the record ID and a boolean flag indicating if the sequence should be
-                reverse-complemented (True) or not (False). If tuples are used, then the cache will maintain forward
-                and reverse-complemented sequences as separate records.
+        :param key: Sequence record ID or a tuple of the record ID and a boolean flag indicating if the sequence should
+            be reverse-complemented (True) or not (False). If tuples are used, then the cache will maintain forward
+            and reverse-complemented sequences as separate records.
 
-        Returns:
-            Sequence.
+        :returns: Sequence.
 
-        Raises:
-            ValueError: If FASTA file is not open.
-            KeyError: If FASTA file does not contain a sequence for the key.
+        :raises ValueError: If FASTA file is not open.
+        :raises KeyError: If FASTA file does not contain a sequence for the key.
         """
-
         if isinstance(key, str):
             key = (key, False)
 
@@ -590,28 +564,23 @@ class LRUSequenceCache:
             self,
             key: str
     ) -> bool:
-        """
-        Check if a sequence record is cached.
+        """Check if a sequence record is cached.
 
-        Args:
-            key: Sequence record ID.
+        :param key: Sequence record ID.
 
-        Returns:
-            True if the sequence record is cached, False otherwise (sequence pulled from the FASTA file).
+        :returns: True if the sequence record is cached, False otherwise (sequence pulled from the FASTA file).
         """
         return key in self._cache
 
     def clear(
             self,
             key: Optional[str] = None
-    ):
-        """
-        Clear the cache or remove a record.
+    ) -> None:
+        """Clear the cache or remove a record.
 
         If a `key` is specified, remove it from the cache if it exists. If it does not exist, do nothing (no error).
 
-        Args:
-            key: Sequence record ID to clear. If None, clear all records.
+        :param key: Sequence record ID to clear. If None, clear all records.
         """
         if key is not None:
             if key in self._cache:
@@ -621,17 +590,17 @@ class LRUSequenceCache:
 
     @property
     def cache_size(self) -> int:
-        """
-        Get the cache size.
-        """
+        """Get the cache size."""
         return len(self._cache)
 
-    def __enter__(self):
+    def __enter__(self) -> Self:
+        """Enter context manager."""
         self.open()
         self._open_context = True
         return self
 
-    def __exit__(self, exc_type, exc_value, traceback):
+    def __exit__(self, exc_type, exc_value, traceback) -> None:
+        """Exit context manager."""
         if self._fa_file is not None:
             self.clear()
             self._fa_file.close()

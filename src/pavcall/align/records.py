@@ -1,4 +1,10 @@
-# Alignment base operations
+"""Alignment base operations."""
+
+__all__ = [
+    'check_record',
+    'count_ops',
+    'check_matched_bases'
+]
 
 import collections
 from typing import Any
@@ -8,32 +14,31 @@ import numpy as np
 import polars as pl
 import pysam
 
+from ..seq import seq_len
+
 from . import op
-from .. import seq
+
 
 def check_record(
         row: dict[str, Any],
         df_qry_fai: pl.DataFrame
 ) -> None:
-    """
-    Check alignment DatFrame record for sanity.
+    """Check alignment DatFrame record for sanity.
 
     Sanity checks include:
-    * Query and reference positions are in the right order
-    * Query and reference end positions agree with the start positions and lengths of query- and reference-consuming
+
+    - Query and reference positions are in the right order
+    - Query and reference end positions agree with the start positions and lengths of query- and reference-consuming
         alignment operations
-    * Clipping appears strictly at the ends of records and in the right order
-    * No negative positions
-    * Query and reference lengths are valid
+    - Clipping appears strictly at the ends of records and in the right order
+    - No negative positions
+    - Query and reference lengths are valid
 
-    Args:
-        row: Alignment table record.
-        df_qry_fai: Query FAI table.
+    :param row: Alignment table record.
+    :param df_qry_fai: Query FAI table.
 
-    Raises:
-        ValueError: If the alignment record fails sanity checks.
+    :raises ValueError: If the alignment record fails sanity checks.
     """
-
     if 'chrom' in df_qry_fai.columns:
         df_qry_fai = df_qry_fai.rename({'chrom': 'qry_id'})
 
@@ -48,7 +53,7 @@ def check_record(
             ).format(**row, e=str(e))
         ) from e
 
-    qry_len = seq.seq_len(row['qry_id'], df_qry_fai)
+    qry_len = seq_len(row['qry_id'], df_qry_fai)
 
     # Query and reference positions are in the right order
     if row['qry_pos'] >= row['qry_end']:
@@ -66,7 +71,6 @@ def check_record(
                 'align_index={align_index}, qry={qry_id}:{qry_pos:,d}-{qry_end:,d}, ref={chrom}:{pos:,d}-{end:,d}'
             ).format(**row)
         )
-
 
     # No negative positions
     if row['pos'] < 0:
@@ -115,10 +119,9 @@ def check_record(
 
 def count_ops(
         row: dict[str, Any],
-        allow_m: bool=False
+        allow_m: bool = False
 ) -> dict[str | int, int]:
-    """
-    Get total lengths of alignment operations by type.
+    """Get total lengths of alignment operations by type.
 
     Returns a dictionary with a key for each operation code and the total lengths of all operations of that type.
     Operation codes are integers and strings (duplicated in the dictionary for convenience).
@@ -139,19 +142,15 @@ def count_ops(
     * clip_h_r: Hard-clipped bases on the right (downstream) side.
     * clip_s_r: Soft-clipped bases on the right (downstream) side.
 
-    Args:
-        row: Alignment record.
-        allow_m: If True, allow "M" operations (aligned bases, match or mismatch). PAV does not allow M operations.
+    :param row: Alignment record.
+    :param allow_m: If True, allow "M" operations (aligned bases, match or mismatch). PAV does not allow M operations.
 
-    Returns:
-        Dictionary with keys for each operation code and the total lengths of all operations of that type.
+    :returns: Dictionary with keys for each operation code and the total lengths of all operations of that type.
 
-    Raises:
-        ValueError: If the alignment contains only clipped bases.
-        ValueError: If errors in soft and hard clipping are found (i.e. not at ends or ordered correctly).
-        ValueError: If the alignment contains M operations and not `allow_m`.
+    :raises ValueError: If the alignment contains only clipped bases.
+    :raises ValueError: If errors in soft and hard clipping are found (i.e. not at ends or ordered correctly).
+    :raises ValueError: If the alignment contains M operations and not `allow_m`.
     """
-
     # Count operations
     op_counter = collections.Counter()
 
@@ -225,7 +224,10 @@ def count_ops(
     op_count['clip_r'] = op_count['clip_h_r'] + op_count['clip_s_r']
 
     if op_count['clip_l'] + op_count['clip_r'] != op_count['clip']:
-        raise ValueError(f'Clipped bases must be on ends: clip_l({op_count["clip_l"]:,}) + clip_r({op_count["clip_r"]:,}) != clip({op_count["clip"]:,})')
+        raise ValueError(
+            f'Clipped bases must be on ends: '
+            f'clip_l({op_count["clip_l"]:,}) + clip_r({op_count["clip_r"]:,}) != clip({op_count["clip"]:,})'
+        )
 
     return op_count
 
@@ -235,8 +237,7 @@ def check_matched_bases(
         ref_fa_filename: str,
         qry_fa_filename: str
 ) -> None:
-    """
-    Check aligned bases for agreement between reference and query sequences.
+    """Check aligned bases for agreement between reference and query sequences.
 
     Using an alignment record, traverse the alignment operations for aligned and matching bases, then check the
     reference and query sequences for agreement. This is intended to identify alignment logic errors in the library
@@ -250,28 +251,27 @@ def check_matched_bases(
 
     If `row` is a DataFrame, then check all records.
 
-    Args:
-        row: Alignment record or a table of alignment records.
-        ref_fa_filename: Reference FASTA filename.
-        qry_fa_filename: Query FASTA filename.
+    :param row: Alignment record or a table of alignment records.
+    :param ref_fa_filename: Reference FASTA filename.
+    :param qry_fa_filename: Query FASTA filename.
 
-    Raises:
-        ValueError: If there are any bases aligned and matching (= operation), but do not match the
-            reference and query sequences at the reference and query positions indicated by a record.
-        ValueError: If there are any bases aligned and not matching (X operation), but do match the
-            reference and query sequences at the reference and query positions indicated by a record.
+    :raises ValueError: If there are any bases aligned and matching (= operation), but do not match the reference and
+        query sequences at the reference and query positions indicated by a record.
+    :raises ValueError: If there are any bases aligned and not matching (X operation), but do match the reference and
+        query sequences at the reference and query positions indicated by a record.
     """
-
     # Recurse through records if row is a DataFrame.
     if isinstance(row, pl.DataFrame):
         i = 0
 
-        for row in row.rows(named=True):
+        for df_row in row.rows(named=True):
             try:
-                check_matched_bases(row, ref_fa_filename=ref_fa_filename, qry_fa_filename=qry_fa_filename)
+                check_matched_bases(df_row, ref_fa_filename=ref_fa_filename, qry_fa_filename=qry_fa_filename)
             except ValueError as e:
                 raise ValueError(f'Alignment record {i}: {e}') from e
             i += 1
+
+        return
 
     # Check one row
     op_arr = op.row_to_arr(row)
@@ -313,7 +313,8 @@ def check_matched_bases(
             )[0][0]
 
             raise ValueError(
-                f'Found a mismatched base in match operation ("=") alignment operation {index}: ref={seq_ref[mismatch_index]}, query={seq_qry[mismatch_index]}'
+                f'Found a mismatched base in match operation ("=") alignment operation {index}: '
+                f'ref={seq_ref[mismatch_index]}, query={seq_qry[mismatch_index]}'
             )
 
     # Check mismatched bases
@@ -330,5 +331,6 @@ def check_matched_bases(
             )[0][0]
 
             raise ValueError(
-                f'Found a matching base in mismatch operation ("X") alignment operation {index}: ref={seq_ref[match_index]}, query={seq_qry[match_index]}'
+                f'Found a matching base in mismatch operation ("X") alignment operation {index}: '
+                f'ref={seq_ref[match_index]}, query={seq_qry[match_index]}'
             )

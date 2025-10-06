@@ -1,20 +1,30 @@
-"""
-Inversion figures
-"""
+"""Inversion figures."""
 
+__all__ = [
+    'kde_density_base',
+    'dotplot_inv_call',
+]
+
+
+import agglovar
 import numpy as np
-
+import polars as pl
 import matplotlib as mpl
 import matplotlib.pyplot as plt
 
-import kanapy
+from ..region import Region
+from ..seq import region_seq_fasta
 
-from .. import seq
 
-
-def kde_density_base(df_kde, region_qry, width=7, height=4, dpi=300, flank_whiskers=False):
-    """
-    Base k-mer density plot using a k-mer density DataFrame.
+def kde_density_base(
+        df_kde: pl.DataFrame,
+        region_qry: Region,
+        width: int = 7,
+        height: int = 4,
+        dpi: int = 300,
+        flank_whiskers: bool = False
+):
+    """Get a base k-mer density plot using a k-mer density DataFrame.
 
     :param df_kde: Inversion call DataFrame.
     :param region_qry: Query region plot is generated over. Must match the region in `df_kde`.
@@ -24,16 +34,12 @@ def kde_density_base(df_kde, region_qry, width=7, height=4, dpi=300, flank_whisk
     :param flank_whiskers: If `True`, show whiskers above or below points indicating if they match the upstream or
         downstream flanking inverted duplication.
 
-    :return: Plot figure object.
+    :returns: Plot figure object.
     """
-
     # Make figure
     fig = plt.figure(figsize=(width, height), dpi=dpi)
 
     ax1, ax2 = fig.subplots(2, 1)
-
-
-    ## Smoothed state (top pane) ##
 
     # Flanking DUP whiskers
     if flank_whiskers:
@@ -98,9 +104,7 @@ def kde_density_base(df_kde, region_qry, width=7, height=4, dpi=300, flank_whisk
     ax1.set_yticks(np.asarray([-1, 0, 1]))
     ax1.set_yticklabels(np.array(['Rev', 'Fwd+Rev', 'Fwd']))
 
-
-    ## Density (bottom pane) ##
-
+    # Density (bottom pane)
     ax2.plot(
         df_kde['INDEX'] + region_qry.pos,
         df_kde['KDE_FWD'],
@@ -120,7 +124,6 @@ def kde_density_base(df_kde, region_qry, width=7, height=4, dpi=300, flank_whisk
     )
 
     # Plot aestetics
-
     ax2.get_xaxis().set_major_formatter(
         mpl.ticker.FuncFormatter(lambda x, p: format(int(x), ','))
     )
@@ -139,7 +142,6 @@ def kde_density_base(df_kde, region_qry, width=7, height=4, dpi=300, flank_whisk
 
     fig.tight_layout()
 
-    ## Return plot and axes ##
     return fig
 
 
@@ -148,8 +150,7 @@ def dotplot_inv_call(
     region_ref=None, region_qry=None,
     k=32
 ):
-    """
-    Make a dotplot of an inversion call.
+    """Make a dotplot of an inversion call.
 
     :param inv_call: pav.inv.InvCall object describing the inversion.
     :param ref_fa: Reference FASTA.
@@ -159,10 +160,9 @@ def dotplot_inv_call(
     :param region_qry: Query region. If none, uses inv_call.region_tig_discovery.
     :param k: K-mer size.
 
-    :return: A plot object. Before it is discarded, this object should be closed with `matplotlib.pyplot.close()` to
+    :returns: A plot object. Before it is discarded, this object should be closed with `matplotlib.pyplot.close()` to
         free memory.
     """
-
     if region_ref is None:
         region_ref = inv_call.region_ref
 
@@ -170,7 +170,7 @@ def dotplot_inv_call(
         region_qry = inv_call.region_qry
 
     # Get reference sequence
-    seq_ref = seq.region_seq_fasta(region_ref, ref_fa, False)
+    seq_ref = region_seq_fasta(region_ref, ref_fa, False)
 
     # Get contig sequence
     if seq_qry is None:
@@ -178,7 +178,7 @@ def dotplot_inv_call(
         if qry_fa is None:
             raise RuntimeError('Cannot get contig sequence: tig_fa is None')
 
-        seq_qry = seq.region_seq_fasta(region_qry, qry_fa)
+        seq_qry = region_seq_fasta(region_qry, qry_fa)
 
     # Create plot config
     plot_config = {
@@ -237,7 +237,7 @@ def dotplot_inv_call(
         )
 
     # Make plot
-    fig = kanapy.plot.dotplot.dotplot(
+    fig = agglovar.kmer.plot.dotplot(
         seq_x=seq_qry,
         seq_y=seq_ref,
         config=plot_config,

@@ -1,28 +1,28 @@
-"""
-Logistic model implementation.
-"""
+"""Logistic low-confindence alignment model."""
+
+__all__ = [
+    'LCAlignModelLogistic',
+]
 
 from dataclasses import dataclass
-from typing import Any, Callable,Optional
+from typing import Callable, Optional
 
 import frozendict
 import numpy as np
 import polars as pl
 import scipy.special
 
-from . import score
+from ..score import ScoreModel
 
-from .lcmodel import LCAlignModel
+from ._lcmodel import LCAlignModel
+
 
 @dataclass(frozen=True, repr=False)
 class LCAlignModelLogistic(LCAlignModel):
-    """
-    Use a pre-trained logistic regression model to predict low-confidence alignments.
-    """
+    """Use a pre-trained logistic regression model to predict low-confidence alignments."""
 
     def __post_init__(self):
         """Check model invariants."""
-
         super().__post_init__()
 
         # Copy model definition
@@ -33,7 +33,8 @@ class LCAlignModelLogistic(LCAlignModel):
 
         if not 0.0 <= lc_model_def['threshold'] <= 1.0:
             raise ValueError(
-                f'LC align model {self.name} threshold attribute must be in range [0.0, 1.0]: {lc_model_def["threshold"]}'
+                f'LC align model {self.name} threshold attribute must be in range [0.0, 1.0]: '
+                f'{lc_model_def["threshold"]}'
             )
 
         lc_model_def['weight_filename'] = str(lc_model_def.get('weight_filename', 'weights.npz'))
@@ -51,43 +52,45 @@ class LCAlignModelLogistic(LCAlignModel):
 
     @property
     def activation(self) -> Callable[[np.ndarray], np.ndarray]:
+        """Activation function."""
         return scipy.special.expit
 
     @property
     def threshold(self) -> float:
+        """Low-confidence threshold."""
         return self.lc_model_def['threshold']
 
     @property
     def weight_filename(self) -> str:
+        """Model weight file location."""
         return self.lc_model_def['weight_filename']
 
     @property
     def w(self) -> np.ndarray:
+        """Feature weight array."""
         return self.lc_model_def['w']
 
     @property
     def b(self) -> np.ndarray:
+        """Model bias term."""
         return self.lc_model_def['b']
 
-    def __call__(self,
-                 df: pl.DataFrame,
-                 existing_score_model: Optional[score.ScoreModel | str] = None,
-                 df_qry_fai: Optional[pl.Series | str] = None
-        ) -> np.ndarray:
+    def __call__(
+            self,
+            df: pl.DataFrame,
+            existing_score_model: Optional[ScoreModel | str] = None,
+            df_qry_fai: Optional[pl.Series | str] = None
+    ) -> np.ndarray:
+        """Predict low-confidence alignments.
+
+        :param df: PAV Alignment table.
+        :param existing_score_model: Existing score model used to compute features already in the alignment table (df).
+            If this alignment score model matches the alignment score model used to train this LC model, then
+            features are re-used instead of re-computed.
+        :param df_qry_fai: Query FASTA index. Needed if features need to be computed using the full query sequence size.
+
+        :returns: Boolean array of predicted low-confidence alignments.
         """
-        Predict low-confidence alignments.
-
-        Args:
-            df: PAV Alignment table.
-            existing_score_model: Existing score model used to compute features already in the alignment table (df).
-                If this alignment score model matches the alignment score model used to train this LC model, then
-                features are re-used instead of re-computed.
-            df_qry_fai: Query FASTA index. Needed if features need to be computed using the full query sequence size.
-
-        Returns:
-            Boolean array of predicted low-confidence alignments.
-        """
-
         return self.activation(
             (
                 self.get_feature_table(

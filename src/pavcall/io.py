@@ -1,22 +1,34 @@
-"""
-I/O utilities.
-"""
+"""I/O utilities."""
+
+__all__ = [
+    'PlainOrGzFile',
+    'FastaReader',
+    'SamStreamer',
+    'DecodeIterator',
+    'NullWriter',
+]
 
 import gzip
 import os
 import pysam
 import subprocess
+from typing import IO, Iterator
+
 
 class PlainOrGzFile:
-    """
-    Read a plain or a gzipped file using context guard.
+    """Read a plain or a gzipped file using context guard.
 
-    Example:
+    Example::
+
         with PlainOrGzReader('path/to/file.gz'): ...
     """
 
-    def __init__(self, file_name, mode='rt'):
+    def __init__(self, file_name, mode='rt') -> None:
+        """Create a context guard for a plain or a gzipped file.
 
+        :praam file_name: File name.
+        :param mode: File mode.
+        """
         if file_name is None:
             raise RuntimeError('File name is missing')
 
@@ -40,8 +52,8 @@ class PlainOrGzFile:
 
         self.file_handle = None
 
-    def __enter__(self):
-
+    def __enter__(self) -> IO:
+        """Enter context guard."""
         if self.is_gz:
             self.file_handle = gzip.open(self.file_name, self.mode)
         else:
@@ -49,11 +61,12 @@ class PlainOrGzFile:
 
         return self.file_handle
 
-    def __exit__(self, exc_type, exc_value, traceback):
-
+    def __exit__(self, exc_type, exc_value, traceback) -> None:
+        """Exit context guard."""
         if self.file_handle is not None:
             self.file_handle.__exit__(exc_type, exc_value, traceback)
             self.file_handle = None
+
 
 class FastaReader:
     """
@@ -64,8 +77,11 @@ class FastaReader:
         with FastaReader(fasta_file): ...  # fasta_file is a pysam.FastaFile
     """
 
-    def __init__(self, file_name):
+    def __init__(self, file_name) -> None:
+        """Create a context guard for a FASTA file.
 
+        :param file_name: File name or open FASTA file.
+        """
         if file_name is None:
             raise RuntimeError('File name or open FASTA file is missing')
 
@@ -90,14 +106,17 @@ class FastaReader:
             self.file_handle = file_name
 
         else:
-            raise RuntimeError(f'File name or open FASTA file is not a string or a pysam.FastaFile: {file_name} (type "{type(file_name)}")')
+            raise RuntimeError(
+                f'File name or open FASTA file is not a string or a pysam.FastaFile: '
+                f'{file_name} (type "{type(file_name)}")'
+            )
 
         self.file_handle = None
 
         self.is_open = False
 
-    def __enter__(self):
-
+    def __enter__(self) -> pysam.FastaFile:
+        """Enter context guard."""
         if self.is_open:
             raise RuntimeError(f'Enter called: File is already open by this context guard: {self.file_name}')
 
@@ -108,8 +127,8 @@ class FastaReader:
 
         return self.file_handle
 
-    def __exit__(self, exc_type, exc_value, traceback):
-
+    def __exit__(self, exc_type, exc_value, traceback) -> None:
+        """Exit context guard."""
         if not self.is_open:
             raise RuntimeError(f'Exit called: File is not open by this context guard: {self.file_name}')
 
@@ -118,18 +137,22 @@ class FastaReader:
 
         self.is_open = False
 
-class SamStreamer(object):
-    """
-    Stream a SAM, BAM, or CRAM file as a line generator.
-    """
 
-    def __init__(self, filename, file_type=None, ref_fa=None):
+class SamStreamer(object):
+    """Stream a SAM, BAM, or CRAM file as a line generator."""
+
+    def __init__(self, filename, file_type=None, ref_fa=None) -> None:
+        """Initialize streamer.
+
+        :param filename: File name.
+        :param file_type: File type.
+        :param ref_fa: Reference FASTA file.
+        """
         self.filename = filename.strip()
         self.ref_fa = ref_fa
 
         self.is_open = False
         self.is_closed = False
-
 
         # Set type
         if isinstance(filename, str):
@@ -148,17 +171,24 @@ class SamStreamer(object):
                 elif filename_lower.endswith('.cram'):
                     file_type = 'cram'
                 else:
-                    raise RuntimeError(f'File name is not a string (type "{type(filename)}"), expected SAM, BAM, or CRAM file, but file name does not end with ".sam", ".sam.gz", ".bam", or ".cram"')
+                    raise RuntimeError(
+                        f'File name is not a string (type "{type(filename)}"), '
+                        f'expected SAM, BAM, or CRAM file, but file name does not end with '
+                        f'".sam", ".sam.gz", ".bam", or ".cram"'
+                    )
 
         else:
             if file_type is not None and file_type.strip().lower() != 'iter':
-                raise RuntimeError(f'File name is not a string (type "{type(filename)}"), expected iterator, but "type" argument is not "iter" (file_type="{file_type}"')
+                raise RuntimeError(
+                    f'File name is not a string (type "{type(filename)}"), '
+                    f'expected iterator, but "type" argument is not "iter" (file_type="{file_type}"'
+                )
             file_type = 'iter'
 
         self.file_type = file_type
 
-    def __enter__(self):
-
+    def __enter__(self) -> Iterator[str]:
+        """Enter context guard."""
         if self.is_open:
             raise RuntimeError(f'Enter called: File is already open by this context guard: {self.filename}')
 
@@ -195,8 +225,8 @@ class SamStreamer(object):
 
         raise RuntimeError(f'Unknown file type: {self.file_type}')
 
-    def __exit__(self, exc_type, exc_value, traceback):
-
+    def __exit__(self, exc_type, exc_value, traceback) -> None:
+        """Exit context guard."""
         if not self.is_open:
             raise RuntimeError(f'Exit called: File is not open by this context guard: {self.filename}')
 
@@ -210,6 +240,7 @@ class SamStreamer(object):
         self.is_closed = True
 
     def __iter__(self):
+        """Return SAM line iterator."""
         if self.is_closed:
             raise RuntimeError('Iterator is closed')
 
@@ -218,27 +249,32 @@ class SamStreamer(object):
 
         return self.iterator
 
+
 class DecodeIterator(object):
-    """
-    Utility iterator for decoding bytes to strings. Needed by SamStreamer for streaming BAM & CRAM files.
+    """Utility iterator for decoding bytes to strings.
+
+    Needed by SamStreamer for streaming BAM & CRAM files.
     """
 
-    def __init__(self, iterator):
+    def __init__(self, iterator) -> None:
+        """Initialize iterator."""
         self.iterator = iterator
 
-    def __iter__(self):
+    def __iter__(self) -> Iterator[str]:
+        """Return iterator."""
         return self
 
-    def __next__(self):
+    def __next__(self) -> str:
+        """Return next item."""
         return next(self.iterator).decode()
 
-    def close(self):
+    def close(self) -> None:
+        """Close iterator."""
         self.iterator.close()
 
+
 class NullWriter(object):
-    """
-    A writer object that discards all messages.
-    """
+    """A writer object that discards all messages."""
 
     def write(self, *args, **kwargs):
         """Discard message."""

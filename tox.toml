@@ -1,0 +1,48 @@
+requires = ["tox>=4"]
+env_list = ["py312", "py313", "py314", "flake8"]
+
+
+[env.py312]
+description = "Run unit tests"
+deps = [
+    "pytest~=8.4",
+]
+commands = [["pytest", "tests", "{posargs}"]]
+
+
+[env.py313]
+description = "Run unit tests"
+deps = [
+    "pytest~=8.4",
+]
+commands = [["pytest", "tests", "{posargs}"]]
+
+
+[env.py314]
+description = "Run unit tests"
+deps = [
+    "pytest~=8.4",
+]
+commands = [["pytest", "tests", "{posargs}"]]
+
+
+[env.flake8]
+deps = [
+    "flake8>=7",
+    "flake8-bugbear",
+    "flake8-pyproject",
+]
+commands = [["flake8", "src/pavcall", "tests", "{posargs}"]]
+
+
+#[env.black_edit]
+#deps = [
+#    "black>=24",
+#]
+#commands = [["black", "src/pavcall", "tests", "{posargs}"]]
+#
+#[env.black]
+#deps = [
+#    "black>=24",
+#]
+#commands = [["black", "--check", "src/pavcall", "tests", "{posargs}"]]

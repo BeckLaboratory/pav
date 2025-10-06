@@ -20,7 +20,7 @@ def get_config(key, wildcards):
     :param wildcards: Rule wildcards.
     :param key: Key of the value to get from config.
 
-    :return: Config object. Original global config, if unmodified, or a modified copy of it.
+    :returns: Config object. Original global config, if unmodified, or a modified copy of it.
     """
 
     return getattr(

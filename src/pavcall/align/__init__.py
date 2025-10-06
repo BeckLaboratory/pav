@@ -1,11 +1,17 @@
-__all__ = []
+"""Alignment handling routines."""
 
+import importlib
 
-from . import features
-from . import lcmodel
-from . import lift
-from . import op
-from . import records
-from . import score
-from . import tables
-from . import trim
+__all__ = [
+    'features',
+    'lcmodel',
+    'lift',
+    'op',
+    'records',
+    'score',
+    'tables',
+    'trim',
+]
+
+for name in __all__:
+    globals()[name] = importlib.import_module(f'.{name}', package=__name__)

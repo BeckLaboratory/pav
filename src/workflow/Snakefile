@@ -11,6 +11,9 @@ import pavcall
 global shell
 global workflow
 
+POLARS_MAX_THREADS = 4
+
+os.environ['POLARS_MAX_THREADS'] = str(POLARS_MAX_THREADS)
 
 # Workflow directory and path to rules
 WORKFLOW_DIR = Path(workflow.snakefile).parent
@@ -130,15 +133,6 @@ wildcard_constraints:
 
 include: get_rules_path('pipeline.smk')
 
-include: get_rules_path('data.smk')
 include: get_rules_path('align.smk')
-include: get_rules_path('call/variants.smk')
-include: get_rules_path('call/inv.smk')
-
-# include: get_rules_path('call.smk')
-# include: get_rules_path('call_inv.smk')
-# include: get_rules_path('call_lg.smk')
-# include: get_rules_path('tracks.smk')
-# include: get_rules_path('figures.smk')
-# include: get_rules_path('vcf.smk')
-# include: get_rules_path('global.smk')
+include: get_rules_path('call.smk')
+include: get_rules_path('data.smk')

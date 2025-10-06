@@ -1,3 +1,6 @@
+# flake8: noqa
+raise NotImplementedError
+
 # VCF writing procedures
 
 import Bio.SeqIO

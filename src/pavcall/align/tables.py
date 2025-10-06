@@ -1,79 +1,99 @@
-"""
-Create and manaage alignemnt BED files.
-"""
+"""Create and manaage alignemnt BED files."""
+
+__all__ = [
+    'ALIGN_TABLE_SORT_ORDER',
+    'NAMED_COORD_COLS',
+    'DEPTH_SCHEMA',
+    'sam_to_align_table',
+    'align_depth_table',
+    'align_depth_filter',
+    'intersect_other',
+    'qry_order_expr',
+    'align_stats',
+]
 
 import numpy as np
 import os
 import polars as pl
 from typing import Iterable, Optional
 
-from .. import io
 from .. import schema
 
-from . import features
-from . import lcmodel
+from ..io import SamStreamer
+
 from . import op
-from . import records
-from . import score
+
+from .features import FeatureGenerator
+from .lcmodel import LCAlignModel, null_model
+from .records import check_record
+from .score import ScoreModel, get_score_model
+
 
 ALIGN_TABLE_SORT_ORDER = ['chrom', 'pos', 'end', 'align_index']
-"""list[str]: Sort order for alignment tables."""
+"""Sort order for alignment tables."""
 
 NAMED_COORD_COLS = {
     'ref': ('chrom', 'pos', 'end'),
     'qry': ('qry_id', 'qry_pos', 'qry_end')
 }
 """
-dict[str, tuple[str, str, str]]: Named coordinate columns for alignment table depths. Maps a string alias to a tuple
-of column names. Simplifies depth across reference or query sequences.
+Named coordinate columns for alignment table depths.
+
+Maps a string alias to a tuple of column names. Simplifies depth across reference or query sequences.
 """
+
+DEPTH_SCHEMA = {
+    'chrom': pl.String,
+    'pos': schema.ALIGN['pos'],
+    'end': schema.ALIGN['end'],
+    'depth': pl.Int32,
+    'index': pl.List(schema.ALIGN['align_index']),
+}
+"""Schema for alignment depth tables."""
+
 
 def sam_to_align_table(
         sam_filename: str,
         df_qry_fai: pl.DataFrame,
         min_mapq: int = 0,
-        score_model: Optional[score.ScoreModel | str] = None,
-        lc_model: Optional[lcmodel.LCAlignModel] = None,
+        score_model: Optional[ScoreModel | str] = None,
+        lc_model: Optional[LCAlignModel] = None,
         align_features: Optional[Iterable[str] | str] = 'align',
         flag_filter: int = 0x700,
         ref_fa_filename: Optional[str] = None
 ) -> pl.DataFrame:
+    """Read alignment records from a SAM file.
+
+    Avoid pysam, it uses htslib, which has a limit of 268,435,456 bp for each alignment record, and clipping on a CIGAR
+    string can exceed this limit (https://github.com/samtools/samtools/issues/1667) and causing PAV to crash with an
+    error message starting with "CIGAR length too long at position".
+
+    :param sam_filename: File to read.
+    :param df_qry_fai: Pandas Series with query names as keys and query lengths as values.
+    :param min_mapq: Minimum MAPQ score for alignment record.
+    :param score_model: Score model to use.
+    :param lc_model: LCAlignModel to use.
+    :param align_features: List of alignment features to add to the alignment table. May be an iterable of feature names
+        or a single string indicating a named feature set ("align_table" is the default  features for alignment
+        tables, "all" is all known features). If None, use "align_table".
+    :param flag_filter: Filter alignments matching these flags.
+    :param ref_fa_filename: Reference FASTA filename.
+
+    :returns: Table of alignment records.
+
+    :raises ValueError: If function arguments are invalid.
     """
-    Read alignment records from a SAM file. Avoid pysam, it uses htslib, which has a limit of 268,435,456 bp for each
-    alignment record, and clipping on a CIGAR string can exceed this limit
-    (https://github.com/samtools/samtools/issues/1667) and causing PAV to crash with an error message starting with
-    "CIGAR length too long at position".
-
-    Args:
-        sam_filename: File to read.
-        df_qry_fai: Pandas Series with query names as keys and query lengths as values.
-        min_mapq: Minimum MAPQ score for alignment record.
-        score_model: Score model to use.
-        lc_model: LCAlignModel to use.
-        align_features: List of alignment features to add to the alignment table. May be an iterable of feature names
-            or a single string indicating a named feature set ("align_table" is the default  features for alignment
-            tables, "all" is all known features). If None, use "align_table".
-        flag_filter: Filter alignments matching these flags.
-        ref_fa_filename: Reference FASTA filename.
-
-    Returns:
-        Table of alignment records.
-
-    Raises:
-        ValueError: If function arguments are invalid.
-    """
-
     if lc_model is None:
-        lc_model = lcmodel.null_model()
+        lc_model = null_model()
 
     # Rename chrom to qry_id in FAI if it wasn't already done
     if 'chrom' in df_qry_fai.columns:
         df_qry_fai = df_qry_fai.rename({'chrom': 'qry_id'})
 
     # Get score model and feature generator
-    score_model = score.get_score_model(score_model)
+    score_model = get_score_model(score_model)
 
-    feature_gen = features.FeatureGenerator(
+    feature_gen = FeatureGenerator(
         features=align_features,
         score_model=score_model,
         force_all=True  # Not necessary, but overwrite features if already present
@@ -105,7 +125,7 @@ def sam_to_align_table(
     align_index = -1
     line_number = 0
 
-    with io.SamStreamer(sam_filename, ref_fa=ref_fa_filename) as in_file:
+    with SamStreamer(sam_filename, ref_fa=ref_fa_filename) as in_file:
         for line in in_file:
             line_number += 1
 
@@ -121,16 +141,17 @@ def sam_to_align_table(
                 tok = line.split('\t')
 
                 if len(tok) < 11:
-                    raise RuntimeError('Expected at least 11 fields, received {}'.format(line_number, len(tok)))
+                    raise ValueError(f'Expected at least 11 fields, received {len(tok)} at line {line_number}')
 
-                tag = dict(val.split(':', 1) for val in tok[11:])  # Note: values are prefixed with type and colon, (e.g. {"NM": "i:579204"}).
+                # Note: values are prefixed with type and colon, (e.g. {"NM": "i:579204"}).
+                tag = dict(val.split(':', 1) for val in tok[11:])
 
                 if 'CG' in tag:
-                    raise RuntimeError(f'Found BAM-only tag "CG"')
+                    raise ValueError('Found BAM-only tag "CG"')
 
                 if 'RG' in tag:
                     if not tag['RG'].startswith('Z:'):
-                        raise RuntimeError(f'Found non-Z RG tag: {tag["RG"]}')
+                        raise ValueError(f'Found non-Z RG tag: {tag["RG"]}')
                     tag_rg = tag['RG'][2:].strip()
 
                     if not tag_rg:
@@ -153,7 +174,7 @@ def sam_to_align_table(
                 op_arr = op.clip_soft_to_hard(op.cigar_to_arr(tok[5]))
 
                 if np.any(op_arr[:, 0] * op.M):
-                    raise RuntimeError('PAV does not allow match alignment operations (CIGAR "M", requires "=" and "X")')
+                    raise ValueError('PAV does not allow match alignment operations (op "M", requires "=" and "X")')
 
                 len_qry = np.sum(op_arr[np.isin(op_arr[:, 0], op.CONSUMES_QRY_ARR), 1])
                 len_ref = np.sum(op_arr[np.isin(op_arr[:, 0], op.CONSUMES_REF_ARR), 1])
@@ -168,7 +189,7 @@ def sam_to_align_table(
                 qry_id = tok[0].strip()
 
                 if chrom == '*' or qry_id == '*':
-                    raise RuntimeError(f'Found mapped read with missing names (chrom={chrom}, qry_id={qry_id})')
+                    raise ValueError(f'Found mapped read with missing names (chrom={chrom}, qry_id={qry_id})')
 
                 # Save record
                 row = {
@@ -191,14 +212,14 @@ def sam_to_align_table(
                 record_list.append(row)
 
             except Exception as e:
-                raise RuntimeError('Failed to parse record at line {}: {}'.format(line_number, str(e))) from e
+                raise ValueError('Failed to parse record at line {}: {}'.format(line_number, str(e))) from e
 
     # Merge records
     df = pl.DataFrame(record_list, orient='row', schema=schema.ALIGN)
 
     df = (
         df
-        .with_columns(qry_order=get_qry_order(df))
+        .with_columns(qry_order_expr())
         .select(columns_head)
     )
 
@@ -227,7 +248,7 @@ def sam_to_align_table(
 
     # Check sanity
     for row in df.iter_rows(named=True):
-        records.check_record(row, df_qry_fai)
+        check_record(row, df_qry_fai)
 
     # Return alignment table
     return df
@@ -239,33 +260,28 @@ def align_depth_table(
         coord_cols: Iterable[str] | str = ('chrom', 'pos', 'end'),
         retain_filtered: bool = True
 ) -> pl.DataFrame:
-    """
-    Get a table of alignment depth from an alignment table.
+    """Get a table of alignment depth from an alignment table.
 
     Table columns:
-        chrom or qry_id: Chromosome name
-        pos or qry_pos: Start position.
-        end or qry_end: End position.
-        depth: Depth of alignments between pos and end.
+        - chrom or qry_id: Chromosome name
+        - pos or qry_pos: Start position.
+        - end or qry_end: End position.
+        - depth: Depth of alignments between pos and end.
 
-    The first three columns are derived from coord_cols.
+    The first three columns are derived from argument `coord_cols`.
 
-    Args:
-        df: Alignment table.
-        df_fai: Reference FASTA index table. Must have a column named "len" and a column matching the first element of
-            coord_cols.
-        coord_cols: Coordinate columns to use for depth. Typically ('chrom', 'pos', 'end') or
-            ('qry_id', 'qry_pos', 'qry_end'). If a string, must be "ref" (for chrom, pos, end) or
-            "qry" (for qry_id, qry_pos, qry_end).
-        retain_filtered: Retain filtered alignments if True.
+    :param df: Alignment table.
+    :param df_fai: Reference FASTA index table. Must have a column named "len" and a column matching the first element
+        of `coord_cols`.
+    :param coord_cols: Coordinate columns to use for depth. Typically ('chrom', 'pos', 'end') or
+        ('qry_id', 'qry_pos', 'qry_end'). If a string, must be "ref" (for chrom, pos, end) or
+        "qry" (for qry_id, qry_pos, qry_end).
+    :param retain_filtered: Retain filtered alignments if True.
 
-    Returns:
-        Depth table.
+    :returns: Depth table.
 
-    Raises:
-        ValueError: If columns are missing from tables df or df_fai.
+    :raises ValueError: If columns are missing from tables df or df_fai.
     """
-
     if not isinstance(df, pl.LazyFrame):
         df = df.lazy()
 
@@ -282,10 +298,10 @@ def align_depth_table(
             df_fai = df_fai.collect()
 
         if coord_cols[0] not in df_fai.collect_schema().names():
-            raise ValueError(f'coord_cols[0] must be in df_fai columns')
+            raise ValueError(f'coord_cols[0] must be in df_fai columns: {coord_cols[0]}')
 
         if 'len' not in df_fai.collect_schema().names():
-            raise ValueError(f'df_fai must have a "len" column')
+            raise ValueError('df_fai must have a "len" column')
 
         df_fai = df_fai.select([coord_cols[0], 'len'])
 
@@ -337,7 +353,7 @@ def align_depth_table(
                 (
                     pl.col('coord').shift(-1, fill_value=(
                         df_fai.row(by_predicate=col_chrom == chrom, named=True)['len']
-                            if df_fai is not None else pl.col('coord').max()
+                        if df_fai is not None else pl.col('coord').max()
                     ))
                 ).alias('end'),
                 pl.col('depth'),
@@ -351,7 +367,6 @@ def align_depth_table(
         last_depth = 0
 
         for depth, index in df_depth.select(['depth', 'index']).rows():
-            #print(f'{depth} - {index}')
             assert last_depth != depth
 
             last_index_list = index_col_list[-1]
@@ -368,8 +383,6 @@ def align_depth_table(
                 index_col_list.append(
                     [i for i in last_index_list if i != index]
                 )
-
-            #print(f'\t* {", ".join([str(x) for x in index_col_list[-1]])}')
 
             last_depth = depth
 
@@ -390,6 +403,7 @@ def align_depth_table(
                 pl.col('depth'),
                 pl.col('index')
             )
+            .cast(DEPTH_SCHEMA)
         )
 
         # Ends
@@ -402,7 +416,7 @@ def align_depth_table(
                         'end': [min_pos],
                         'depth': [0],
                         'index': [[]]
-                    }, schema=df_depth.schema),
+                    }, schema=DEPTH_SCHEMA),
                     df_depth
                 ])
                 .select(df_depth.columns)
@@ -414,7 +428,7 @@ def align_depth_table(
 
     # Concat
     df_depth = (
-        pl.concat(df_depth_list)
+        pl.concat(df_depth_list) if len(df_depth_list) > 0 else pl.DataFrame(schema=DEPTH_SCHEMA)
         .rename({
             'chrom': coord_cols[0],
             'pos': coord_cols[1],
@@ -435,29 +449,24 @@ def align_depth_filter(
         coord_cols: Iterable[str] | str = ('chrom', 'pos', 'end'),
         append_filter: str = 'DEPTH'
 ) -> pl.DataFrame:
-    """
-    Filter alignments based on overlap with deeply-mapped regions.
+    """Filter alignments based on overlap with deeply-mapped regions.
 
     Intersect df with df_depth and count the number of bases in df overlapping all records in df_depth (may overlap
     multiple records, intersect bases are summed). If the proportion of intersected bases exceeds max_overlap, append
     "append_filter" to the "filter" column in df. A reasonable max_overlap threshold will permit long alignments to
     pass through deeply-mapped regions without being filtered.
 
-    Args:
-        df: Table of alignment records.
-        df_depth: Table of depth records. If None, will be generated from df.
-        max_depth: Maximum depth, filter records intersecting loci exceeding this depth (> max_depth).
-        max_overlap: Maximum overlap allowed when intersecting deep alignment regions.
-        coord_cols: Column names for coordinates (chrom, start, end).
-        append_filter: String to append to "filter" column in df.
+    :param df: Table of alignment records.
+    :param df_depth: Table of depth records. If None, will be generated from df.
+    :param max_depth: Maximum depth, filter records intersecting loci exceeding this depth (> max_depth).
+    :param max_overlap: Maximum overlap allowed when intersecting deep alignment regions.
+    :param coord_cols: Column names for coordinates (chrom, start, end).
+    :param append_filter: String to append to "filter" column in df.
 
-    Returns:
-        df with "filter" column appended.
+    :returns df with "filter" column appended.
 
-    Raises:
-        ValueError: Arguments are invalid.
+    :raises ValueError: Arguments are invalid.
     """
-
     # Check arguments
     if df is None:
         raise ValueError('df must be specified')
@@ -516,31 +525,29 @@ def intersect_other(
         df_other: pl.DataFrame,
         coord_cols: Iterable[str] | str = ('chrom', 'pos', 'end')
 ) -> pl.DataFrame:
+    """Intersect tables by coordinates and count the number of overlapping bases.
+
+    .. Warning::
+       If df_other contains overlapping records, the intersect bases will be counted multiple times. This function
+       is typically used with a depth table, which does not contain overlaps.
+
+    The returned table has the following fields:
+
+        * index: Index in df by position (first record is 0, secord is 1, etc).
+        * len: Length of the record (end position - start position).
+        * bp: Number of bases in df overlapping all records in df_other.
+        * bp_prop: Proportion of bases in df overlapping all records in df_other.
+
+    :param df: Table with coordinates.
+    :param df_other: Other table with coordinates.
+    :param coord_cols: Coordinate columns to use for depth. Typically ('chrom', 'pos', 'end') or
+        ('qry_id', 'qry_pos', 'qry_end'). If a string, must be "ref" (for chrom, pos, end) or
+        "qry" (for qry_id, qry_pos, qry_end).
+
+    :returns: An intersect table.
+
+    :raises ValueError: Arguments are invalid.
     """
-    Intersect tables by coordinates and count the number bases in df overlapping all records in df_other.
-
-    Warning:
-        If df_other contains overlapping records, the intersect bases will be counted multiple times. This function
-        is typically used with a depth table, which does not contain overlaps.
-
-    Args:
-        df: Table with coordinates.
-        df_other: Other table with coordinates.
-        coord_cols: Coordinate columns to use for depth. Typically ('chrom', 'pos', 'end') or
-            ('qry_id', 'qry_pos', 'qry_end'). If a string, must be "ref" (for chrom, pos, end) or
-            "qry" (for qry_id, qry_pos, qry_end).
-
-    Returns:
-        A table with the following fields:
-            index: Index in df by position (first record is 0, secord is 1, etc).
-            len: Length of the record (end position - start position).
-            bp: Number of bases in df overlapping all records in df_other.
-            bp_prop: Proportion of bases in df overlapping all records in df_other.
-
-    Raises:
-        ValueError: Arguments are invalid.
-    """
-
     # Check arguments
     if df is None:
         raise ValueError('df must be specified')
@@ -647,18 +654,14 @@ def intersect_other(
 def _check_coord_cols(
         coord_cols: Iterable[str] | str
 ) -> tuple[str, str, str]:
-    """
-    Checks coord_cols and substitutes defaults.
+    """Check coord_cols and substitute defaults.
 
     Convenience method for checking coord_cols parameters used by several functions.
 
-    Args:
-        coord_cols: A tuple of three elements are a pre-defined keyword indicating which coordinate columns to use.
+    :param coord_cols: A tuple of three elements are a pre-defined keyword indicating which coordinate columns to use.
 
-    Returns:
-        A a tuple af three column names, e.g. ('chrom', 'pos', 'end').
+    :returns: A a tuple af three column names, e.g. ('chrom', 'pos', 'end').
     """
-
     if coord_cols is None:
         raise ValueError('coord_cols must be specified')
 
@@ -666,7 +669,7 @@ def _check_coord_cols(
         coord_cols: tuple[str, str, str] = NAMED_COORD_COLS.get(coord_cols, None)
 
         if coord_cols is None:
-            raise ValueError(f'If coord_cols is a string, it must be "ref" or "qry"')
+            raise ValueError('If coord_cols is a string, it must be "ref" or "qry"')
 
     coord_cols = tuple(coord_cols)
 
@@ -678,55 +681,63 @@ def _check_coord_cols(
     return coord_cols
 
 
-def get_qry_order(df):
-    """
-    Get a column describing the query order of each alignment record.
+def qry_order_expr() -> pl.Expr:
+    """Get an expression for computing the query order of a table.
 
     For any query sequence, the first alignment record in the sequence (i.e. containing the left-most aligned base
     relative to the query sequence) will have order 0, the next alignment record 1, etc. The order is set per query
     sequence (i.e. the first aligned record of every unique query ID will have order 0).
 
-    Args:
-        df: DataFrame of alignment records.
-
-    Returns:
-        A Series of alignment record query orders.
+    :returns: An expression for computing the query order.
     """
-
     return (
-        df
-        .with_row_index('index')
-        .sort(['qry_id', 'qry_pos', 'qry_end'])
-        .drop('qry_order', strict=False)
-        .with_row_index('qry_order')
-        .select(
-            pl.col('index'),
-            (pl.col('qry_order') - pl.col('qry_order').first().over('qry_id')).alias('qry_order')
+        (
+            pl.struct(['qry_pos', 'qry_end'])
+            .rank(method='ordinal')
+            .over('qry_id')
+            - 1
         )
-        .sort('index')
-        .select(
-            pl.col('qry_order')
-        )
-        .to_series()
+        .alias('qry_order')
     )
+
+    # if isinstance(df, pl.DataFrame):
+    #     df = df.lazy()
+    #
+    # return (
+    #     df
+    #     .with_row_index('index')
+    #     .sort(['qry_id', 'qry_pos', 'qry_end'])
+    #     .drop('qry_order', strict=False)
+    #     .with_columns(
+    #         (pl.cum_count('qry_id').over('qry_id') - 1).alias('qry_order')
+    #     )
+    #     # .with_row_index('qry_order')
+    #     # .select(
+    #     #     pl.col('index'),
+    #     #     (pl.col('qry_order') - pl.col('qry_order').first().over('qry_id')).alias('qry_order')
+    #     # )
+    #     .sort('index')
+    #     .select(
+    #         pl.col('qry_order')
+    #     )
+    #     .collect()
+    #     .to_series()
+    # )
 
 
 def align_stats(
         df: pl.DataFrame,
         head_cols: Optional[list[tuple[str, str]]] = None
 ) -> pl.DataFrame:
+    """Collect high-level stats from an alignment table separated by by filter.
+
+    Statis are divided by passing filters (filter list is empty) and fail (filter list is not empty).
+
+    :param df: Alignment table.
+    :param head_cols: List of tuples of (column name, literal value) to prepend to the output table.
+
+    :returns: A table with new or updated feature columns.
     """
-    Collect high-level stats from an alignment table separated by pass (filter list is empty) and fail (filter list is
-    not empty).
-
-    Args:
-        df: Alignment table.
-        head_cols: List of tuples of (column name, literal value) to prepend to the output table.
-
-    Returns:
-        A table with new or updated feature columns.
-    """
-
     agg_list = [
         # n
         pl.len().alias('n'),
@@ -799,205 +810,3 @@ def align_stats(
         )
 
     return df_sum
-
-
-# def aggregate_alignment_records(
-#         df_align: pd.DataFrame,
-#         df_qry_fai: pd.Series,
-#         score_model: bool=None,
-#         min_score: float=None,
-#         noncolinear_penalty: bool=True
-# ):
-#     """
-#     Aggregate colinear alignment records.
-#
-#     :param df_align: Table of alignment records. MUST be query trimmed (or query- & reference-trimmed)
-#     :param df_qry_fai: Query FAI.
-#     :param score_model: Model for scoring INS and DEL between alignment records. If none, use the default model.
-#     :param min_score: Do not aggregate alignment records with a score below this value. Defaults to the score of a
-#         10 kbp gap.
-#     :param noncolinear_penalty: When aggregating two records, add a gap penalty equal to the difference between the
-#         unaligned reference and query bases between the records. This penalizes non-colinear alignments.
-#
-#     :return: Table of aggregated alignment records.
-#     """
-#
-#     # Check parameters
-#     if score_model is None:
-#         score_model = score.get_score_model()
-#
-#     if min_score is None:
-#         min_score = score_model.gap(10000)
-#
-#     min_agg_index = int(10 ** np.ceil(np.log10(
-#         np.max(df_align['INDEX'])
-#     ))) - 1  # Start index for aggregated records at the next power of 10
-#
-#     next_agg_index = min_agg_index + 1
-#
-#     # Sort
-#     df_align = df_align.sort_values(['QRY_ID', 'QRY_POS']).copy()
-#     df_align['INDEX_PREAGG'] = df_align['INDEX']
-#
-#     # Return existing table if empty
-#     if df_align.shape[0] == 0:
-#         df_align['INDEX_PREAGG'] = df_align['INDEX']
-#         return df_align
-#
-#     df_align['INDEX_PREAGG'] = df_align['INDEX'].apply(lambda val: [val])
-#     df_align['MAPQ'] = df_align['MAPQ'].apply(lambda val: [val])
-#     df_align['FLAGS'] = df_align['FLAGS'].apply(lambda val: [val])
-#
-#     # Find and aggregate near co-linear records over SVs
-#     align_records = list()  # Records that were included in a merge
-#
-#     for qry_id in sorted(set(df_align['QRY_ID'])):
-#         df = df_align.loc[df_align['QRY_ID'] == qry_id]
-#         i_max = df.shape[0] - 1
-#
-#         i = 0
-#         row1 = df.iloc[i]
-#
-#         while i < i_max:
-#             i += 1
-#
-#             row2 = row1
-#             row1 = df.iloc[i]
-#
-#             # Skip if chrom or orientation is not the same
-#             if row1['#CHROM'] != row2['#CHROM'] or row1['IS_REV'] != row2['IS_REV']:
-#                 align_records.append(row2)
-#                 continue
-#
-#             # Get reference distance
-#             if row1['IS_REV']:
-#                 ref_dist = row2['POS'] - row1['END']
-#             else:
-#                 ref_dist = row1['POS'] - row2['END']
-#
-#             qry_dist = row1['QRY_POS'] - row2['QRY_END']
-#
-#             if qry_dist < 0:
-#                 raise RuntimeError(f'Query distance is negative: {qry_dist}: alignment indexes {row1["INDEX"]} and {row2["INDEX"]}')
-#
-#             if ref_dist >= 0:
-#                 # Contiguous in reference space, check query space
-#
-#                 # Score gap between the alignment records
-#                 this_score = score_model.gap(ref_dist) + score_model.gap(qry_dist)
-#
-#                 score_gap = this_score + (
-#                     score_model.gap(np.abs(qry_dist - ref_dist)) if noncolinear_penalty else 0
-#                 )
-#
-#                 if score_gap < min_score:
-#                     align_records.append(row2)
-#                     continue
-#
-#                 #
-#                 # Aggregate
-#                 #
-#                 row1 = row1.copy()
-#
-#                 # Set query position
-#                 row1['QRY_POS'] = row2['QRY_POS']
-#
-#                 # Get rows in order
-#                 if row1['IS_REV']:
-#                     row_l = row1
-#                     row_r = row2
-#
-#                     row1['END'] = row2['END']
-#
-#                     row1['TRIM_REF_R'] = row2['TRIM_REF_R']
-#                     row1['TRIM_QRY_R'] = row2['TRIM_QRY_R']
-#
-#                 else:
-#                     row_l = row2
-#                     row_r = row1
-#
-#                     row1['POS'] = row2['POS']
-#
-#                     row1['TRIM_REF_L'] = row2['TRIM_REF_L']
-#                     row1['TRIM_QRY_L'] = row2['TRIM_QRY_L']
-#
-#                 # Set records
-#                 row1['FLAGS'] = row1['FLAGS'] + row2['FLAGS']
-#                 row1['MAPQ'] = row1['MAPQ'] + row2['MAPQ']
-#                 row1['INDEX_PREAGG'] = row1['INDEX_PREAGG'] + row2['INDEX_PREAGG']
-#                 row1['SCORE'] = row1['SCORE'] + row2['SCORE']
-#
-#                 if 'RG' in row1:
-#                     row1['RG'] = np.nan
-#
-#                 if 'AO' in row1:
-#                     row1['AO'] = np.nan
-#
-#                 # Merge CIGAR strings
-#                 op_arr_l = op.cigar_as_array(row_l['CIGAR'])
-#                 op_arr_r = op.cigar_as_array(row_r['CIGAR'])
-#
-#                 while op_arr_l.shape[0] > 0 and op_arr_l[-1, 0] in op.CLIP_SET:  # Tail of left record
-#                     op_arr_l = op_arr_l[:-1]
-#
-#                 while op_arr_r.shape[0] > 0 and op_arr_r[0, 0] in op.CLIP_SET:  # Head of right record
-#                     op_arr_r = op_arr_r[1:]
-#
-#                 ins_len = qry_dist
-#                 del_len = ref_dist
-#
-#                 if qry_dist > 0:
-#                     while op_arr_l.shape[0] > 0 and op_arr_l[-1, 0] == op.I:  # Concat insertions (no "...xIxI..." in CIGAR)
-#                         ins_len += op_arr_l[-1, 1]
-#                         op_arr_l = op_arr_l[:-1]
-#
-#                     op_arr_l = np.append(op_arr_l, np.array([[ins_len, op.I]]), axis=0)
-#
-#                 if ref_dist > 0:
-#                     while op_arr_l.shape[0] > 0 and op_arr_l[-1, 0] == op.D:  # Concat deletions (no "...xDxD..." in CIGAR)
-#                         del_len += op_arr_l[-1, 1]
-#                         op_arr_l = op_arr_l[:-1]
-#
-#                     op_arr_l = np.append(op_arr_l, np.array([[del_len, op.D]]), axis=0)
-#
-#                 op_arr = np.append(op_arr_l, op_arr_r, axis=0)
-#
-#                 row1['CIGAR'] = op.to_cigar_string(op_arr)
-#                 row1['SCORE'] = score_model.score_operations(op_arr)
-#
-#                 # Set alignment indexes
-#                 if row2['INDEX'] < min_agg_index:
-#                     # Use the next aggregate index
-#                     row1['INDEX'] = next_agg_index
-#                     next_agg_index += 1
-#
-#                 else:
-#                     # row2 was aggregated, use its aggregate index
-#                     row1['INDEX'] = row2['INDEX']
-#
-#                 # Check
-#                 records.check_record(row1, df_qry_fai)
-#
-#             else:
-#                 align_records.append(row2)
-#
-#         # Add last record
-#         align_records.append(row1)
-#
-#     # Concatenate records
-#     df = pd.concat(align_records, axis=1).T
-#
-#     df['MAPQ'] = df['MAPQ'].apply(lambda val: ','.join([str(v) for v in val]))
-#     df['FLAGS'] = df['FLAGS'].apply(lambda val: ','.join([str(v) for v in val]))
-#     df['INDEX_PREAGG'] = df['INDEX_PREAGG'].apply(lambda val: ','.join([str(v) for v in val]))
-#
-#     # Assign order per query sequence
-#     df['QRY_ORDER'] = get_qry_order(df)
-#
-#     # Reference order
-#     df.sort_values(['#CHROM', 'POS', 'END', 'QRY_ID'], ascending=[True, True, False, True], inplace=True)
-#
-#     # Check sanity (whole table, modified records already checked, should pass)
-#     df.apply(records.check_record, df_qry_fai=df_qry_fai, axis=1)
-#
-#     return df

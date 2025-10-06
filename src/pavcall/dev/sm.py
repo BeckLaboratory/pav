@@ -1,20 +1,22 @@
-"""
-Tools for managing Snakemake resources.
-"""
+"""Tools for managing Snakemake resources."""
+
+__all__ = [
+    'strip_and_format',
+    'nlset',
+]
+
 
 import re
 from typing import Optional, Iterable
 
 from snakemake.io import Namedlist
 
+
 def strip_and_format(
         value: str,
-        wildcards: Optional[Namedlist]=None
-):
-    """
-    Strip whitespace, commas, quotes, and temp() from a value, then format with wildcards.
-    """
-
+        wildcards: Optional[Namedlist] = None
+) -> str:
+    """Strip whitespace, commas, quotes, and temp() from a value, then format with wildcards."""
     if value is None:
         return value
 
@@ -45,9 +47,10 @@ def nlset(
         key: str,
         value: Optional[str | Iterable] = None,
         wildcards: Optional[Namedlist] = None
-):
-    """
-    Set a value on a named list in Snakemake. This includes objects for wildcards, input, output, parameters, and log.
+) -> None:
+    """Set a value on a named list in Snakemake.
+
+    This includes objects for wildcards, input, output, parameters, and log.
 
     :param named_list: Named list (wildcards, input, output, parameters, etc).
     :param key: Key.
@@ -56,7 +59,6 @@ def nlset(
     :param wildcards: Format `value` with `wildcards` if set. If `value` is a function, call it with
         `wildcards` as its only parameter.
     """
-
     if key is None:
         raise RuntimeError('Key cannot be None')
 

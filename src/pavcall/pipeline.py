@@ -1,8 +1,21 @@
-"""
-PAV pipeline utilities.
+"""PAV pipeline utilities.
 
 Functions for finding data.
 """
+
+__all__ = [
+    'expand_pattern',
+    'get_hap_list',
+    'get_asm_config',
+    'get_asm_input_list',
+    'expand_input',
+    'get_rule_input_list',
+    'input_tuples_to_fasta',
+    'get_override_config',
+    'read_assembly_table',
+    'expand_fofn',
+    'link_fasta',
+]
 
 import itertools
 import os
@@ -17,34 +30,28 @@ import polars as pl
 
 import agglovar
 
-from . import params
-from . import seq
+from .params import PavParams
+from .seq import fa_to_record_iter, gfa_to_record_iter
 
 
 def expand_pattern(
         pattern: str,
         asm_table: pl.DataFrame,
-        pav_config: params.PavParams,
+        pav_config: PavParams,
         **kwargs
 ) -> Iterable[str]:
-    """
-    Get a list of files matching a pattern with wildcards.
+    """Get a list of files matching a pattern with wildcards.
 
     Wildcards are embedded in the pattern string (surrounded by curly braces). Standard PAV pipeline wildcard values are
     recognized, such as "asm_name", "hap", and "trim". A list of string (likely filenames) is returned with one item
     for each valid combination of wildcard values.
 
-    Args:
-        pattern: String pattern with wildcards.
-        asm_table: Assembly table.
-        pav_config: Dictionary of PAV configuration values.
-        **kwargs: Keyword arguments for wildcard values. These can contain new wildcards or overrides for known
-            wildcards.
+    :param pattern: String pattern with wildcards.
+    :param asm_table: Assembly table.
+    :param pav_config: Dictionary of PAV configuration values.
 
-    Yields:
-        Pattern strings with wildcards expanded.
+    :yields: Pattern strings with wildcards expanded.
     """
-
     processed_kwargs: dict[str, tuple[Any, ...]] = {}
 
     # Check kwargs
@@ -52,16 +59,15 @@ def expand_pattern(
         # Empty kwargs so the kwargs product iterates over one item
         processed_kwargs = {'': (None,)}
 
-        for key, val in kwargs.items():
-            if isinstance(val, str):
-                # Single string value, iterate over one item, not each string character
+    for key, val in kwargs.items():
+        if isinstance(val, str):
+            # Single string value, iterate over one item, not each string character
+            processed_kwargs[key] = (val,)
+        else:
+            try:
+                processed_kwargs[key] = tuple(val)
+            except TypeError:
                 processed_kwargs[key] = (val,)
-            else:
-                try:
-                    processed_kwargs[key] = tuple(val)
-                except TypeError:
-                    processed_kwargs[key] = (val,)
-
 
     kwargs_keys = [val for val in sorted(processed_kwargs.keys()) if val not in {'asm_name', 'hap'}]
     kwargs_n = len(kwargs_keys)
@@ -83,7 +89,9 @@ def expand_pattern(
             asm_list &= {val.strip() for val in pav_config['asm_name'].split(',') if val.strip()}
 
         if 'hap' in pav_config:
-            hap_set &= {val.strip() for val in pav_config['hap'].split(',') if val.strip()}
+            config_haps = {val.strip() for val in pav_config['hap'].split(',') if val.strip()}
+
+            hap_set = (hap_set & config_haps) if hap_set is not None else config_haps
 
     # Process each assembly
     for asm_name in asm_list:
@@ -107,21 +115,16 @@ def get_hap_list(
         asm_name: str,
         asm_table: pl.DataFrame
 ) -> list[str]:
+    """Get a list of haplotypes for an assembly.
+
+    :param asm_name: Assembly name.
+    :param asm_table: Assembly table.
+
+    :returns: List of haplotypes.
+
+    :raises ValueError: If the named assembly is not in the assembly table.
+    :raises ValueError: if no haplotypes were found for the assembly.
     """
-    Get a list of haplotypes for an assembly.
-
-    Args:
-        asm_name: Assembly name.
-        asm_table: Assembly table.
-
-    Returns:
-        List of haplotypes.
-
-    Raises:
-        ValueError: If the named assembly is not in the assembly table.
-        ValueError: if no haplotypes were found for the assembly.
-    """
-
     # Check values
     if asm_name is None or (asm_name := asm_name.strip()) == '':
         raise RuntimeError('Cannot get assembly config: "asm_name" is missing')
@@ -135,8 +138,8 @@ def get_hap_list(
     # Find haplotypes for a table entry
     hap_list = [
         col[len('hap_'):]
-            for col in asm_table_entry.keys()
-                if col.startswith('hap_') and asm_table_entry[col] is not None
+        for col in asm_table_entry.keys()
+        if col.startswith('hap_') and asm_table_entry[col] is not None
     ]
 
     if len(hap_list) == 0:
@@ -150,21 +153,16 @@ def get_asm_config(
         hap: str,
         asm_table: pl.DataFrame
 ) -> dict[str, Any]:
+    """Get a dictionary of parameters and paths for one assembly.
+
+    :param asm_name: Assembly name.
+    :param hap: Haplotype name (e.g. "h1", "h2").
+    :param asm_table: Assembly table.
+
+    :returns: A dictionary of parameters and paths.
+
+    :raises ValueError: If the named assembly or haplotype is not in the assembly table.
     """
-    Get a dictionary of parameters and paths for one assembly.
-
-    Args:
-        asm_name: Assembly name.
-        hap: Haplotype name (e.g. "h1", "h2").
-        asm_table: Assembly table.
-
-    Returns:
-        A dictionary of parameters and paths.
-
-    Raises:
-        ValueError: If the named assembly or haplotype is not in the assembly table.
-    """
-
     # Check values
     if hap is None or (hap := hap.strip()) == '':
         raise ValueError('Cannot get assembly config: "hap" is missing')
@@ -203,31 +201,29 @@ def get_asm_input_list(
         hap: str,
         asm_table: pl.DataFrame
 ) -> list[str]:
+    """Get a list of input files.
+
+    :param asm_name: Assembly name.
+    :param hap: Haplotype.
+    :param asm_table: Assembly table.
+
+    :returns: List of input files.
+
+    :raises FileNotFoundError: If any of the input files are missing, empty, or not regular files.
     """
-    Get a list of input files.
-
-    Args:
-        asm_name: Assembly name.
-        hap: Haplotype.
-        asm_table: Assembly table.
-
-    Returns:
-        List of input files.
-
-    Raises:
-        FileNotFoundError: If any of the input files are missing, empty, or not regular files.
-    """
-
     # Get config
     assembly_input = get_asm_config(asm_name, hap, asm_table)['assembly_input']
 
     empty_assembly = [
         file_name for file_name in assembly_input
-            if not os.path.isfile(file_name) or os.stat(file_name).st_size == 0
+        if not os.path.isfile(file_name) or os.stat(file_name).st_size == 0
     ]
 
     if empty_assembly:
-        raise FileNotFoundError(f'Found {len(empty_assembly)} input file name(s) that ar missing, empty, or not regular files: asm_name={asm_name}, hap={hap}: {", ".join(empty_assembly)}')
+        raise FileNotFoundError(
+            f'Found {len(empty_assembly)} input file name(s) that ar missing, empty, or not regular files: '
+            f'asm_name={asm_name}, hap={hap}: {", ".join(empty_assembly)}'
+        )
 
     return assembly_input
 
@@ -235,10 +231,10 @@ def get_asm_input_list(
 def expand_input(
         file_name_list: list[str]
 ) -> tuple[list[tuple[str, str]], list[str]]:
-    """
-    Expand input to a list of tuples containing the file name and type.
+    """Expand input to a list of tuples containing the file name and type.
 
     Tuple elements:
+
         - 0: File name.
         - 1: File type ("fasta", "fastq", or "gfa")
 
@@ -246,18 +242,18 @@ def expand_input(
 
     This function traverses FOFN files (file of file names) recursively until FASTA, FASTQ, or GFA files are found.
 
-    Args:
-        file_name_list: List of input file names.
+    Returns A tuple of two lists:
 
-    Returns:
-        A tuple of two lists:
-            - A list of tuples containing the file name and type.
-            - A list of FOFN file names.
+        - A list of tuples containing the file name and type.
+        - A list of FOFN file names.
 
-    Raises:
-        ValueError: If file types cannot be determined from file names.
+
+    :param file_name_list: List of input file names.
+
+    :returns: A tuple of two lists.
+
+    :raises ValueError: If file types cannot be determined from file names.
     """
-
     # Check arguments
     if file_name_list is None:
         raise RuntimeError('Cannot create input FASTA: Input name list is None')
@@ -335,18 +331,14 @@ def get_rule_input_list(
         hap: str,
         asm_table: pl.DataFrame
 ) -> list[str]:
+    """Get a full list of input files.
+
+    :param asm_name: Assembly name.
+    :param hap: Haplotype.
+    :param asm_table: Assembly table.
+
+    :returns: A list of all files that may affect input. This includes both sequence data files and FOFN files.
     """
-    Get a full list of input files.
-
-    Args:
-        asm_name: Assembly name.
-        hap: Haplotype.
-        asm_table: Assembly table.
-
-    Returns:
-         A list of all files that may affect input. This includes both sequence data files and FOFN files.
-    """
-
     input_list = get_asm_input_list(asm_name, hap, asm_table)
 
     file_name_tuples, fofn_list = expand_input(input_list)
@@ -361,22 +353,20 @@ def get_rule_input_list(
 def input_tuples_to_fasta(
         file_name_tuples: Iterable[tuple[str, str]],
         out_file_name: str
-):
+) -> None:
+    """Convert a list of input files to a single FASTA entry.
+
+    Input files may be FASTA, FASTQ, or GFA.
+
+    :param file_name_tuples: List of tuples for each input entry ([0]: File name, [1]: File format). The file format
+        must be "fasta", "fastq", or "gfa" (case sensitive).
+    :param out_file_name: Output file to write gzipped FASTA data.
+
+    :raises ValueError: If there are no input files.
+    :raises ValueError: If output file name is missing.
+    :raises ValueError: If file types cannot be determined.
+    :raises RuntimeError: If any of the input files are missing, empty, or not regular files.
     """
-    Convert a list of input files to a single FASTA entry. Input files may be FASTA, FASTQ, or GFA.
-
-    Args:
-        file_name_tuples: List of tuples for each input entry ([0]: File name, [1]: File format). The file format
-            must be "fasta", "fastq", or "gfa" (case sensitive).
-        out_file_name: Output file to write gzipped FASTA data.
-
-    Raises:
-        ValueError: If there are no input files.
-        ValueError: If output file name is missing.
-        ValueError: If file types cannot be determined.
-        RuntimeError: If any of the input files are missing, empty, or not regular files.
-    """
-
     if out_file_name is None or (out_file_name := out_file_name.strip()) == '':
         raise ValueError('Cannot create input FASTA from sources: Output file name is empty')
 
@@ -386,10 +376,15 @@ def input_tuples_to_fasta(
 
     for file_name, file_format in file_name_tuples:
         if file_format not in {'fasta', 'fastq', 'gfa'}:
-            raise ValueError(f'Cannot create input FASTA from sources: Unrecognized file format "{file_format}": {file_name}')
+            raise ValueError(
+                f'Cannot create input FASTA from sources: Unrecognized file format "{file_format}": {file_name}'
+            )
 
         if not os.path.isfile(file_name):
-            raise FileNotFoundError(f'Cannot create input FASTA from sources: Input file does not exist or is not a regular file: {file_name}')
+            raise FileNotFoundError(
+                f'Cannot create input FASTA from sources: Input file does not exist or is not a regular file: '
+                f'{file_name}'
+            )
 
         if os.stat(file_name).st_size == 0:
             raise ValueError(f'Cannot create input FASTA from sources: Input file is empty: {file_name}')
@@ -401,7 +396,7 @@ def input_tuples_to_fasta(
         for file_name, file_format in file_name_tuples:
 
             if file_format in {'fasta', 'fastq'}:
-                for record in seq.fa_to_record_iter(file_name, input_format=file_format):
+                for record in fa_to_record_iter(file_name, input_format=file_format):
 
                     if record.id in record_id_set:
                         raise ValueError(f'Duplicate record ID in input: {record.id}')
@@ -411,7 +406,7 @@ def input_tuples_to_fasta(
                     yield record
 
             elif file_format == 'gfa':
-                for record in seq.gfa_to_record_iter(file_name):
+                for record in gfa_to_record_iter(file_name):
 
                     if record.id in record_id_set:
                         raise ValueError(f'Duplicate record ID in input: {record.id}')
@@ -428,21 +423,16 @@ def input_tuples_to_fasta(
         Bio.SeqIO.write(input_record_iter(), out_file, 'fasta')
 
 
-def get_config_override_dict(config_string: str):
+def _get_config_override_dict(config_string: str) -> dict[str, Any]:
+    """Get a dictionary of overridden parameters using the "config" column of the assembly table.
+
+    :param config_string: Config override string (e.g. attr1=val1;attr2=val2). Must be colon separated and each
+        element must have an equal sign. Whitespace around semi-colons and equal signs is ignored.
+
+    :returns: Dict of overridden parameters or an empty dict if no parameters were overridden.
+
+    :raises ValueError: If config string cannot be parsed into a set of attribute-value pairs.
     """
-    Get a dictionary of overridden parameters using the "config" column of the assembly table.
-
-    Args:
-        config_string: Config override string (e.g. attr1=val1;attr2=val2). Must be colon separated and each
-            element must have an equal sign. Whitespace around semi-colons and equal signs is ignored.
-
-    Returns:
-        Dict of overridden parameters or an empty dict if no parameters were overridden.
-
-    Raises:
-        ValueError: If config string cannot be parsed into a set of attribute-value pairs.
-    """
-
     config_override = dict()
 
     # Check string
@@ -461,7 +451,7 @@ def get_config_override_dict(config_string: str):
             continue
 
         if '=' not in tok:
-            raise ValueError('Cannot get assembly config: Missing "=" in CONFIG token {}: {}'.format(tok, config_string))
+            raise ValueError(f'Cannot get assembly config: Missing "=" in CONFIG token {tok}: {config_string}')
 
         # Get attribute and value
         key, val = tok.split('=', 1)
@@ -470,10 +460,14 @@ def get_config_override_dict(config_string: str):
         val = val.strip()
 
         if not key:
-            raise ValueError('Cannot get assembly config: Missing key (key=value) in CONFIG token {}: {}'.format(tok, config_string))
+            raise ValueError(
+                f'Cannot get assembly config: Missing key (key=value) in CONFIG token {tok}: {config_string}'
+            )
 
         if not val:
-            raise ValueError('Cannot get assembly config: Missing value (key=value) in CONFIG token {}: {}'.format(tok, config_string))
+            raise ValueError(
+                f'Cannot get assembly config: Missing value (key=value) in CONFIG token {tok}: {config_string}'
+            )
 
         # Set
         config_override[key] = val
@@ -481,26 +475,23 @@ def get_config_override_dict(config_string: str):
     return config_override
 
 
-def get_config_with_override(
+def _get_config_with_override(
         config: dict[str, Any],
         override_config: dict[str, Any]
-):
+) -> dict[str, Any]:
+    """Get a config dict with values replaced by overridden values.
+
+    The dict in parameter `config` is copied if it is modified. The original (unmodified) config or a modified copy is
+    returned.
+
+    :param config: Existing config. Original object will not be modified.
+    :param override_config: A defined set of values that will override entries in `config`.
+
+    :returns: A config object.
+
+    :raises ValueError: If the reference configuration parameter is defined per sample. References must be across
+        all samples.
     """
-    Get a config dict with values replaced by overridden values. The dict in parameter `config` is copied if it is
-    modified. The original (unmodified) config or a modified copy is returned.
-
-    Args:
-        config: Existing config. Original object will not be modified.
-        override_config: A defined set of values that will override entries in `config`.
-
-    Returns:
-        A config object.
-
-    Raises:
-        ValueError: If the reference configuration parameter is defined per sample. References must be across
-            all samples.
-    """
-
     if override_config is None:
         return config
 
@@ -523,24 +514,19 @@ def get_override_config(
         asm_name: str,
         asm_table: pl.DataFrame
 ) -> dict[str, Any]:
-    """
-    Get a config dict with values replaced by overridden values.
+    """Get a config dict with values replaced by overridden values.
 
     The dict in parameter `pav_config` is copied if it is modified. The original (unmodified) `pav_config` or a
     modified copy is returned.
 
-    Args:
-        pav_config: Existing PAV config. Original object will not be modified.
-        asm_name: Name of the assembly.
-        asm_table: Assembly table.
+    :param pav_config: Existing PAV config. Original object will not be modified.
+    :param asm_name: Name of the assembly.
+    :param asm_table: Assembly table.
 
-    Returns:
-        A dictionary of PAV configuration parameters with overrides f rom the assembly table applied.
+    :returns: A dictionary of PAV configuration parameters with overrides f rom the assembly table applied.
 
-    Raises:
-        RowsError: If the assembly name is not present or not unique in the assembly table.
+    :raises RowsError: If the assembly name is not present or not unique in the assembly table.
     """
-
     if asm_name is None:
         raise ValueError('Cannot get override for assembly: None')
 
@@ -556,9 +542,9 @@ def get_override_config(
     if 'config' not in asm_table_entry or asm_table_entry['config'] is None:
         return pav_config
 
-    return get_config_with_override(
+    return _get_config_with_override(
         pav_config,
-        get_config_override_dict(asm_table_entry['config'])
+        _get_config_override_dict(asm_table_entry['config'])
     )
 
 
@@ -566,13 +552,13 @@ def read_assembly_table(
         filename: str,
         pav_config: Optional[dict[str, Any]] = None
 ) -> pl.DataFrame:
-    """
-    Read assembly table.
+    """Read assembly table.
 
     The table returned by this function renames the input columns (e.g. "HAP1" or "HAP_h1") to the haplotype name (e.g.
     "h1") and keeps them in the order they were found in the input table. All other columns are removed.
 
     The fields returned are:
+
         - name: Assembly name.
         - hap_NAME: Assembly source for a haplotype with NAME (e.g. NAME == "h1").
         - config: Assembly configuration (e.g. "reference" or "sample" or "reference,sample").
@@ -581,20 +567,16 @@ def read_assembly_table(
     There will always be a "name" column, a "config" column, and at least one haplotype column. All strings in these
     standard columns are stripped of leading and trailing whitespace.
 
-    Args:
-        filename: Input filename to read. If None, produce an empty table.
-        pav_config: Pipeline configuration.
+    :param filename: Input filename to read. If None, produce an empty table.
+    :param pav_config: Pipeline configuration.
 
-    Returns:
-        Assembly table.
+    :returns: Assembly table.
 
-    Raises:
-        ValueError: If the table cannot be read.
-        ValueError: The table contains errors, such as duplicate or empty assembly names.
-        ValueError: If the table contains no haplotypes.
-        FileNotFoundError: If the table file does not exist or is not a regular file.
+    :raises ValueError: If the table cannot be read.
+    :raises ValueError: The table contains errors, such as duplicate or empty assembly names.
+    :raises ValueError: If the table contains no haplotypes.
+    :raises FileNotFoundError: If the table file does not exist or is not a regular file.
     """
-
     if filename is None:
         raise ValueError('Cannot read assembly table: None')
 
@@ -612,15 +594,18 @@ def read_assembly_table(
     filename_lower = filename.lower()
 
     if filename_lower.endswith(('.tsv', '.tsv.gz', '.tsv.txt', 'tsv.txt.gz')):
-        df = pl.read_csv(filename, separator='\t')
+        df = pl.read_csv(filename, separator='\t', infer_schema_length=0)
     elif filename_lower.endswith('.xlsx'):
-        df = pl.read_excel(filename)
+        df = pl.read_excel(filename, infer_schema_length=0)
     elif filename_lower.endswith(('.csv', '.csv.gz', '.csv.txt', '.csv.txt.gz')):
-        df = pl.read_csv(filename)
+        df = pl.read_csv(filename, infer_schema_length=0)
     elif filename_lower.endswith('parquet'):
         df = pl.read_parquet(filename)
     else:
-        raise ValueError(f'Unrecognized table file type (expected ".tsv", ".tsv.gz", ".xlsx", ".csv", ".csv.gz", or ".parquet"): {filename}')
+        raise ValueError(
+            f'Unrecognized table file type (expected ".tsv", ".tsv.gz", ".xlsx", ".csv", ".csv.gz", or ".parquet"): '
+            f'{filename}'
+        )
 
     # Make standard columns lowercase
     col_map = dict()
@@ -657,10 +642,10 @@ def read_assembly_table(
         )
     )
 
-    if df.select(pl.col('name').is_null().any())[0,0]:
+    if df.select(pl.col('name').is_null().any())[0, 0]:
         raise ValueError(f'Found null entries in the assembly table with empty name values: {filename}')
 
-    if df.select(pl.col('name').n_unique())[0,0] < df.height:
+    if df.select(pl.col('name').n_unique())[0, 0] < df.height:
         raise ValueError(f'Found duplicate name values in the assembly table: {filename}')
 
     bad_name = {name for name in df['name'] if '\t' in name}
@@ -733,16 +718,16 @@ def read_assembly_table(
     df = (
         df
         .with_columns(
-            pl.col(f'config')
+            pl.col('config')
             .str.strip_chars()
         )
         .with_columns(
             pl.when(
-                pl.col(f'config') == ''
+                pl.col('config') == ''
             )
             .then(None)
-            .otherwise(pl.col(f'config'))
-            .alias(f'config')
+            .otherwise(pl.col('config'))
+            .alias('config')
         )
     )
 
@@ -757,24 +742,20 @@ def expand_fofn(
         comment: Optional[str] = '#',
         rel: Optional[str | Path] = '.'
 ) -> list[Path]:
+    """Expand an FOFN file to a list of filenames it contains.
+
+    :param fofn_filename: FOFN file name.
+    :param include_fofn: Include FOFN file names in the output list. If True, then both the top-level FOFN is included
+        and all FOFN files recursed if recurse is True.
+    :param recurse: Recurse into FOFN files if True.
+    :param fail_not_found: Raise an error if a file within the FOFN is not found. If the top-level FOFN file is not
+        found, an error is always raised.
+    :param comment: Ignore lines starting with this character (leading/trailing whitespace is stripped before
+        comparison). If None, accept all lines.
+    :param rel: Relative path to the FOFN file. If None, files in the FOFN are relative to the FOFN's parent directory.
+
+    :returns: List of file names.
     """
-    Expand an FOFN file to a list of filenames it contains.
-
-    Args:
-        fofn_filename: FOFN file name.
-        include_fofn: Include FOFN file names in the output list. If True, then both the top-level FOFN is included
-            and all FOFN files recursed if recurse is True.
-        recurse: Recurse into FOFN files if True.
-        fail_not_found: Raise an error if a file within the FOFN is not found. If the top-level FOFN file is not found,
-            an error is always raised.
-        comment: Ignore lines starting with this character (leading/training whitespace is stripped before comparison).
-            If None, accept all lines.
-        rel: Relative path to the FOFN file. If None, files in the FOFN are relative to the FOFN's parent directory.
-
-    Returns:
-        List of file names.
-    """
-
     fofn_filename = Path(fofn_filename)
 
     if not fofn_filename.is_file():
@@ -826,25 +807,22 @@ def expand_fofn(
 
     return out_list
 
+
 def link_fasta(
         source: str | Path,
         dest: str | Path
 ) -> list[Path]:
-    """
-    Link a FASTA file and indexes to a location.
+    """Link a FASTA file and indexes to a location.
 
     The destination filename should include the FASTA extension (e.g., ".fa" or ".fasta") and may include ".gz". If
     it includes ".gz", but the source file does not, then an error is raised. If ".gz" is not in the destination
     filename, it is added if the source file ends with ".gz"..
 
-    Args:
-        source: Input FASTA file.
-        dest: Output basename.
+    :param source: Input FASTA file.
+    :param dest: Output basename.
 
-    Returns:
-        A list of paths to files created.
+    :returns: A list of paths to files created.
     """
-
     # Check arguments
     source = str(source).strip()
     dest = str(dest).strip()

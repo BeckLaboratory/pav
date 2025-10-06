@@ -1,12 +1,16 @@
-"""
-Figure generation utility functions.
-"""
+"""Figure generation utility functions."""
+
+__all__ = [
+    'lighten_color'
+]
 
 import matplotlib as mpl
 import colorsys
 
+
 def lighten_color(color, amount=0.25):
-    """
+    """Lighten color.
+
     Lightens the given color by multiplying (1-luminosity) by the given amount.
     Input can be matplotlib color string, hex string, or RGB tuple.
 
@@ -18,10 +22,9 @@ def lighten_color(color, amount=0.25):
     >> lighten_color('#F034A3', 0.6)
     >> lighten_color((.3,.55,.1), 0.5)
     """
-
     try:
         c = mpl.colors.cnames[color]
-    except:
+    except KeyError:
         c = color
 
     c = colorsys.rgb_to_hls(*mpl.colors.to_rgb(c))

@@ -1,34 +1,34 @@
-"""
-General utility functions.
-"""
+"""General utility functions."""
+
+__all__ = [
+    'as_bool',
+    'region_merge',
+    'collapse_to_set'
+]
 
 from typing import Any, Callable, Iterable, Optional
 
 import polars as pl
 
+
 def as_bool(
         val: Any,
         fail_to_none: bool = False
-) -> bool:
-    """
-    Get a boolean value.
+) -> Optional[bool]:
+    """Get a boolean value.
 
     True values: "true", "1", "yes", "t", "y", True, 1
     False values: "false", "0", "no", "f", "n", False, 0
 
     String values are case-insensitive.
 
-    Args:
-        val: Value to interpret.
-        fail_to_none: If `True`, return `None` if `val` is not a recognized boolean value (see above).
+    :param val: Value to interpret.
+    :param fail_to_none: If `True`, return `None` if `val` is not a recognized boolean value (see above).
 
-    Returns:
-        Boolean value representing `val`.
+    :returns: Boolean value representing `val`.
 
-    Raises:
-        ValueError: If `val` is not a recognized boolean value and `fail_to_none` is `False`.
+    :raises ValueError: If `val` is not a recognized boolean value and `fail_to_none` is `False`.
     """
-
     if issubclass(val.__class__, bool):
         return val
 
@@ -50,24 +50,19 @@ def region_merge(
         file_list: Iterable[str | pl.DataFrame],
         pad: int = 500
 ):
-    """
-    Merge regions from multiple BED files.
+    """Merge regions from multiple BED files.
 
     Each input table must  have colums "chrom", "pos", and "end'.
 
-    Args:
-        file_list: List of files to merge. Each element may be a string (filename) or a DataFrame (in-memory table
-            of alignments). Files with zero size are skipped.
-        pad: Pad interval matches by this amount, but do not add it to the output intervals. Similar to bedtools
-            merge "slop" parameter.
+    :param file_list: List of files to merge. Each element may be a string (filename) or a DataFrame (in-memory table
+        of alignments). Files with zero size are skipped.
+    :param pad: Pad interval matches by this amount, but do not add it to the output intervals. Similar to bedtools
+        merge "slop" parameter.
 
-    Returns:
-        A table of merged regions.
+    :returns: A table of merged regions.
 
-    Raises:
-        ValueError: If a file name is not a string or a DataFrame.
+    :raises ValueError: If a file name is not a string or a DataFrame.
     """
-
     raise NotImplementedError
 
     # # Get BED list
@@ -88,7 +83,11 @@ def region_merge(
     #     else:
     #         raise ValueError(f'File name is not a string or a DataFrame: {file_name} (type "{type(file_name)}")')
     #
-    # df = pd.concat(bed_list, axis=0).sort_values(['#CHROM', 'POS', 'END'], ascending=[True, True, False]).reset_index(drop=True)
+    # df = (
+    #     pd.concat(bed_list, axis=0)
+    #     .sort_values(['#CHROM', 'POS', 'END'], ascending=[True, True, False])
+    #     .reset_index(drop=True)
+    # )
     #
     # # # Read regions
     # # df = pd.concat(
@@ -149,37 +148,38 @@ def region_merge(
 
 
 def collapse_to_set(
-        l: Iterable[Any],
+        to_flatten: Iterable[Any],
         to_type: Optional[Callable] = None
 ) -> set[Any]:
-    """
-    Flatten an iterable and collapse into a set.
+    """Flatten an iterable and collapse into a set.
 
     For each element in the iterable, if it is not a tuple or list, `to_type` is applied (if defined) and the element
     is added to the set. Tuple or list elements are recursively unpacked.
 
-    Args:
-        l: Iterable to flatten.
-        to_type: A function to convert each element to a specific type (e.g. "int" or "float").
+    :param to_flatten: Iterable to flatten.
+    :param to_type: A function to convert each element to a specific type (e.g. "int" or "float").
 
-    Returns:
-        Set of unique elements.
+    :returns: Set of unique elements.
 
-    Raises:
-        ValueError: If a value fails validation through `to_type`.
+    :raises ValueError: If a value fails validation through `to_type`.
     """
-    l = list(l)  # Copy so the original list is not modified
+    to_flatten = list(to_flatten)  # Copy so the original list is not modified
     s = set()
 
     if to_type is None:
-        to_type = lambda x: x
+        to_type = _ident
 
-    while len(l) > 0:
-        v = l.pop()
+    while len(to_flatten) > 0:
+        v = to_flatten.pop()
 
         if isinstance(v, (tuple, list)):
-            l.extend(v)
+            to_flatten.extend(v)
         else:
             s.add(to_type(v))
 
     return s
+
+
+def _ident(x):
+    """Parameter identity function."""
+    return x

@@ -1,9 +1,1 @@
-biopython>=1.85
-fastexcel>=0.14.0
-frozendict>=2.4.6
-intervaltree>=3.1.0
-numpy>=2.3.2
-polars>=1.31.0
-pysam>=0.23.3
-scipy>=1.16.1
-snakemake>=9.9.0
+agglovar>=0.0.1.dev2

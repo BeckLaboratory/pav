@@ -1,4 +1,11 @@
-# Alignment lift
+"""Alignmnet lift utility.
+
+Alignment lift operations translate between reference and query alignments (both directions) using alignment tables.
+"""
+
+__all__ = [
+    'AlignLift',
+]
 
 from dataclasses import dataclass, field
 import collections
@@ -8,24 +15,26 @@ import intervaltree
 import polars as pl
 from typing import Iterable, Any
 
-from .. import region as pavcall_region
-from .. import schema as pavcall_schema
-from .. import seq as pavcall_seq
+from .. import schema
 
-from . import features as pavcall_align_features
-from . import op as pavcall_align_op
+from ..region import Region
+from ..seq import seq_len
+
+from . import op
+
+from .features import FeatureGenerator
 
 
 @dataclass(frozen=True, repr=False)
 class AlignLift:
-    """
+    """Alignment liftover utility.
+
     Create an alignment liftover object for translating between reference and query alignments (both directions). Build
     liftover from alignment data in a DataFrame (requires chrom, pos, end, qry_id, qry_pos, and qry_end).
 
-    Attributes:
-        df: Alignment DataFrame.
-        df_qry_fai: Query FAI DataFrame.
-        cache_align: Number of alignment records to cache in memory.
+    :ivar df: Alignment DataFrame.
+    :ivar df_qry_fai: Query FAI DataFrame.
+    :ivar cache_align: Number of alignment records to cache in memory.
     """
 
     df: pl.DataFrame
@@ -55,8 +64,7 @@ class AlignLift:
     )
 
     def __post_init__(self):
-        """Post-initialization."""
-
+        """Complete initialization."""
         # Add row index
         expected_cols = {'chrom', 'pos', 'end', 'qry_id', 'qry_pos', 'qry_end', 'is_rev'}
         auto_cols = {'score', 'align_index'}
@@ -70,12 +78,12 @@ class AlignLift:
             df = self.df.lazy()
 
             if 'align_index' in add_cols:
-                df.with_columns(pl.int_range(0, self.df.height).alias('align_index').cast(pavcall_schema.ALIGN['align_index']))
+                df.with_columns(pl.int_range(0, self.df.height).alias('align_index').cast(schema.ALIGN['align_index']))
 
             if 'score' in add_cols:
                 df = df.with_columns(
                     pl.lit(0.0).cast(
-                        pavcall_align_features.FeatureGenerator.all_feature_schema()['score']
+                        FeatureGenerator.all_feature_schema()['score']
                     )
                 )
 
@@ -88,13 +96,12 @@ class AlignLift:
             self._ref_tree[row['chrom']][row['pos']:row['end']] = row['align_index']
             self._qry_tree[row['qry_id']][row['qry_pos']:row['qry_end']] = row['align_index']
 
-    def lift_to_ref(
+    def coord_to_ref(
             self,
             query_id: str,
             coord: int | Iterable[int],
     ):
-        """
-        Lift coordinates from query to reference.
+        """Lift coordinates from query to reference.
 
         For each coordinate, multiple lift locations may be found, so a list of dicts is returned for each `coord`
         value.
@@ -110,14 +117,11 @@ class AlignLift:
         lists is returned (one for each element in `coord`). If lift fails for a coordinate, then an empty list is
         returned for that element.
 
-        Args:
-            query_id: Query record ID.
-            coord: Query coordinates. May be a single value or an iterable.
+        :param query_id: Query record ID.
+        :param coord: Query coordinates. May be a single value or an iterable.
 
-        Returns:
-            A list of dicts or a list of lists of dicts, depending on the type of `coord` (see above).
+        :returns: A list of dicts or a list of lists of dicts, depending on the type of `coord` (see above).
         """
-
         # Determine type
         if isinstance(coord, numbers.Integral):
             ret_list = False
@@ -135,6 +139,7 @@ class AlignLift:
             match_list = []
 
             for match_element in self._qry_tree[query_id][pos:(pos + 1)]:
+                pos = pos_org
 
                 # Get lift tree
                 align_index = match_element.data
@@ -149,7 +154,7 @@ class AlignLift:
 
                 # Reverse coordinates of pos if the alignment is reverse-complemented.
                 if row['is_rev']:
-                    pos = pavcall_seq.seq_len(query_id, self.df_qry_fai) - pos
+                    pos = seq_len(query_id, self.df_qry_fai) - pos
 
                 # Get match record
                 lift_set = lift_tree[pos:(pos + 1)]
@@ -189,13 +194,12 @@ class AlignLift:
         else:
             return lift_coord_list[0]
 
-    def lift_to_qry(
+    def coord_to_qry(
             self,
             chrom: str,
             coord: int | Iterable[int]
     ) -> list[dict[str, Any]] | list[list[dict[str, Any]]]:
-        """
-        Lift coordinates from reference to query.
+        """Lift coordinates from reference to query.
 
         For each coordinate, multiple lift locations may be found, so a list of dicts is returned for each `coord`
         value.
@@ -211,14 +215,11 @@ class AlignLift:
         lists is returned (one for each element in `coord`). If lift fails for a coordinate, then an empty list is
         returned for that element.
 
-        Args:
-            chrom: Reference chromosome ID.
-            coord: Query coordinates. May be a single value or an iterable.
+        :param chrom: Reference chromosome ID.
+        :param coord: Query coordinates. May be a single value or an iterable.
 
-        Returns:
-            A list of dicts or a list of lists of dicts, depending on the type of `coord` (see above).
+        :returns: A list of dicts or a list of lists of dicts, depending on the type of `coord` (see above).
         """
-
         # Determine type
         if isinstance(coord, numbers.Integral):
             coord = (coord, )
@@ -269,7 +270,7 @@ class AlignLift:
                     qry_pos = lift_interval.data[1]
 
                 if row['is_rev']:
-                    qry_pos = pavcall_seq.seq_len(row['qry_id'], self.df_qry_fai) - qry_pos
+                    qry_pos = seq_len(row['qry_id'], self.df_qry_fai) - qry_pos
 
                 match_list.append({
                     'chrom': row['qry_id'],
@@ -288,174 +289,95 @@ class AlignLift:
         else:
             return lift_coord_list[0]
 
-    def lift_region_to_ref(
+    def region_to_ref(
             self,
-            qry_region: pavcall_region.Region,
-            check_orientation: bool = True
+            region_qry: Region,
+            same_index: bool = False
     ):
+        """Lift region to reference.
+
+        :param region_qry: Query region.
+        :param same_index: If True, the region must have the same alignment index as the reference region.
+
+        :returns: Reference region or `None` if the query region could not be lifted.
         """
-        Lift region to reference.
-
-        Args:
-            qry_region: Query region.
-            check_orientation: If True, matches must have the same aligned orientation as `region`.
-
-        Returns:
-            Reference region or `None` if the query region could not be lifted.
-        """
-
         # Lift
-        ref_pos, ref_end = self.lift_to_ref(qry_region.chrom, (qry_region.pos, qry_region.end), gap)
+        ref_pos, ref_end = self.coord_to_ref(region_qry.chrom, (region_qry.pos, region_qry.end))
 
-        # Check lift: Must lift both ends to the same reference ID
-        if ref_pos is None or ref_end is None:
-            return None
+        if same_index:
+            if region_qry.pos_align_index is not None:
+                ref_pos = [_ for _ in ref_pos if _['align_index'] == region_qry.pos_align_index]
 
-        # Single position
+            if region_qry.end_align_index is not None:
+                ref_end = [_ for _ in ref_end if _['align_index'] == region_qry.end_align_index]
+
         if len(ref_pos) != 1 or len(ref_end) != 1:
             return None
 
         ref_pos = ref_pos[0]
         ref_end = ref_end[0]
 
-        if ref_pos[0] != ref_end[0]:
+        if ref_pos['chrom'] != ref_end['chrom'] or ref_pos['is_rev'] != ref_end['is_rev']:
             return None
 
-        # Check orientation
-        is_rev = None
-
-        if ref_pos[2] is not None and ref_end[2] is not None:
-
-            if ref_pos[2] == ref_end[2]:
-                is_rev = ref_pos[2]
-            else:
-                if check_orientation:
-                    return None
-
-        # Return region
-        return pavcall_region.Region(
-            ref_pos[0], ref_pos[1], ref_end[1],
-            is_rev=is_rev,
-            pos_aln_index=ref_pos[5],
-            end_aln_index=ref_end[5],
+        # Return
+        return Region(
+            chrom=ref_pos['chrom'],
+            pos=min(ref_pos['pos'], ref_pos['pos']),
+            end=max(ref_pos['pos'], ref_pos['pos']),
+            is_rev=ref_pos['is_rev'],
+            pos_align_index=ref_pos['align_index'],
+            end_align_index=ref_end['align_index'],
         )
 
-    def lift_region_to_qry(
+    def region_to_qry(
             self,
-            ref_region: pavcall_region.Region
+            region_ref: Region,
+            same_index: bool = False
     ):
+        """Lift region to query.
+
+        :param region_ref: Reference region.
+        :param same_index: If True, the region must have the same alignment index as the reference region.
+
+        :returns: Query region or `None` if it could not be lifted.
         """
-        Lift region to query.
-
-        Args:
-            ref_region: Reference region.
-
-        Returns:
-            Query region or `None` if it could not be lifted.
-        """
-
         # Lift
-        query_pos, query_end = self.lift_to_qry(ref_region.chrom, (ref_region.pos, ref_region.end))
+        query_pos, query_end = self.coord_to_qry(region_ref.chrom, (region_ref.pos, region_ref.end))
 
-        # Check lift: Must lift both ends to the same query ID
-        if query_pos is None or query_end is None or len(query_pos) != 1 or len(query_end) != 1:
+        if same_index:
+            if region_ref.pos_align_index is not None:
+                query_pos = [_ for _ in query_pos if _['align_index'] == region_ref.pos_align_index]
+
+            if region_ref.end_align_index is not None:
+                query_end = [_ for _ in query_end if _['align_index'] == region_ref.end_align_index]
+
+        if len(query_pos) != 1 or len(query_end) != 1:
             return None
 
         query_pos = query_pos[0]
         query_end = query_end[0]
 
-        if query_pos[0] != query_end[0] or query_pos[2] != query_end[2]:
+        if query_pos['chrom'] != query_end['chrom'] or query_pos['is_rev'] != query_end['is_rev']:
             return None
 
         # Return
-        return pavcall_region.Region(
-            query_pos[0], query_pos[1], query_end[1],
-            is_rev=query_pos[2],
-            pos_min=query_pos[3], pos_max=query_pos[4],
-            end_min=query_end[3], end_max=query_end[4],
-            pos_aln_index=(query_pos[5],),
-            end_aln_index=(query_end[5],)
-        )
-
-    def _get_ref_gap(
-            self,
-            query_id: str,
-            pos: int
-    ):
-        """
-        Interpolate lift coordinates to an alignment gap.
-
-        Args:
-            query_id: Query ID.
-            pos: Position on the query.
-
-        Returns:
-            A tuple of (reference, pos, rev, min, max).
-        """
-
-        # Check arguments
-        if pos is None:
-            return None
-
-        # Get alignment records for this query
-        subdf = self.df.filter(pl.col('qry_id') == query_id)
-
-        # Must be flanked by two query on either side
-        if not subdf.select(pl.col('qry_end') < pos).to_series().any():
-            return None
-
-        if not subdf.select(pl.col('qry_pos') < pos).to_series().any():
-            return None
-
-        # Get left and right rows for the alignment record flanking this position
-        raise NotImplementedError('This section of code was updated and needs to be checked (original code in comments)')
-
-        row_l = (
-            subdf
-            .filter(pl.col('qry_end') < pos)
-            .sort('qry_end', descending=True)
-        ).row(0, named=True)
-
-        # row_l = subdf.loc[
-        #     subdf.loc[subdf['QRY_END'] < pos, 'QRY_END'].sort_values().index[-1]
-        # ]
-
-        row_r = (
-            subdf
-            .filter(pl.col('qry_pos') > pos)
-            .sort('qry_pos')
-        ).row(0, named=True)
-
-        # row_r = subdf.loc[
-        #     subdf.loc[subdf['QRY_POS'] > pos, 'QRY_POS'].sort_values().index[0]
-        # ]
-
-        # Rows must be mapped to the same reference
-        if row_l['chrom'] != row_r['chrom']:
-            return None
-
-        return (
-            (
-                row_l['chrom'],
-                int((row_l['qry_end'] + row_r['qry_pos']) / 2),
-                row_l['is_rev'] if row_l['is_rev'] == row_r['is_rev'] else None,
-                row_l['qry_end'],
-                row_r['qry_pos'],
-                (row_l['align_index'], row_r['align_index'])
-            )
+        return Region(
+            chrom=query_pos['chrom'],
+            pos=min(query_pos['pos'], query_end['pos']),
+            end=max(query_pos['pos'], query_end['pos']),
+            is_rev=query_pos['is_rev'],
+            pos_align_index=query_pos['align_index'],
+            end_align_index=query_end['align_index'],
         )
 
     def _add_align(self, index):
+        """Add an alignment from DataFrame index `index`.
+
+        :param index: DataFrame index.
+
+        :raises ValueError: If an unhandled alignment operation is found.
         """
-        Add an alignment from DataFrame index `index`.
-
-        Args:
-            index: DataFrame index.
-
-        Raises:
-            ValueError: If an unhandled alignment operation is found.
-        """
-
         # No alignment to add if it's already cached.
         if index in self._ref_cache.keys():
 
@@ -480,13 +402,13 @@ class AlignLift:
         itree_ref = intervaltree.IntervalTree()
         itree_qry = intervaltree.IntervalTree()
 
-        op_arr = pavcall_align_op.row_to_arr(row)
+        op_arr = op.row_to_arr(row)
 
         # Build trees
         for op_code, op_len in op_arr:
             op_len = int(op_len)
 
-            if op_code in pavcall_align_op.ALIGN_SET:
+            if op_code in op.ALIGN_SET:
                 ref_end = ref_pos + op_len
                 qry_end = qry_pos + op_len
 
@@ -496,21 +418,21 @@ class AlignLift:
                 ref_pos = ref_end
                 qry_pos = qry_end
 
-            elif op_code == pavcall_align_op.I:
+            elif op_code == op.I:
                 qry_end = qry_pos + op_len
 
                 itree_qry[qry_pos:qry_end] = (ref_pos, ref_pos + 1)
 
                 qry_pos = qry_end
 
-            elif op_code == pavcall_align_op.D:
+            elif op_code == op.D:
                 ref_end = ref_pos + op_len
 
                 itree_ref[ref_pos:ref_end] = (qry_pos, qry_pos + 1)
 
                 ref_pos = ref_end
 
-            elif op_code in pavcall_align_op.CLIP_SET:
+            elif op_code in op.CLIP_SET:
                 qry_pos += op_len
 
             else:
@@ -528,16 +450,13 @@ class AlignLift:
         self._cache_queue.appendleft(index)
 
     def _check_and_clear(self):
-        """
-        Check alignment cache and clear if necessary to make space.
-        """
-
+        """Check alignment cache and clear if necessary to make space."""
         while len(self._cache_queue) >= self.cache_align:
             index = self._cache_queue.pop()
 
-            del(self._ref_cache[index])
-            del(self._qry_cache[index])
+            del self._ref_cache[index]
+            del self._qry_cache[index]
 
     def __repr__(self):
-        """String representation."""
+        """Get a string representation."""
         return 'AlignLift()'

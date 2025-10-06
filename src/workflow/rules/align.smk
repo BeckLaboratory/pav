@@ -1,5 +1,10 @@
-"""
-Process alignments and alignment tiling paths.
+"""Align query sequences and create tables of alignment records.
+
+Query sequences are aligned to the reference and pulled into a table of alignment records with schema
+`pavcall.schema.ALIGN`. Alignment trimming is applied to resolve redundantly-aligned query sequences (i.e. same bases
+of a query sequence in more than one alignment record), then trimmed again to eliminate reference redundancy (i.e.
+multiple alignment records covering the same reference bases). Variant discovery will use all three alignment tables
+(no trimming, query trimmed, query & reference trimmed) to make calls.
 """
 
 
@@ -11,7 +16,6 @@ import agglovar
 import pavcall
 import snakemake.io
 import polars as pl
-import polars.selectors as cs
 
 global PAV_CONFIG
 global expand
@@ -21,6 +25,7 @@ global get_config
 global get_override_config
 global ASM_TABLE
 global PIPELINE_DIR
+global POLARS_MAX_THREADS
 global REF_FA
 global REF_FAI
 
@@ -69,7 +74,7 @@ rule align_all:
 
 
 # Create a depth BED file for alignments.
-rule align_depth_bed:
+rule align_depth:
     input:
         pq='results/{asm_name}/align/{hap}/align_trim-{trim}.parquet',
         ref_fofn='data/ref/ref.fofn'
@@ -78,6 +83,7 @@ rule align_depth_bed:
     wildcard_constraints:
         side=r'qry|ref',
         filt=r'retain|drop'
+    threads: POLARS_MAX_THREADS
     run:
         pavcall.align.tables.align_depth_table(
             df=pl.read_parquet(input.pq),
@@ -99,12 +105,14 @@ rule align_tables:
         align_head='results/{asm_name}/align/{hap}/align_headers.gz'
     benchmark:
         'data/benchmarks/align/align_tables/align_tables_{asm_name}_{hap}.txt'
+    threads: POLARS_MAX_THREADS
     run:
 
         # Get parameters
         pav_params = pavcall.params.PavParams(wildcards.asm_name, PAV_CONFIG, ASM_TABLE)
 
         qry_fa_filename, qry_fai_filename = pavcall.pipeline.expand_fofn(input.qry_fofn)[:2]
+        qry_fa_filename = str(qry_fa_filename)
         ref_fa_filename = str(pavcall.pipeline.expand_fofn(input.ref_fofn)[0])
 
         df_qry_fai = agglovar.fa.read_fai(qry_fai_filename, name='qry_id')
@@ -128,7 +136,6 @@ rule align_tables:
             except Exception as e:
                 raise ValueError(f'Failed to check matched bases before trimming: {e}') from e
 
-
         # Apply depth filter
         if pav_params.align_trim_max_depth > 0:
             df_none = pavcall.align.tables.align_depth_filter(
@@ -136,7 +143,7 @@ rule align_tables:
                 df_depth=None,
                 max_depth=pav_params.align_trim_max_depth,
                 max_overlap=pav_params.align_trim_max_depth_prop
-        )
+            )
 
         df_none.write_parquet(output.pq_none)
 
@@ -256,23 +263,6 @@ rule align_map:
                 out_file.write(line)
                 out_file.write('\n')
 
-
-# # Uncompress query sequences for aligners that cannot read gzipped FASTAs. Currently unused.
-# rule align_uncompress_qry:
-#     input:
-#         fofn='data/query/{asm_name}/query_{hap}.fofn'
-#     output:
-#         fa=temp('temp/{asm_name}/align/query/query_{hap}.fa')
-#     run:
-#
-#         fa_filename = str(pavcall.pipeline.expand_fofn(input.fofn)[0])
-#
-#         if fa_filename.endswith('.gz'):
-#             with gzip.open(fa_filename, 'rb') as in_file:
-#                 with open(output.fa, 'wb') as out_file:
-#                     shutil.copyfileobj(in_file, out_file)
-#         else:
-#             Path(fa_filename).rename(output.fa)
 
 #
 # Export alignments (optional feature)

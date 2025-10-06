@@ -1,21 +1,20 @@
-"""
-Utilities for working with tables.
-"""
+"""Utilities for working with tables."""
+
+__all__ = [
+    'show_row',
+]
 
 from typing import Any
 
-def show_row(row: dict[str, Any], max_len: int=80):
+
+def show_row(row: dict[str, Any], max_len: int = 80) -> dict[str, Any]:
+    """Get a readable table row.
+
+    :param row: Row as a dict.
+    :param max_len: Maximum length of string columns.
+
+    :returns: Row transformed for display in a terminal (commas added to positions, long columns eliminated).
     """
-    Get a readable table row.
-
-    Params:
-        row: Row as a dict.
-        max_len: Maximum length of string columns.
-
-    Returns:
-        Row transformed for display in a terminal (commas added to positions, long columns eliminated).
-    """
-
     def fmt_val(key, val):
 
         # Commas
