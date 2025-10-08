@@ -60,6 +60,7 @@ deps = [
 commands = [
     ["python3", "-m", "twine", "upload", "--skip-existing", "--repository", "testpypi", "dist/*.whl", "dist/*.tar.gz", "{posargs:--}"],
 ]
+skip_install = true
 
 [env.pypi]
 deps = [
@@ -68,3 +69,4 @@ deps = [
 commands = [
     ["python3", "-m", "twine", "upload", "--skip-existing", "--repository", "pypi", "dist/*.whl", "dist/*.tar.gz", "{posargs:--}"],
 ]
+skip_install = true

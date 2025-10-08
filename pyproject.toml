@@ -95,9 +95,8 @@ build-backend = "setuptools.build_meta"
 include-package-data = true
 
 [tool.setuptools.packages.find]
-namespaces = true
 where = ["src"]
-include = ["pav3", "data", "workflow"]
+include = ["pav3"]
 exclude = ["*__pycache__"]
 
 [tool.setuptools.package-data]
