@@ -32,17 +32,4 @@ deps = [
     "flake8-bugbear",
     "flake8-pyproject",
 ]
-commands = [["flake8", "src/pavcall", "tests", "{posargs}"]]
-
-
-#[env.black_edit]
-#deps = [
-#    "black>=24",
-#]
-#commands = [["black", "src/pavcall", "tests", "{posargs}"]]
-#
-#[env.black]
-#deps = [
-#    "black>=24",
-#]
-#commands = [["black", "--check", "src/pavcall", "tests", "{posargs}"]]
+commands = [["flake8", "src/pav3", "tests", "{posargs}"]]

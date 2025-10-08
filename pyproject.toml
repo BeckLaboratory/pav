@@ -1,5 +1,5 @@
 [project]
-name = "pav"
+name = "pav3"
 description = "Assembly-based variant discovery"
 
 license = "MIT"
@@ -12,14 +12,25 @@ readme = "README.md"
 requires-python = ">=3.12"
 dependencies = [
     "agglovar>=0.0.1.dev2",
+    "biopython>=1.85",
+    "fastexcel>=0.14.0",
+    "frozendict>=2.4.6",
+    "intervaltree>=3.1.0",
+    "numpy>=2.3.2",
+    "polars>=1.31.0",
+    "pyarrow>=21.0.0",
+    "pysam>=0.23.3",
+    "scipy>=1.16.1",
+    "scipy-stubs==1.16.1.1",
+    "snakemake>=9.9.0",
 ]
 
 [project.scripts]
-pavcall = "pavcall.cli.cli:main"
+pav3 = "pav3.cli:main"
 
 [pav.urls]
 Homepage = "https://github.com/BeckLaboratory/pav"
-#Documentation = "https://pavcaller.readthedocs.io"
+#Documentation = "https://pav3.readthedocs.io"
 Repository = "https://github.com/BeckLaboratory/pav"
 Issues = "https://github.com/BeckLaboratory/pav/issues"
 Changelog = "https://github.com/BeckLaboratory/pav/blob/master/CHANGELOG.md"
@@ -49,19 +60,6 @@ authors = [
 
 maintainers = [
     {name = "Peter Audano", email = "peter.audano@jax.org"}
-]
-
-dependencies = [
-    "biopython>=1.85",
-    "fastexcel>=0.14.0",
-    "frozendict>=2.4.6",
-    "intervaltree>=3.1.0",
-    "numpy>=2.3.2",
-    "polars>=1.31.0",
-    "pysam>=0.23.3",
-    "scipy>=1.16.1",
-    "scipy-stubs==1.16.1.1",
-    "snakemake>=9.9.0",
 ]
 
 [dependency-groups]
@@ -94,23 +92,28 @@ plot = [
 requires = ["setuptools"]
 build-backend = "setuptools.build_meta"
 
+[tool.setuptools]
+include-package-data = true
+
 [tool.setuptools.packages.find]
+namespaces = true
 where = ["src"]
-include = ["pavcall"]
+include = ["pav3", "data", "workflow"]
 exclude = ["*__pycache__"]
 
 [tool.setuptools.package-data]
-"data.lcmodel" = ["**/*"]
+pav3 = [
+  "data/**/*",
+  "workflow/**/*",
+]
 
 [tool.setuptools.dynamic]
-version = {attr = "pavcall.__version__"}
-
+version = {attr = "pav3.__version__"}
 
 [tool.pytest.ini_options]
 testpaths = [
     "tests"
 ]
-
 
 [tool.pylint.'MESSAGES CONTROL']
 max-line-length = 120

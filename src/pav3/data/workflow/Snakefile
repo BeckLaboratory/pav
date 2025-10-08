@@ -1,0 +1,138 @@
+"""
+Make variant calls from aligned contigs.
+"""
+
+import importlib.resources
+import os
+from pathlib import Path
+
+import pav3
+
+global shell
+global workflow
+
+POLARS_MAX_THREADS = 4
+
+os.environ['POLARS_MAX_THREADS'] = str(POLARS_MAX_THREADS)
+
+# Workflow directory and path to rules
+WORKFLOW_DIR = Path(workflow.snakefile).parent
+
+def get_rules_path(rule_file):
+    """
+    Get the path to a rule file, supporting both package and disk modes.
+    
+    This function tries two strategies to locate rule files:
+    1. Package mode: Access files from installed package resources (src.workflow.rules)
+    2. Development mode: Look for files relative to the current Snakefile
+    
+    Args:
+        rule_file: Name of the rule file (e.g., 'align.smk')
+    
+    Returns:
+        str: Path to the rule file
+    
+    Raises:
+        FileNotFoundError: If the rule file cannot be found in any mode
+    """
+    
+    # Strategy 1: Package mode
+    try:
+        resource_dir = importlib.resources.files('src.workflow.rules')
+    except ModuleNotFoundError:
+        resource_dir = None
+
+    if resource_dir is not None and resource_dir.is_dir():
+        try:
+            with importlib.resources.as_file(
+                importlib.resources.files('src.workflow.rules').joinpath(rule_file)
+            ) as rule_path:
+                if rule_path.exists():
+                    return str(rule_path)
+        except (ImportError, FileNotFoundError, AttributeError, ModuleNotFoundError) as e:
+            raise FileNotFoundError(
+                f'Rule file "{rule_file}" not found in package resources: {e}'
+            ) from e
+    
+    # Strategy 2: Development mode
+    disk_path = WORKFLOW_DIR / 'rules' / rule_file
+
+    if disk_path.is_file():
+        return str(disk_path)
+    
+    # If neither strategy works, raise an error
+    raise FileNotFoundError(
+        f'Workflow rule file "{rule_file}" not found in package resources '
+        f'(src.workflow.rules.{rule_file}) or on disk ({disk_path}): File missing or not a regular file.'
+    )
+
+
+# Load config as PAV_CONFIG
+configfile: config.get('config_file', 'config.json')
+
+PAV_CONFIG = config
+
+
+### Parameters from config ###
+
+# VCF file pattern
+VCF_PATTERN = f'{config.get("vcf_prefix", "")}{{asm_name}}{config.get("vcf_suffix", "")}.vcf.gz'
+
+# Read sample table
+ASM_TABLE_FILENAME = PAV_CONFIG.get('assembly_table', None)
+
+if ASM_TABLE_FILENAME is None and os.path.isfile('assemblies.tsv'):
+    ASM_TABLE_FILENAME = 'assemblies.tsv'
+
+if ASM_TABLE_FILENAME is None and os.path.isfile('assemblies.xlsx'):
+    ASM_TABLE_FILENAME = 'assemblies.xlsx'
+
+ASM_TABLE = pav3.pipeline.read_assembly_table(ASM_TABLE_FILENAME, PAV_CONFIG)
+
+
+
+#
+# Rules
+#
+
+# Environment source file for shell commands
+ENV_FILE = config.get('env_source', 'setenv.sh')
+
+if not os.path.isfile(ENV_FILE) or pav3.util.as_bool(config.get('ignore_env_file', False)):
+    ENV_FILE = None
+
+if ENV_FILE:
+    shell.prefix(f'set -euo pipefail; source {ENV_FILE}; ')
+else:
+    shell.prefix('set -euo pipefail; ')
+
+
+### Wildcard constraints ###
+
+wildcard_constraints:
+    asm_name=r'[A-Za-z_\-0-9\.]+',
+    hap=r'[A-Za-z_\-0-9\.]+',
+    trim=r'none|qry|qryref'
+
+### Default rule ###
+
+# all
+#
+# Make all files for all samples.
+
+localrules: pav_all
+
+rule pav_all:
+    input:
+        pq_inter=lambda wildcards: pav3.pipeline.expand_pattern(
+            'results/{asm_name}/call_hap/insdel_{hap}.parquet', ASM_TABLE, config,
+        )
+
+
+### Includes ###
+
+include: get_rules_path('pipeline.smk')
+
+include: get_rules_path('align.smk')
+include: get_rules_path('call.smk')
+include: get_rules_path('data.smk')

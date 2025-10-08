@@ -17,7 +17,7 @@ exclude_patterns = []
 
 # AutoAPI
 autoapi_dirs = [
-    '../../src/pavcall',
+    '../../src/pav3',
 ]
 
 autoapi_options = [

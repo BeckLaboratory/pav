@@ -12,3 +12,7 @@ wheels/
 
 # Docs
 docs/build
+
+# Runtime
+.snakemake
+
