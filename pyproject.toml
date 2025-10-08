@@ -30,7 +30,7 @@ pav3 = "pav3.cli:main"
 
 [pav.urls]
 Homepage = "https://github.com/BeckLaboratory/pav"
-#Documentation = "https://pav3.readthedocs.io"
+Documentation = "https://pav3.readthedocs.io"
 Repository = "https://github.com/BeckLaboratory/pav"
 Issues = "https://github.com/BeckLaboratory/pav/issues"
 Changelog = "https://github.com/BeckLaboratory/pav/blob/master/CHANGELOG.md"
@@ -51,7 +51,6 @@ classifiers = [
     "Operating System :: OS Independent",
     "Programming Language :: Python :: 3",
     "Programming Language :: Python :: 3.12",
-    "Private :: Do Not Upload",  # Temporary until published
 ]
 
 authors = [
