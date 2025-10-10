@@ -26,7 +26,7 @@ global temp
 rule call_tables_hap:
     input:
         pq_inter=lambda wildcards: pav3.pipeline.expand_pattern(
-            'results/{asm_name}/call_hap/insdel_{hap}.parquet', ASM_TABLE, config,
+            'results/{asm_name}/call_hap/call_insdel_{hap}.parquet', ASM_TABLE, config,
         )
 
 
@@ -49,11 +49,11 @@ rule call_integrate_sources:
         inter_segment='temp/{asm_name}/call_hap/inter_segment_{hap}.parquet',
         inter_ref_trace='temp/{asm_name}/call_hap/inter_reftrace_cpx_{hap}.parquet',
     output:
-        insdel='results/{asm_name}/call_hap/insdel_{hap}.parquet',
-        inv='results/{asm_name}/call_hap/inv_{hap}.parquet',
-        cpx='results/{asm_name}/call_hap/cpx_{hap}.parquet',
-        snv='results/{asm_name}/call_hap/snv_{hap}.parquet',
-        dup='results/{asm_name}/call_hap/dup_{hap}.parquet',
+        insdel='results/{asm_name}/call_hap/call_insdel_{hap}.parquet',
+        inv='results/{asm_name}/call_hap/call_inv_{hap}.parquet',
+        cpx='results/{asm_name}/call_hap/call_cpx_{hap}.parquet',
+        snv='results/{asm_name}/call_hap/call_snv_{hap}.parquet',
+        dup='results/{asm_name}/call_hap/call_dup_{hap}.parquet',
         inter_segment='results/{asm_name}/call_hap/inter/inter_segment_{hap}.parquet',
         inter_ref_trace='results/{asm_name}/call_hap/inter/inter_reftrace_cpx_{hap}.parquet',
     threads: POLARS_MAX_THREADS

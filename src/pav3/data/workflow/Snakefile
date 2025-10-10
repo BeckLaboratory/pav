@@ -1,6 +1,4 @@
-"""
-Make variant calls from aligned contigs.
-"""
+"""Make variant calls from aligned contigs."""
 
 import importlib.resources
 import os
@@ -125,7 +123,7 @@ localrules: pav_all
 rule pav_all:
     input:
         pq_inter=lambda wildcards: pav3.pipeline.expand_pattern(
-            'results/{asm_name}/call_hap/insdel_{hap}.parquet', ASM_TABLE, config,
+            'results/{asm_name}/call_hap/call_insdel_{hap}.parquet', ASM_TABLE, config,
         )
 
 
