@@ -245,9 +245,6 @@ rule call_integrate_sources:
             else:
                 collect_index_inner = None
 
-            if sourcetype_vartype == 'intra_insdel':
-                raise NotImplementedError  # DEBUG
-
             if do_write:
                 if collect_list[vartype]:
                     df = pl.concat(collect_list[vartype], how='diagonal')
