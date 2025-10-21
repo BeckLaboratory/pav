@@ -351,7 +351,7 @@ def add_cpx_derived(
 
     collect_list['insdel'].append(
         id_and_version(
-                df=(
+            df=(
                 df_derived
                 .filter(pl.col('vartype').is_in(['INS', 'DEL']))
                 .drop('inv_dup')
@@ -363,7 +363,7 @@ def add_cpx_derived(
 
     collect_list['dup'].append(
         id_and_version(
-                df=(
+            df=(
                 df_derived
                 .filter(pl.col('vartype') == 'DUP')
             ),

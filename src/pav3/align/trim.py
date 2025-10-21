@@ -46,7 +46,7 @@ from . import op
 
 from .features import FeatureGenerator
 from .score import ScoreModel, get_score_model
-from .tables import qry_order_expr
+from .tables import qry_order_expr, check_table
 
 # Indices for tuples returned by trace_op_to_zero()
 _TC_INDEX = 0
@@ -348,12 +348,16 @@ def trim_alignments_qry(
             ])
         )
 
-    return (  # Concat and update features
+    df_trim = (  # Concat and update features
         pl.concat(subtable_list)
         .sort('_index')
         .with_columns(qry_order_expr())
         .drop(drop_cols)
     )
+
+    check_table(df_trim)
+
+    return df_trim
 
 
 def trim_alignments_ref(
@@ -597,12 +601,16 @@ def trim_alignments_ref(
             ])
         )
 
-    return (  # Concat and update features
+    df_trim = (  # Concat and update features
             pl.concat(subtable_list)
             .sort('_index')
             .with_columns(qry_order_expr())
             .drop(drop_cols)
     )
+
+    check_table(df_trim)
+
+    return df_trim
 
 
 def _trim_alignment_record(

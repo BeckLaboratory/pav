@@ -41,32 +41,11 @@ def get_chain_set(
     start_index = 0
     last_index = df_align.height
 
-    # Add is_qryref column indicating if the alignment record survived qry+ref trimming.
-    df_align = (
-        df_align
-        .lazy()
-        .join(
-            (
-                caller_resources.df_align_qryref
-                .select(
-                    pl.col('align_index'),
-                    pl.lit(True).alias('is_qryref')
-                )
-            ),
-            on='align_index',
-            how='left'
-        )
-        .with_columns(
-            pl.col('is_qryref').fill_null(False).cast(pl.Boolean)
-        )
-        .collect()
-    )
-
     # Traverse interval setting each position to the left-most anchor candidate.
     while start_index < last_index:
 
         # Skip if anchor did not pass TIG & REF trimming
-        if not df_align[start_index, 'is_qryref']:
+        if not df_align[start_index, 'in_qryref']:
             start_index += 1
             continue
 
@@ -80,7 +59,7 @@ def get_chain_set(
         ):
             end_row = df_align.row(end_index, named=True)
 
-            if end_row['is_qryref'] and can_anchor(
+            if end_row['in_qryref'] and can_anchor(
                     start_row, end_row, caller_resources.score_model, min_anchor_score,
                     gap_scale=caller_resources.pav_params.lg_gap_scale
             ):

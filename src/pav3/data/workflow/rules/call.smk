@@ -245,17 +245,28 @@ rule call_integrate_sources:
             else:
                 collect_index_inner = None
 
+            if sourcetype_vartype == 'intra_insdel':
+                raise NotImplementedError  # DEBUG
+
             if do_write:
                 if collect_list[vartype]:
                     df = pl.concat(collect_list[vartype], how='diagonal')
 
                 # Sort and order columns
+                col_names = df.collect_schema().names()
+
                 df = (
                     df
                     .sort(['chrom', 'pos', 'end', 'id'])
-                    .with_columns(pl.col('filter').list.unique().sort())
-                    .select([col for col in pav3.schema.VARIANT.keys() if col in df.collect_schema().names()])
+                    .with_columns(pl.col('filter').list.unique().list.sort())
+                    .select([col for col in pav3.schema.VARIANT.keys() if col in col_names])
                 )
+
+                if 'inner' in col_names:
+                    df = df.with_columns(pl.col('inner').fill_null([]))
+
+                if 'discord' in col_names:
+                    df = df.with_columns(pl.col('discord').fill_null([]))
 
                 # Create output objects
                 write_list.append(df.sink_parquet(output[vartype], lazy=True))

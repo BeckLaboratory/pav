@@ -14,7 +14,7 @@ import importlib
 import inspect
 import re
 from types import ModuleType
-from typing import Any, Generator
+from typing import Any, Generator, Optional
 
 
 @dataclass(frozen=True)
@@ -29,9 +29,12 @@ class _GlobalImportScope:
     """
 
     package_path: str
-    import_statements: str = field(repr=False)
+    import_statements: Optional[str] = field(repr=False)
     overwrite: bool
     caller_globals: dict[str, Any]
+    mod_imports: bool = True
+    mod_private: bool = True
+    mod_dunder: bool = False
     global_dict: dict = field(default_factory=dict, init=False, repr=False)
     restore_dict: dict = field(default_factory=dict, init=False, repr=False)
 
@@ -75,8 +78,11 @@ class GlobalImport:
     def push(
             self,
             package_path: str,
-            import_statements: str,
+            import_statements: Optional[str] = None,
             overwrite: bool = True,
+            mod_imports: bool = True,
+            mod_private: bool = True,
+            mod_dunder: bool = False,
     ) -> None:
         """Push a new scope to the global import stack and update the global scope.
 
@@ -84,8 +90,19 @@ class GlobalImport:
             the import statements are in 'pav3/lgsv/interval.py').
         :param import_statements: A string of newline-separated import statements.
         :param overwrite: Whether to overwrite existing global variables.
+        :param mod_imports: Whether to import objects from modules.
+        :param mod_private: Whether to import private objects from modules.
+        :param mod_dunder: Whether to import dunder objects from modules.
         """
-        scope = _GlobalImportScope(package_path, import_statements, overwrite, self.caller_globals)
+        scope = _GlobalImportScope(
+            package_path=package_path,
+            import_statements=import_statements,
+            overwrite=overwrite,
+            caller_globals=self.caller_globals,
+            mod_imports=mod_imports,
+            mod_private=mod_private,
+            mod_dunder=mod_dunder,
+        )
 
         scope.apply()
 
@@ -136,12 +153,18 @@ class GlobalImport:
 
 def alias_to_obj_dict(
         package_path: str,
-        import_statements: str
+        import_statements: Optional[str] = None,
+        mod_imports: bool = True,
+        mod_private: bool = True,
+        mod_dunder: bool = False,
 ) -> dict[str, Any]:
     """Find objects for relative imports.
 
     :param package_path: Name of the module where this import statement is found (i.e. 'pav3.lgsv.interval' if the).
     :param import_statements: A string of newline-separated import statements.
+    :param mod_imports: Whether to import objects from modules.
+    :param mod_private: Whether to import private objects from modules.
+    :param mod_dunder: Whether to import dunder objects from modules.
 
     :returns: A set of new global names that were imported.
     """
@@ -152,63 +175,90 @@ def alias_to_obj_dict(
 
     import_items = []  # List of tuples: (absolute import path, alias, original line)
 
-    for line in import_statements.split('\n'):
-        line = line.strip()
+    # Import statements
+    if import_statements:
+        for line in import_statements.split('\n'):
+            line = line.strip()
 
-        if not line or line.startswith('#'):
-            continue
+            if not line or line.startswith('#'):
+                continue
 
-        # Handle "from ... import ..." statements
-        if from_match := from_match_pattern.match(line):
-            dots, module_path, imports = from_match.groups()
-            dot_count = len(dots)
+            # Handle "from ... import ..." statements
+            if from_match := from_match_pattern.match(line):
+                dots, module_path, imports = from_match.groups()
+                dot_count = len(dots)
 
-            # Calculate absolute module path
-            if dot_count == 0:
-                # Absolute import
-                abs_module = module_path
+                # Calculate absolute module path
+                if dot_count == 0:
+                    # Absolute import
+                    abs_module = module_path
 
-            else:
-                # Relative import
-                if dot_count > len(import_path):
-                    raise ValueError(f"Attempted relative import beyond top-level package: {line}")
+                else:
+                    # Relative import
+                    if dot_count > len(import_path):
+                        raise ValueError(f"Attempted relative import beyond top-level package: {line}")
 
-                abs_module = (
-                    (
-                        '.'.join(
-                            import_path[:-(dot_count)] if dot_count > 0 else import_path
+                    abs_module = (
+                        (
+                            '.'.join(
+                                import_path[:-(dot_count)] if dot_count > 0 else import_path
+                            )
+                        ) + (
+                            ('.' + module_path)
+                                if module_path is not None else ''
                         )
-                    ) + (
-                        ('.' + module_path)
-                            if module_path is not None else ''
                     )
-                )
 
-            # Translate all imports
-            if imports == '*':  # Standard import all public objects (excludes import statements)
-                import_set = find_imports(abs_module, public_only=True)
-
-            elif imports == '**':  # Non-standard import everything (excludes dunders and import statements).
-                import_set = find_imports(abs_module, public_only=False)
-
-            else:
+                # Translate all imports
                 import_set = {item.strip() for item in imports.split(',') if item.strip()}
 
-            # Parse imports (handle multiple imports and aliases)
-            import_items.extend([
-                (
-                    abs_module,
-                    items[0],
-                    items[1] if len(items) > 1 else items[0],
-                    line
-                )
-                for items in [
-                    as_pattern.split(item.strip()) for item in import_set
-                ]
-            ])
+                # Parse imports (handle multiple imports and aliases)
+                #
+                # * Module name
+                # * Object name
+                # * Alias
+                # * Original line (string)
+                import_items.extend([
+                    (
+                        abs_module,
+                        items[0],
+                        items[1] if len(items) > 1 else items[0],
+                        line
+                    )
+                    for items in [
+                        as_pattern.split(item.strip()) for item in import_set
+                    ]
+                ])
 
-        else:
-            raise ValueError(f'Unrecognized import structure: {line}')
+            else:
+                raise ValueError(f'Unrecognized import structure: {line}')
+
+    # Collect defined names
+    if mod_imports:
+        mod = importlib.import_module(package_path)
+
+        for name, def_type, mod_id, mod_name in get_defined_names(mod):
+
+            if name is None:
+                continue  # Import statements, ignore (not from ... import)
+
+            # Dunder
+            if not mod_dunder and (name.startswith('__') and name.endswith('__')):
+                continue
+
+            # Private
+            if not mod_private and name.startswith('_'):
+                continue
+
+            # Do import
+            if def_type == 'import_from':
+                if not mod_imports:
+                    continue
+
+                import_items.append((mod_id, mod_name, name, f'<from {mod_id} import {mod_name} as {name}>'))
+
+            elif def_type in {'func', 'class', 'def'}:
+                import_items.append((package_path, name, name, f'<{def_type} {name}>'))
 
     # Run imports
     global_dict = dict()
@@ -284,29 +334,85 @@ def find_imports(
     return module_names
 
 
-def get_defined_names(module: ModuleType) -> list[str]:
-    """Get a list of objects defined by the module ignoring dunder objects and imported modules."""
-    name_list = []
+def get_defined_names(
+        mod: ModuleType
+):
+    """
+    Get names defined in a module.
 
-    all_names = set(module.__all__) if hasattr(module, '__all__') else set()
+    :param mod: Module to inspect.
 
-    for obj_name, obj in inspect.getmembers(module):
+    :yields: Tuples of (name, type, level) where "type" is "func", "class", "def", or "import". "level" is defined for
+        imports (None for others) and is the level of the import with 0 being the top-level and 1 or more being a
+        relative import.
+    """
 
-        if obj_name in all_names:
-            name_list.append(obj_name)
-            continue
+    tree = ast.parse(inspect.getsource(mod))
 
-        if obj_name.startswith('__'):
-            continue
+    for node in tree.body:
 
-        if hasattr(obj, '__module__'):
-            if obj.__module__ == module.__name__:
-                name_list.append(obj_name)
+        if isinstance(node, ast.FunctionDef):
+            yield node.name, 'func', None, None
+
+        elif isinstance(node, ast.ClassDef):
+            yield node.name, 'class', None, None
+
+        elif isinstance(node, ast.Assign):
+            for target in node.targets:
+                yield target.id, 'def', None, None
+
+        elif isinstance(node, ast.AnnAssign):
+            yield node.target.id, 'def', None, None
+
+        elif isinstance(node, ast.ImportFrom):
+
+            module_name = (
+                '.'.join(mod.__name__.split('.')[:-node.level]
+                + (node.module.split('.') if node.module else []))
+            )
+
+            for node_name in node.names:
+                yield (
+                    node_name.asname if node_name.asname else node_name.name,
+                    'import_from',
+                    module_name,
+                    node_name.name,
+                )
+
+        elif isinstance(node, ast.Import):
+            for node_name in node.names:
+                yield None, 'import', node_name.name, node_name.name
+
+        elif isinstance(node, ast.Expr):
+            pass
+
         else:
-            if not isinstance(obj, ModuleType):
-                name_list.append(obj_name)
+            raise ValueError(f'Unknown type: {type(node)}')
 
-    return name_list
+
+# def get_defined_names(module: ModuleType) -> list[str]:
+#     """Get a list of objects defined by the module ignoring dunder objects and imported modules."""
+#     name_list = []
+#
+#     all_names = set(module.__all__) if hasattr(module, '__all__') else set()
+#
+#     for obj_name, obj in inspect.getmembers(module):
+#
+#         if obj_name in all_names:
+#             name_list.append(obj_name)
+#             continue
+#
+#         if obj_name.startswith('__'):
+#             continue
+#
+#         if hasattr(obj, '__module__'):
+#             if obj.__module__ == module.__name__:
+#                 name_list.append(obj_name)
+#         else:
+#             if not isinstance(obj, ModuleType):
+#                 name_list.append(obj_name)
+#
+#     return name_list
 
 
 def get_module_definitions(
@@ -332,3 +438,4 @@ def get_module_definitions(
                 if isinstance(target, ast.Name):
                     if include_dunder or not target.id.startswith('__'):
                         yield target.id
+

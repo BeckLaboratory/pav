@@ -10,6 +10,7 @@ __all__ = [
     'intersect_other',
     'qry_order_expr',
     'align_stats',
+    'check_table',
 ]
 
 import numpy as np
@@ -249,6 +250,8 @@ def sam_to_align_table(
     # Check sanity
     for row in df.iter_rows(named=True):
         check_record(row, df_qry_fai)
+
+    check_table(df)
 
     # Return alignment table
     return df
@@ -700,30 +703,6 @@ def qry_order_expr() -> pl.Expr:
         .alias('qry_order')
     )
 
-    # if isinstance(df, pl.DataFrame):
-    #     df = df.lazy()
-    #
-    # return (
-    #     df
-    #     .with_row_index('index')
-    #     .sort(['qry_id', 'qry_pos', 'qry_end'])
-    #     .drop('qry_order', strict=False)
-    #     .with_columns(
-    #         (pl.cum_count('qry_id').over('qry_id') - 1).alias('qry_order')
-    #     )
-    #     # .with_row_index('qry_order')
-    #     # .select(
-    #     #     pl.col('index'),
-    #     #     (pl.col('qry_order') - pl.col('qry_order').first().over('qry_id')).alias('qry_order')
-    #     # )
-    #     .sort('index')
-    #     .select(
-    #         pl.col('qry_order')
-    #     )
-    #     .collect()
-    #     .to_series()
-    # )
-
 
 def align_stats(
         df: pl.DataFrame,
@@ -810,3 +789,67 @@ def align_stats(
         )
 
     return df_sum
+
+
+def check_table(df: pl.LazyFrame | pl.DataFrame) -> None:
+    """Check alignment table invariants.
+
+    Raises exceptions if tests do not pass.
+
+    :param df: Alignment table to check.
+
+    :raises ValueError: If errors are found in `df`.
+    """
+
+    if isinstance(df, pl.DataFrame):
+        df = df.lazy()
+
+    # Duplicated indexes
+    dup_index = (
+        df
+        .group_by('align_index')
+        .agg(pl.len().alias('count'))
+        .filter(pl.col('count') > 1)
+        .sort('count', descending=True)
+        .select(['align_index', 'count'])
+        .collect().rows()
+    )
+
+    if dup_index:
+        n = len(dup_index)
+        dup_index = ', '.join(
+            [f'{align_index} (n={count})' for align_index, count in dup_index]
+        ) + ('...' if n > 3 else '')
+
+        raise ValueError(f'Alignment table contains {n} duplicated record ID(s): {dup_index}')
+
+    # Null values
+    null_vals = (
+        df
+        .select(
+
+            pl.col('chrom').is_null().sum(),
+            pl.col('pos').is_null().sum(),
+            pl.col('end').is_null().sum(),
+            pl.col('align_index').is_null().sum(),
+            pl.col('filter').is_null().sum(),
+            pl.col('qry_id').is_null().sum(),
+            pl.col('qry_pos').is_null().sum(),
+            pl.col('qry_end').is_null().sum(),
+            pl.col('qry_order').is_null().sum(),
+            pl.col('is_rev').is_null().sum(),
+            pl.col('score').is_null().sum(),
+        )
+        .collect()
+        .transpose(include_header=True, header_name='col', column_names=['count'])
+        .filter(pl.col('count') > 0)
+        .rows()
+    )
+
+    if null_vals:
+        n = len(null_vals)
+        null_vals = ', '.join(
+            [f'{col} (n={count})' for col, count in null_vals]
+        ) + ('...' if n > 3 else '')
+
+        raise ValueError(f'Alignment table contains {n} column(s) with null values: {null_vals}')
