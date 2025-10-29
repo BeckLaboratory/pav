@@ -37,7 +37,7 @@ set-resources:
   - call_intra_snv_insdel:runtime=240
   - call_inter:mem_mb=8192
   - call_inter:runtime=240
-  - call_integrate_sources:mem_mb=65536
+  - call_integrate_sources:mem_mb=16384
 
 #  - align_uncompress_qry:mem_mb=4096
 #  - data_align_ref_lra_index:mem_mb=16384

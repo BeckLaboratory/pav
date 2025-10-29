@@ -40,6 +40,8 @@ def subcommand_call(
     if targets is None:
         targets = []
 
+    targets = [target_str for target in targets if (target_str := target.strip())]
+
     if profile is None:
         try:
             profile = str(importlib.resources.files('pav3.data.workflow.profiles').joinpath('pav_default'))
