@@ -34,7 +34,7 @@ class VarRegionKde:
     def __init__(self,
                  interval: AnchoredInterval,
                  caller_resources: CallerResources,
-                 qry_ref_max_ident: float = 0.80,
+                 qry_ref_max_ident: float = 0.90,
                  max_seg_n: int = 50,
                  max_qry_len_kde: int = _MAX_QRY_LEN_KDE
                  ) -> None:
@@ -175,7 +175,7 @@ class VarRegionKde:
                 if self.df_rl.select((pl.col('state') == KDE_STATE_REV).any()).item():
                     p_binom = test_kde(self.df_rl)  # Test KDE for inverted state significance
 
-                    self.try_inv = p_binom < 0.01 and prop_rev >= 0.5
+                    self.try_inv = p_binom < 0.01 and (prop_rev + prop_fwdrev) >= 0.5
 
                 # Check all segments, should belong to the gap region
                 qry_exp_diff = interval.region_qry.pos - region_qry_exp.pos

@@ -164,6 +164,11 @@ def call_from_interval(
             ComplexVariant, interval, caller_resources, variant_call, var_region_kde
         )
 
+    elif var_region_kde.try_inv:
+        variant_call = try_variant(
+            InversionVariant, interval, caller_resources, variant_call, var_region_kde
+        )
+
     else:
         variant_call = PatchVariant(interval.start_index, interval.end_index)
 
