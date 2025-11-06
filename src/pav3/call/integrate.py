@@ -7,7 +7,7 @@ from typing import Optional
 
 import polars as pl
 
-from .expr import id_snv, id_nonsnv, id_version
+from .expr import id_snv, id_nonsnv
 from .. import schema
 
 def read_trim_table(
