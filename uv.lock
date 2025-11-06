@@ -1,5 +1,5 @@
 version = 1
-revision = 2
+revision = 3
 requires-python = ">=3.12"
 
 [[package]]
@@ -29,18 +29,18 @@ wheels = [
 
 [[package]]
 name = "agglovar"
-version = "0.0.1.dev2"
+version = "0.0.1.dev3"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "biopython" },
     { name = "edlib" },
     { name = "numpy" },
     { name = "ply" },
-    { name = "polars" },
+    { name = "polars-u64-idx", extra = ["numpy", "pandas", "pyarrow"] },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/d3/c9/9531ba42e1bf2a21ae10ba6207a457ec60456b5f42ab0c3f75f4f70fdef9/agglovar-0.0.1.dev2.tar.gz", hash = "sha256:913d158845ac4d23af4ec35469c3d10d0d6b3b3afdb7dc899b58625451775242", size = 43520, upload-time = "2025-09-20T00:17:35.816Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/d8/1f/e03b3dceeee45c502d6d01909ff7df2a0bdb5b210a243b285eccc1c2cbd3/agglovar-0.0.1.dev3.tar.gz", hash = "sha256:3bb8e13168eafee3083971f4a221e14a5c247683b3985dd132afc589e334f1ca", size = 69063, upload-time = "2025-11-06T13:49:18.246Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/3c/70/528b7683690f887d22aefb8bdeaa8a34adf540fb56615869b85e86b28840/agglovar-0.0.1.dev2-py3-none-any.whl", hash = "sha256:8780884f854f37005aae151aff1b4984bfc8305f16c84889b3890fccfb459bf8", size = 47376, upload-time = "2025-09-20T00:17:34.476Z" },
+    { url = "https://files.pythonhosted.org/packages/00/7b/c6769d8a029b12a7e2a81bf485af50de99c5bef19db789dd949bae06e725/agglovar-0.0.1.dev3-py3-none-any.whl", hash = "sha256:6ca3aa61850b22a9b5c12233fa18a8d29e5740d06a9605dcf23cbf24e65833ed", size = 78164, upload-time = "2025-11-06T13:49:16.848Z" },
 ]
 
 [[package]]
@@ -1316,7 +1316,7 @@ plot = [
 
 [package.metadata]
 requires-dist = [
-    { name = "agglovar", specifier = ">=0.0.1.dev2" },
+    { name = "agglovar", specifier = ">=0.0.1.dev3" },
     { name = "biopython", specifier = ">=1.85" },
     { name = "fastexcel", specifier = ">=0.14.0" },
     { name = "frozendict", specifier = ">=2.4.6" },
@@ -1456,20 +1456,6 @@ source = { registry = "https://pypi.org/simple" }
 sdist = { url = "https://files.pythonhosted.org/packages/e5/69/882ee5c9d017149285cab114ebeab373308ef0f874fcdac9beb90e0ac4da/ply-3.11.tar.gz", hash = "sha256:00c7c1aaa88358b9c765b6d3000c6eec0ba42abca5351b095321aef446081da3", size = 159130, upload-time = "2018-02-15T19:01:31.097Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/a3/58/35da89ee790598a0700ea49b2a66594140f44dec458c07e8e3d4979137fc/ply-3.11-py2.py3-none-any.whl", hash = "sha256:096f9b8350b65ebd2fd1346b12452efe5b9607f7482813ffca50c22722a807ce", size = 49567, upload-time = "2018-02-15T19:01:27.172Z" },
-]
-
-[[package]]
-name = "polars"
-version = "1.33.1"
-source = { registry = "https://pypi.org/simple" }
-sdist = { url = "https://files.pythonhosted.org/packages/85/da/8246f1d69d7e49f96f0c5529057a19af1536621748ef214bbd4112c83b8e/polars-1.33.1.tar.gz", hash = "sha256:fa3fdc34eab52a71498264d6ff9b0aa6955eb4b0ae8add5d3cb43e4b84644007", size = 4822485, upload-time = "2025-09-09T08:37:49.062Z" }
-wheels = [
-    { url = "https://files.pythonhosted.org/packages/19/79/c51e7e1d707d8359bcb76e543a8315b7ae14069ecf5e75262a0ecb32e044/polars-1.33.1-cp39-abi3-macosx_10_12_x86_64.whl", hash = "sha256:3881c444b0f14778ba94232f077a709d435977879c1b7d7bd566b55bd1830bb5", size = 39132875, upload-time = "2025-09-09T08:36:38.609Z" },
-    { url = "https://files.pythonhosted.org/packages/f8/15/1094099a1b9cb4fbff58cd8ed3af8964f4d22a5b682ea0b7bb72bf4bc3d9/polars-1.33.1-cp39-abi3-macosx_11_0_arm64.whl", hash = "sha256:29200b89c9a461e6f06fc1660bc9c848407640ee30fe0e5ef4947cfd49d55337", size = 35638783, upload-time = "2025-09-09T08:36:43.748Z" },
-    { url = "https://files.pythonhosted.org/packages/8d/b9/9ac769e4d8e8f22b0f2e974914a63dd14dec1340cd23093de40f0d67d73b/polars-1.33.1-cp39-abi3-manylinux_2_17_x86_64.manylinux2014_x86_64.whl", hash = "sha256:444940646e76342abaa47f126c70e3e40b56e8e02a9e89e5c5d1c24b086db58a", size = 39742297, upload-time = "2025-09-09T08:36:47.132Z" },
-    { url = "https://files.pythonhosted.org/packages/7a/26/4c5da9f42fa067b2302fe62bcbf91faac5506c6513d910fae9548fc78d65/polars-1.33.1-cp39-abi3-manylinux_2_24_aarch64.whl", hash = "sha256:094a37d06789286649f654f229ec4efb9376630645ba8963b70cb9c0b008b3e1", size = 36684940, upload-time = "2025-09-09T08:36:50.561Z" },
-    { url = "https://files.pythonhosted.org/packages/06/a6/dc535da476c93b2efac619e04ab81081e004e4b4553352cd10e0d33a015d/polars-1.33.1-cp39-abi3-win_amd64.whl", hash = "sha256:c9781c704432a2276a185ee25898aa427f39a904fbe8fde4ae779596cdbd7a9e", size = 39456676, upload-time = "2025-09-09T08:36:54.612Z" },
-    { url = "https://files.pythonhosted.org/packages/cb/4e/a4300d52dd81b58130ccadf3873f11b3c6de54836ad4a8f32bac2bd2ba17/polars-1.33.1-cp39-abi3-win_arm64.whl", hash = "sha256:c3cfddb3b78eae01a218222bdba8048529fef7e14889a71e33a5198644427642", size = 35445171, upload-time = "2025-09-09T08:36:58.043Z" },
 ]
 
 [[package]]
