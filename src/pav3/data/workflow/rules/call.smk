@@ -23,16 +23,167 @@ global POLARS_MAX_THREADS
 global temp
 
 
-rule call_tables_hap:
+#
+# Rules
+#
+
+rule call_vcf:
     input:
-        pq_inter=lambda wildcards: pav3.pipeline.expand_pattern(
-            'results/{asm_name}/call_hap/call_insdel_{hap}.parquet', ASM_TABLE, config,
+        pq_merge=lambda wildcards: pav3.pipeline.expand_pattern(
+            'results/{asm_name}/call/call_{vartype}.parquet',
+            ASM_TABLE, PAV_CONFIG,
+            vartype=('insdel', 'inv', 'snv')
+        )
+    output:
+        vcf='{asm_name}.vcf.gz'
+    run:
+
+        df_mg = [pl.scan_parquet(filename) for filename in input.pq_merge]
+
+        (
+            pl.concat(df_mg)
+            .with_columns(
+                pl.col('chrom').alias('#CHROM'),
+                # POS
+                pl.col('id').alias('ID'),
+                # REF
+                # ALT
+                pl.lit('.').alias('QUAL'),
+                (
+                    pl.when(pl.col('filter').is_not_null())
+                    .then(pl.col('filter').list.join(';'))
+                    .otherwise(pl.lit('PASS'))
+                ).alias('FILTER'),
+                # INFO
+                # FORMAT
+                # Sample
+            )
         )
 
+localrules: call_tables_all
 
-#
-# Integrate sources
-#
+rule call_tables_all:
+    input:
+        pq_merge=lambda wildcards: pav3.pipeline.expand_pattern(
+            'results/{asm_name}/call/call_{vartype}.parquet',
+            ASM_TABLE, PAV_CONFIG,
+            vartype=('insdel', 'inv', 'snv')
+        )
+
+rule call_tables:
+    input:
+        pq=lambda wildcards: pav3.pipeline.expand_pattern(
+            'temp/{asm_name}/call/call_{vartype}_{filter}.parquet',
+            ASM_TABLE, PAV_CONFIG,
+            asm_name=wildcards.asm_name,
+            vartype=('ins', 'del', 'inv', 'snv', 'cpx'),
+            filter=('pass', 'fail'),
+        )
+    output:
+        pq_insdel='results/{asm_name}/call/call_insdel.parquet',
+        pq_inv='results/{asm_name}/call/call_inv.parquet',
+        pq_snv='results/{asm_name}/call/call_snv.parquet',
+        pq_cpx='results/{asm_name}/call/call_cpx.parquet',
+    run:
+
+        IN_FILENAME_PATTERN = 'temp/{asm_name}/call/call_{vartype}_{filter}.parquet'
+        OUT_FILENAME_PATTERN = 'results/{asm_name}/call/call_{vartype}.parquet'
+
+        for vartype in ('insdel', 'inv', 'snv', 'cpx'):
+            vartype_in_list = [vartype] if vartype != 'insdel' else ['ins', 'del']
+
+            (
+                pl.concat([
+                    pl.scan_parquet(IN_FILENAME_PATTERN.format(
+                        asm_name=wildcards.asm_name,
+                        vartype=vartype_in,
+                        filter=filter,
+                    ))
+                        for vartype_in in vartype_in_list for filter in ('pass', 'fail')
+                ])
+                .sort('chrom', 'pos', 'end', 'id')
+                .sink_parquet(
+                    OUT_FILENAME_PATTERN.format(asm_name=wildcards.asm_name, vartype=vartype)
+                )
+            )
+
+rule call_tables_split:
+    input:
+        pq_inter=lambda wildcards: pav3.pipeline.expand_pattern(
+            'results/{asm_name}/call_hap/call_{vartype}_{hap}.parquet',
+            ASM_TABLE, PAV_CONFIG,
+            asm_name=wildcards.asm_name,
+            vartype=wildcards.vartype if wildcards.vartype not in {'ins', 'del'} else 'insdel',
+        )
+    output:
+        pq_pass=temp('temp/{asm_name}/call/call_{vartype}_pass.parquet'),
+        pq_fail=temp('temp/{asm_name}/call/call_{vartype}_fail.parquet'),
+    wildcard_constraints:
+        filter='pass|fail',
+        vartype='ins|del|inv|snv|cpx',
+    threads: POLARS_MAX_THREADS
+    run:
+        OUT_FILENAME_PATTERN = 'temp/{asm_name}/call/call_{vartype}_{filter}.parquet'
+
+        filters = []
+
+        vartype_in = wildcards.vartype
+
+        if wildcards.vartype in {'ins', 'del'}:
+            filters.append(pl.col('vartype') == wildcards.vartype.upper())
+            vartype_in = 'insdel'
+
+        input_all = [
+            (
+                pl.scan_parquet(
+                    f'results/{wildcards.asm_name}/call_hap/call_{vartype_in}_{hap}.parquet'
+                )
+                .filter(*filters)
+                .with_row_index('_index'),
+                f'{wildcards.asm_name}-{hap}',
+            ) for hap in pav3.pipeline.get_hap_list(wildcards.asm_name, ASM_TABLE)
+        ]
+
+
+        try:
+            merge_params = pav3.const.DEFAULT_MERGE_PARAMS[vartype_in]
+        except KeyError:
+            raise ValueError(f'No merge parameters for variant type: {wildcards.vartype}')
+
+        pairwise_join = agglovar.pairwise.overlap.PairwiseOverlap.from_definiton(
+            merge_params
+        )
+
+        merge_runner = agglovar.merge.cumulative.MergeCumulative(
+            pairwise_join,
+            lead_strategy=agglovar.merge.cumulative.LeadStrategy.LEFT,
+        )
+
+        # Split by variant type and pass status, merge separately
+        for is_pass in (True, False):
+            out_filename = OUT_FILENAME_PATTERN.format(
+                asm_name=wildcards.asm_name,
+                vartype=wildcards.vartype,
+                filter='pass' if is_pass else 'fail'
+            )
+
+            (
+                merge_runner(
+                    (
+                        (
+                            df.filter(
+                                pl.col('filter').list.len() == 0 if is_pass else pl.col('filter').list.len() > 0
+                            ),
+                            sample_name,
+                        ) for df, sample_name in input_all
+                    ),
+                    retain_index=True
+                )
+                .with_columns(agglovar.util.var.id_version_expr())
+                .sort('chrom', 'pos', 'end', 'id')
+                .sink_parquet(out_filename)
+            )
+
 
 # Integrate variant sources
 rule call_integrate_sources:
@@ -126,6 +277,9 @@ rule call_integrate_sources:
         # Note: add_inner is implied by vartype == 'cpx'
 
         for sourcetype_vartype in param_dict.keys():
+            # if sourcetype_vartype == 'intra_snv':
+            #     raise RuntimeError(f'Stopping at {sourcetype_vartype}')
+
             if pav_params.debug:
                 print(f'Processing {sourcetype_vartype}')
 
@@ -321,10 +475,6 @@ rule call_integrate_sources:
         )
 
 
-#
-# Inter-alignment variants (large variants)
-#
-
 # Call alignment-truncating SVs.
 rule call_inter:
     input:
@@ -451,7 +601,8 @@ rule call_inter:
 
             var_index = 0
 
-            # TODO: Sort lgsv_list by chrom and qry_id before resolving (calling row()), faster to retrieve sequences and homology
+            # Sort by chrom and qry_id before resolving (calling row()), faster to retrieve sequences and homology
+            lgsv_list.sort(key=lambda var: (var.interval.region_ref.chrom, var.interval.region_ref.pos))
 
             for var in lgsv_list:
 
@@ -539,11 +690,6 @@ rule call_inter:
             )
 
 
-
-#
-# Intra-alignment variants
-#
-
 rule call_intra_inv:
     input:
         align_none='results/{asm_name}/align/{hap}/align_trim-none.parquet',
@@ -579,6 +725,7 @@ rule call_intra_inv:
         )
 
         df_inv.write_parquet(output.pq_inv)
+
 
 # Identify candidate loci for intra-alignment inversions
 rule call_intra_inv_flag:
@@ -619,6 +766,7 @@ rule call_intra_inv_flag:
             )
             .write_parquet(output.pq_flag)
         )
+
 
 # Call intra-alignment SNV and INS/DEL variants
 rule call_intra_snv_insdel:

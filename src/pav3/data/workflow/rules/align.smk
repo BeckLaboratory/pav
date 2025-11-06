@@ -306,65 +306,65 @@ rule align_export_all:
         cram=_align_export_all
 
 
-# Reconstruct CRAM from alignment BED files after trimming redundantly mapped bases (post-cut).
-rule align_export:
-    input:
-        bed='results/{asm_name}/align/trim-{trim}/align_qry_{hap}.bed.gz',
-        fa='data/query/{asm_name}/query_{hap}.fa.gz',
-        align_head='results/{asm_name}/align/trim-none/align_qry_{hap}.headers.gz',
-        ref_fa='data/ref/ref.fa.gz'
-    output:
-        align='results/{asm_name}/align/export/pav_align_trim-{trim}_{hap}.{ext}'
-    run:
-
-        raise NotImplementedError('Update for PAV3')
-
-        SAM_TAG = fr'@PG\tID:PAV-{wildcards.trim}\tPN:PAV\tVN:{pav3.__version__}\tDS:PAV Alignment trimming {pav3.align.trim.TRIM_DESC[wildcards.trim]}'
-
-        if wildcards.ext == 'cram':
-            out_fmt = 'CRAM'
-            do_bgzip = False
-            do_index = True
-            do_tabix = False
-
-        elif wildcards.ext == 'bam':
-            out_fmt = 'BAM'
-            do_bgzip = False
-            do_index = True
-            do_tabix = False
-
-        elif wildcards.ext == 'sam.gz':
-            out_fmt = 'SAM'
-            do_bgzip = True
-            do_index = False
-            do_tabix = True
-
-        else:
-            raise RuntimeError(f'Unknown output format extension: {wildcards.ext}: (Allowed: "cram", "bam", "sam.gz")')
-
-        # Export
-
-        if not do_bgzip:
-            shell(
-                """python {PIPELINE_DIR}/scripts/reconstruct_sam.py """
-                    """--bed {input.bed} --fasta {input.fa} --headers {input.align_head} --tag "{SAM_TAG}" | """
-                """samtools view -T {input.ref_fa} -O {out_fmt} -o {output.align}"""
-            )
-        else:
-            shell(
-                """python3 {PIPELINE_DIR}/scripts/reconstruct_sam.py """
-                    """--bed {input.bed} --fasta {input.fa} --headers {input.align_head} --tag "{SAM_TAG}" | """
-                """samtools view -T {input.ref_fa} -O {out_fmt} | """
-                """bgzip > {output.align}"""
-            )
-
-        # Index
-        if do_index:
-            shell(
-                """samtools index {output.align}"""
-            )
-
-        if do_tabix:
-            shell(
-                """tabix {output.align}"""
-            )
+# # Reconstruct CRAM from alignment BED files after trimming redundantly mapped bases (post-cut).
+# rule align_export:
+#     input:
+#         bed='results/{asm_name}/align/trim-{trim}/align_qry_{hap}.bed.gz',
+#         fa='data/query/{asm_name}/query_{hap}.fa.gz',
+#         align_head='results/{asm_name}/align/trim-none/align_qry_{hap}.headers.gz',
+#         ref_fa='data/ref/ref.fa.gz'
+#     output:
+#         align='results/{asm_name}/align/export/pav_align_trim-{trim}_{hap}.{ext}'
+#     run:
+#
+#         raise NotImplementedError('Update for PAV3')
+#
+#         SAM_TAG = fr'@PG\tID:PAV-{wildcards.trim}\tPN:PAV\tVN:{pav3.__version__}\tDS:PAV Alignment trimming {pav3.align.trim.TRIM_DESC[wildcards.trim]}'
+#
+#         if wildcards.ext == 'cram':
+#             out_fmt = 'CRAM'
+#             do_bgzip = False
+#             do_index = True
+#             do_tabix = False
+#
+#         elif wildcards.ext == 'bam':
+#             out_fmt = 'BAM'
+#             do_bgzip = False
+#             do_index = True
+#             do_tabix = False
+#
+#         elif wildcards.ext == 'sam.gz':
+#             out_fmt = 'SAM'
+#             do_bgzip = True
+#             do_index = False
+#             do_tabix = True
+#
+#         else:
+#             raise RuntimeError(f'Unknown output format extension: {wildcards.ext}: (Allowed: "cram", "bam", "sam.gz")')
+#
+#         # Export
+#
+#         if not do_bgzip:
+#             shell(
+#                 """python {PIPELINE_DIR}/scripts/reconstruct_sam.py """
+#                     """--bed {input.bed} --fasta {input.fa} --headers {input.align_head} --tag "{SAM_TAG}" | """
+#                 """samtools view -T {input.ref_fa} -O {out_fmt} -o {output.align}"""
+#             )
+#         else:
+#             shell(
+#                 """python3 {PIPELINE_DIR}/scripts/reconstruct_sam.py """
+#                     """--bed {input.bed} --fasta {input.fa} --headers {input.align_head} --tag "{SAM_TAG}" | """
+#                 """samtools view -T {input.ref_fa} -O {out_fmt} | """
+#                 """bgzip > {output.align}"""
+#             )
+#
+#         # Index
+#         if do_index:
+#             shell(
+#                 """samtools index {output.align}"""
+#             )
+#
+#         if do_tabix:
+#             shell(
+#                 """tabix {output.align}"""
+#             )

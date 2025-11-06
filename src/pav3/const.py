@@ -1,5 +1,7 @@
 """Program constants."""
 
+from typing import Any
+
 __all__ = [
     'FILTER_REASON',
     'DEFAULT_MIN_ANCHOR_SCORE',
@@ -31,7 +33,7 @@ __all__ = [
 #
 
 # Explanations for filter codes
-FILTER_REASON = {
+FILTER_REASON: dict[str, str] = {
     'LCALIGN': 'Variant inside a low-confidence alignment record',
     'ALIGN': 'Variant inside an alignment record that had a filtered flag (matches 0x700 in alignment flags) or did '
              'not meet a minimum MAPQ threshold',
@@ -139,3 +141,21 @@ INV_KDE_FUNC: float | str = 'auto'
 Convolution method. "fft" is a Fast-Fourier Transform, "conv" is a standard linear convolution. "auto" uses "fft" if
 available and falls back to "conv" otherwise.
 """
+
+DEFAULT_MERGE_PARAMS: dict[str, list[dict[str, Any]]] = {
+    'insdel': [
+        {'ro_min': 0.5, 'match_prop_min': 0.8},
+        {'size_ro_min': 0.8, 'offset_max': 200, 'match_prop_min': 0.8},
+        {'offset_prop_max': 2.0, 'size_ro_min': 0.8, 'match_prop_min': 0.8}
+    ],
+    'inv': [
+        {'ro_min': 0.2},
+    ],
+    'snv': [
+        {'offset_max': 0, 'match_ref': True, 'match_alt': True},
+    ],
+    'cpx': [
+        {'ro_min': 0.5, 'seg_ro_min': 0.5, 'match_prop_min': 0.8},
+    ]
+}
+"""Default parameters for merging haplotypes."""

@@ -61,8 +61,6 @@ class Variant(ABC):
     :ivar var_score: Variant score.
     :ivar templ_res: Template resolution flag. Set to True if a variant is aligned across segments and False if variant
         segments are unaligned. Common in complex variants, smaller template switches are left unaligned.
-    :ivar ref_templ_list: List of template regions to be converted to thd ref_templ list. The property ref_templ will
-        return a list of dicts matching the ref_templ schema or None if this list is empty.
     :ivar seq: Variant sequence.
     :ivar is_patch: Variant is a patch variant. It does not represent a variant call, but should be traversed during
         graph resolution.
@@ -88,7 +86,6 @@ class Variant(ABC):
     call_source: str
     var_score: float
     templ_res: bool
-    ref_templ_list: list[Region]
     seq: Optional[str]
     is_patch: bool
     start_index: int
@@ -156,12 +153,12 @@ class Variant(ABC):
         self.var_score = float('-inf')
         self.templ_res = False
 
-        self.ref_templ_list: list[Region] = []
-
         self.df_ref_trace = None
         self._seq = None  # Sequence cache
 
         self.var_index = None
+
+        self._dup_list: list[dict[str, str | int]] = []
 
         # Non-variant fields
         self.is_patch = is_patch          # Set to True for patch variants
@@ -288,16 +285,26 @@ class Variant(ABC):
         ).to_series().to_list()
 
     @property
-    def ref_templ(self) -> Optional[list[dict[str, str | int | bool]]]:
-        """Get a list of templated reference loci.
+    def dup(self) -> Optional[list[dict[str, str | int]]]:
+        """Get a list of duplicated reference loci."""
+        return list(self._dup_list) if self._dup_list is not None else None
 
-        Each locus is a dictionary with chrom, pos, end, and is_rev. If there are no templated loci, returns None. Set
-        to a row of a variant table, schema should accept a list of dicts (structs).
-        """
-        if not self.ref_templ_list:
+    @property
+    def seg(self) -> Optional[list[dict[str, str | int | bool]]]:
+        """Get a list of templated reference loci."""
+        if self.interval is None:
             return None
 
-        return [region.as_dict_with_rev() for region in self.ref_templ_list]
+        return (
+            self.interval.df_segment
+            .filter(pl.col('is_aligned') & ~ pl.col('is_anchor'))
+            .select(
+                'chrom', 'pos', 'end',
+                (pl.col('is_rev') ^ self.interval.is_rev).alias('is_rev'),
+                'qry_id', 'qry_pos', 'qry_end'
+            )
+            .rows(named=True)
+        )
 
     @property
     def variant_id(self) -> str:
@@ -512,14 +519,6 @@ class InsertionVariant(Variant):
 
         self.region_ref = Region(interval.region_ref.chrom, interval.region_ref.pos, interval.region_ref.pos + 1)
 
-        for row in (
-                self.interval.df_segment
-                .filter(pl.col('is_aligned') & ~ pl.col('is_anchor'))
-        ).iter_rows(named=True):
-            self.ref_templ_list.append(
-                Region(row['chrom'], row['pos'], row['end'], is_rev=row['is_rev'] ^ self.interval.is_rev)
-            )
-
         self.resolved_templ = interval.qry_aligned_pass_prop >= caller_resources.pav_params.lg_cpx_min_aligned_prop
 
         self._found_variant = True
@@ -531,7 +530,7 @@ class InsertionVariant(Variant):
     @classmethod
     def _row_set(cls) -> set[str]:
         """Get a set of row names for this variant call."""
-        return {'varsubtype', 'ref_templ'}
+        return {'varsubtype', 'dup'}
 
 
 class TandemDuplicationVariant(InsertionVariant):
@@ -605,9 +604,7 @@ class TandemDuplicationVariant(InsertionVariant):
 
         self.region_qry = Region(interval.region_qry.chrom, qry_pos, qry_end)
 
-        self.ref_templ_list.append(
-            Region(interval.region_ref.chrom, interval.region_ref.pos, interval.region_ref.end, False)
-        )
+        self._dup_list.append(self.interval.region_ref.as_dict())
 
         self.resolved_templ = interval.qry_aligned_pass_prop >= caller_resources.pav_params.lg_cpx_min_aligned_prop
 
@@ -652,7 +649,7 @@ class DeletionVariant(Variant):
     @classmethod
     def _row_set(cls) -> set[str]:
         """Get a set of row names for this variant call."""
-        return {'varsubtype', 'ref_templ'}  # Same as INS, will be placed in the same table
+        return {'varsubtype', 'dup'}  # Same as INS, will be placed in the same table
 
 
 class InversionVariant(Variant):
@@ -890,6 +887,9 @@ class ComplexVariant(Variant):
 
         self.resolved_templ = interval.qry_aligned_pass_prop >= caller_resources.pav_params.lg_cpx_min_aligned_prop
 
+        if self.interval.len_ref < 0:
+            self._dup_list.append(self.interval.region_ref.as_dict())
+
         self._found_variant = True
 
     def _complete_anno_variant(self):
@@ -913,7 +913,7 @@ class ComplexVariant(Variant):
     @classmethod
     def _row_set(cls) -> set[str]:
         """Get a set of row names for this variant call."""
-        return {'varsubtype', 'seg_n', 'trace_qry', 'trace_ref'}
+        return {'varsubtype', 'seg_n', 'trace_qry', 'trace_ref', 'seg', 'dup'}
 
 
 class NullVariant(Variant):

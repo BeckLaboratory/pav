@@ -6,6 +6,34 @@
 
 Variant caller for assembled genomes.
 
+## Development release (Please read)
+
+PAV 3 is currently a development release and may contain bugs. Please report bugs if you find any.
+
+PAV now uses Polars for data processing, which is much faster, although it presents some limitations. If your job fails
+with strange Polars errors, such as "capacity overflow" or "PanicException", this is likely from Polars running out of
+memory. Increase the amount of memory or reduce the number of threads used by PAV. For human genomes, the GRCh38
+(hg38 on UCSC) reference will produce more memory errors than T2T-CHM13v2.0 (hs1 on UCSC).
+
+Polars is developing a new streaming engine, although it often fails with erroneous errors. Once this engine is stable,
+PAV will become faster and use far less memory, especially for merging haplotypes.
+
+By default, PAV will run just haplotypes and stop before merging. Unmerged haplotype callsets will appear in:
+
+```
+results/NAME/call/call_insdel.parquet
+results/NAME/call/call_inv.parquet
+results/NAME/call/call_snv.parquet
+results/NAME/call/call_cpx.parquet
+```
+
+...where "NAME" is the assembly name ("NAME" column in the assembly table, see below).
+
+To run through merging, run "pav call_tables_all". Variant call tables will appear in
+`results/NAME/call`.
+
+The VCF writer is in progress.
+
 
 ## Install
 
@@ -18,6 +46,8 @@ To run PAV, use the `pav3` command after setting up configuration files.
 ```
 python -m pav3
 ```
+
+Currently, PAV needs `minimap2` in the environment where it is run. This may change in future releases.
 
 
 ## Configuring PAV

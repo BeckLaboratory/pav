@@ -122,9 +122,15 @@ localrules: pav_all
 
 rule pav_all:
     input:
-        pq_inter=lambda wildcards: pav3.pipeline.expand_pattern(
-            'results/{asm_name}/call_hap/call_insdel_{hap}.parquet', ASM_TABLE, config,
-        )
+        pq_integrated=lambda wildcards: pav3.pipeline.expand_pattern(
+            'results/{asm_name}/call_hap/call_insdel_{hap}.parquet',
+            ASM_TABLE, PAV_CONFIG,
+        ),
+        # pq_merge=lambda wildcards: pav3.pipeline.expand_pattern(
+        #     'results/{asm_name}/call/call_{vartype}.parquet',
+        #     ASM_TABLE, PAV_CONFIG,
+        #     vartype=('insdel', 'inv', 'snv')
+        # )
 
 
 ### Includes ###

@@ -60,7 +60,18 @@ VARIANT: dict[str, pl.DataType] = {
     'templ_res': pl.Boolean,
     'align_index': pl.List(pl.Int32),
     'align_index_anchor': pl.Struct({'left': pl.Int32, 'right': pl.Int32}),
-    'ref_templ': pl.List(
+    'seg': pl.List(
+        pl.Struct({
+            'chrom': pl.String,
+            'pos': pl.Int64,
+            'end': pl.Int64,
+            'qry_id': pl.String,
+            'qry_pos': pl.Int64,
+            'qry_end': pl.Int64,
+            'is_rev': pl.Boolean,
+        })
+    ),
+    'dup': pl.List(
         pl.Struct({
             'chrom': pl.String,
             'pos': pl.Int64,
@@ -137,7 +148,12 @@ Fields:
     * ref_templ: List templated sites (see notes above - Coordinates). Each templated site is a reference coordinate
         that part of the variant was templated from. For insertions, this may be a single region that was duplicated
         (insertion call itself indicates where it was inserted). For complex variants, this may be a list of regions
-        that were duplicated or rearranged to form the variant.
+        that were duplicated or rearranged to form the variant. Field "is_rev" is true when the template is inverted
+        relative to the reference (assembly sequence orientation does not affect this value).
+    * seg: A list of segments belonging to this variant. Each element links a reference region and query region. Field
+        "is_rev" is true when the segment is inverted relative to the reference (assembly sequence orientation does not
+        affect this value).
+    * dup: List of duplicated reference regions where a precise query coordinate is unknown.
     * seg_n: Number of distinct segments in a complex variant.
     * align_gap: Difference in the number of bases between the query and reference sequences for inter-alignment
         inversions. Large numbers suggest a more complex arrangement than a balanced inversion.

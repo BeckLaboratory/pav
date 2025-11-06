@@ -7,8 +7,6 @@ import argparse
 import inspect
 from typing import Any, Optional
 
-from .. import __version__
-
 from ._subcommand_license import _add_subparser_license, subcommand_license
 from ._subcommand_call import _add_subparser_call, subcommand_call
 from ._common_opt import _add_opt_version

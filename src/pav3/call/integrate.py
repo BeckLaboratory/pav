@@ -242,7 +242,10 @@ def apply_trim_filter(
         df
         .join(df_filter, on='_index', how='left')
         .with_columns(
-            pl.col('filter').list.concat(pl.col('_filter_trim').fill_null([])).list.unique().sort().alias('filter')
+            pl.concat_list(
+                'filter',
+                pl.col('_filter_trim').fill_null([]).cast(pl.List(pl.String)),
+            ).list.unique().list.sort().alias('filter')
         )
         .drop('_index', '_filter_trim')
     )

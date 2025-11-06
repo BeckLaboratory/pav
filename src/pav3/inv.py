@@ -711,7 +711,7 @@ def cluster_table_insdel(
     df_del = df.filter((pl.col('vartype') == 'DEL') & (pl.col('varlen') >= varlen_min))
 
     # Join INS and DEL by proximity.
-    pairwise_intersect = agglovar.join.pair.PairwiseIntersect(
+    pairwise_intersect = agglovar.pairwise.overlap.PairwiseOverlap(
         offset_prop_max=offset_prop_max,
         size_ro_min=size_ro_min,
     )
