@@ -29,18 +29,18 @@ wheels = [
 
 [[package]]
 name = "agglovar"
-version = "0.0.1.dev4"
+version = "0.0.1.dev5"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "biopython" },
     { name = "edlib" },
     { name = "numpy" },
     { name = "ply" },
-    { name = "polars-u64-idx", extra = ["numpy", "pandas", "pyarrow"] },
+    { name = "polars", extra = ["numpy", "pandas", "pyarrow"] },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/0e/fa/8c1afaed4aa8fb28b9bcf2ba66515fbed54007d5fb4ff35bef6dc45b9572/agglovar-0.0.1.dev4.tar.gz", hash = "sha256:c0c3a44df3b72fbf2b38f9e0733f0e79196a8abcf069a8a558fcbfac642fff36", size = 68816, upload-time = "2025-11-06T19:09:06.317Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/84/3e/7de173acca5de51618b182a29adc1557dbb3963531dcf2ca4f7fb32d7034/agglovar-0.0.1.dev5.tar.gz", hash = "sha256:4613480719504ed3ce71f351285dfa201f71003fd9235dcb10700eb2159bac56", size = 69631, upload-time = "2025-11-26T16:53:23.294Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/3c/0d/e0e65dd6cf45f8a4363cf6fb4a6f657d39719fba58c0b0b2b823f1405eda/agglovar-0.0.1.dev4-py3-none-any.whl", hash = "sha256:e3f2539f346067368c598eeee1fc9e74a024426cf4490955a740d7ed8d97b6e8", size = 78071, upload-time = "2025-11-06T19:09:05.076Z" },
+    { url = "https://files.pythonhosted.org/packages/d1/f0/6a08e3b8ce52efb632550997e55811e5449b9ba2a63cda1f64160c43abab/agglovar-0.0.1.dev5-py3-none-any.whl", hash = "sha256:f6d57fe47e53a2d84ef06d7500c922c551d0fd12a2567b0f53fdee8297b42921", size = 79500, upload-time = "2025-11-26T16:53:22.375Z" },
 ]
 
 [[package]]
@@ -1316,7 +1316,7 @@ plot = [
 
 [package.metadata]
 requires-dist = [
-    { name = "agglovar", specifier = ">=0.0.1.dev4" },
+    { name = "agglovar", specifier = ">=0.0.1.dev5" },
     { name = "biopython", specifier = ">=1.85" },
     { name = "fastexcel", specifier = ">=0.14.0" },
     { name = "frozendict", specifier = ">=2.4.6" },
@@ -1494,32 +1494,6 @@ wheels = [
     { url = "https://files.pythonhosted.org/packages/67/89/e09d9897a70b607e22a36c9eae85a5b829581108fd1e3d4292e5c0f52939/polars_runtime_32-1.35.2-cp39-abi3-manylinux_2_24_aarch64.whl", hash = "sha256:3b9006902fc51b768ff747c0f74bd4ce04005ee8aeb290ce9c07ce1cbe1b58a9", size = 37850590, upload-time = "2025-11-09T13:19:08.154Z" },
     { url = "https://files.pythonhosted.org/packages/dc/40/96a808ca5cc8707894e196315227f04a0c82136b7fb25570bc51ea33b88d/polars_runtime_32-1.35.2-cp39-abi3-win_amd64.whl", hash = "sha256:ddc015fac39735592e2e7c834c02193ba4d257bb4c8c7478b9ebe440b0756b84", size = 41290019, upload-time = "2025-11-09T13:19:12.214Z" },
     { url = "https://files.pythonhosted.org/packages/f4/d1/8d1b28d007da43c750367c8bf5cb0f22758c16b1104b2b73b9acadb2d17a/polars_runtime_32-1.35.2-cp39-abi3-win_arm64.whl", hash = "sha256:6861145aa321a44eda7cc6694fb7751cb7aa0f21026df51b5faa52e64f9dc39b", size = 36955684, upload-time = "2025-11-09T13:19:15.666Z" },
-]
-
-[[package]]
-name = "polars-u64-idx"
-version = "1.33.1"
-source = { registry = "https://pypi.org/simple" }
-sdist = { url = "https://files.pythonhosted.org/packages/a6/2d/21a6c64da9024d90c188f226e36625c779478caa0774c67edfe33d2022af/polars_u64_idx-1.33.1.tar.gz", hash = "sha256:c93f832dc3c0e8ef6877b861668f4641f271cd55295764a245ca216cb7dac755", size = 4821436, upload-time = "2025-09-09T08:37:53.745Z" }
-wheels = [
-    { url = "https://files.pythonhosted.org/packages/4e/42/9a195c0f89704ee12b56cde1a6e03542542881d8ce897bc89b2204658890/polars_u64_idx-1.33.1-cp39-abi3-macosx_10_12_x86_64.whl", hash = "sha256:1638c734a3bb3343bd1cc018a0d0a7703b0f394e0cf0c74e6ded1fa45c7b8524", size = 38999382, upload-time = "2025-09-09T08:37:27.235Z" },
-    { url = "https://files.pythonhosted.org/packages/8e/83/fa59b0fced320a640e318496c6965a902e045563fa2a29c8b12d80013bea/polars_u64_idx-1.33.1-cp39-abi3-macosx_11_0_arm64.whl", hash = "sha256:7ee4f830dfb3b04a8ec8f971ad4354de7f403722b68e80d8153d251328e5347f", size = 35512080, upload-time = "2025-09-09T08:37:31.132Z" },
-    { url = "https://files.pythonhosted.org/packages/c7/87/43561d06100aa368d2232a31d0f2ea7974f436f5c7dd7d876883891b69e5/polars_u64_idx-1.33.1-cp39-abi3-manylinux_2_17_x86_64.manylinux2014_x86_64.whl", hash = "sha256:b5c8abae1a3a4f7a637877b61536c43ba675a2cbfe0860c08d48a7f65e78ee4e", size = 39658976, upload-time = "2025-09-09T08:37:35.273Z" },
-    { url = "https://files.pythonhosted.org/packages/39/2c/0560f550e472e47db34ee8900f82714ec1a0106b0f444ab2ae690a152f01/polars_u64_idx-1.33.1-cp39-abi3-manylinux_2_24_aarch64.whl", hash = "sha256:09d8b49e8a9d37658f9afa38f43558fe6b070ccfef2cc3e81d4ba60615462183", size = 36572444, upload-time = "2025-09-09T08:37:39.116Z" },
-    { url = "https://files.pythonhosted.org/packages/f2/ff/6c5b669659b9092a56bbb2b65a280192e251dea7ea1641675611250648f7/polars_u64_idx-1.33.1-cp39-abi3-win_amd64.whl", hash = "sha256:225f9ab8cc37a15d5de243a748e6e865b13c686e057cf57aaebee9b5e07cef4b", size = 39358320, upload-time = "2025-09-09T08:37:42.604Z" },
-    { url = "https://files.pythonhosted.org/packages/61/dc/36c56cecfd6b6a889ec40b6511f21362d5981a92e5e61b5fa89011523ec8/polars_u64_idx-1.33.1-cp39-abi3-win_arm64.whl", hash = "sha256:48e9cd8a6d7b21ee0863a3706d9a05c66a39339d35088685da095d201881d668", size = 35350509, upload-time = "2025-09-09T08:37:45.895Z" },
-]
-
-[package.optional-dependencies]
-numpy = [
-    { name = "numpy" },
-]
-pandas = [
-    { name = "pandas" },
-    { name = "pyarrow" },
-]
-pyarrow = [
-    { name = "pyarrow" },
 ]
 
 [[package]]
