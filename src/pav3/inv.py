@@ -623,12 +623,20 @@ def cluster_table(
     # Self-join to find overlapping regions
     df_inter = (
         df
-        .join_where(
-            df,
-            pl.col('chrom') <= pl.col('chrom_right'),
+        .join(
+            df, how='cross'
+        )
+        .filter(
+            pl.col('chrom') == pl.col('chrom_right'),
             pl.col('pos') < pl.col('end_right') + pav_params.inv_sig_merge_flank,
             pl.col('end') > pl.col('pos_right') - pav_params.inv_sig_merge_flank,
         )
+        # .join_where(
+        #     df,
+        #     pl.col('chrom') == pl.col('chrom_right'),
+        #     pl.col('pos') < pl.col('end_right') + pav_params.inv_sig_merge_flank,
+        #     pl.col('end') > pl.col('pos_right') - pav_params.inv_sig_merge_flank,
+        # )
         .drop('chrom_right')
         .sort(['index', 'index_right'])
     ).collect()
@@ -663,8 +671,11 @@ def cluster_table(
             pl.col('pos').min(),
             pl.col('end').max(),
             pl.col('align_index').first(),
-            pl.col('flag').explode().unique().implode().sort().alias('flag'),
+            pl.col('flag').flatten(),
             pl.len().alias('clusters'),
+        )
+        .with_columns(
+            pl.col('flag').list.unique().list.sort(),
         )
         .drop('group_id')
         .sort(['chrom', 'pos', 'end', 'align_index'])
@@ -712,23 +723,39 @@ def cluster_table_insdel(
 
     # Join INS and DEL by proximity.
     pairwise_intersect = agglovar.pairwise.overlap.PairwiseOverlap(
-        offset_prop_max=offset_prop_max,
-        size_ro_min=size_ro_min,
+        (
+            agglovar.pairwise.overlap.PairwiseOverlapStage(
+                offset_prop_max=offset_prop_max,
+                size_ro_min=size_ro_min,
+                join_predicates=(
+                    pl.col('align_index_a').list.first() == pl.col('align_index_b').list.first(),
+                )
+            ),
+        ),
+        join_cols=(
+            pl.col('chrom_a').alias('chrom'),
+            pl.col('pos_a'), pl.col('end_a'),
+            pl.col('pos_b'), pl.col('end_b'),
+            pl.col('varlen_a'),
+            pl.col('varlen_b'),
+            pl.col('align_index_a').list.first().alias('align_index'),
+            pl.col('qry_id_a').alias('qry_id'),
+        ),
     )
 
-    pairwise_intersect.append_join_predicates(
-        pl.col('align_index_a').list.first() == pl.col('align_index_b').list.first()
-    )
+    # pairwise_intersect.append_join_predicates(
+    #     pl.col('align_index_a').list.first() == pl.col('align_index_b').list.first()
+    # )
 
-    pairwise_intersect.append_join_cols([
-        pl.col('chrom_a').alias('chrom'),
-        pl.col('pos_a'), pl.col('end_a'),
-        pl.col('pos_b'), pl.col('end_b'),
-        pl.col('varlen_a'),
-        pl.col('varlen_b'),
-        pl.col('align_index_a').list.first().alias('align_index'),
-        pl.col('qry_id_a').alias('qry_id'),
-    ])
+    # pairwise_intersect.append_join_cols([
+    #     pl.col('chrom_a').alias('chrom'),
+    #     pl.col('pos_a'), pl.col('end_a'),
+    #     pl.col('pos_b'), pl.col('end_b'),
+    #     pl.col('varlen_a'),
+    #     pl.col('varlen_b'),
+    #     pl.col('align_index_a').list.first().alias('align_index'),
+    #     pl.col('qry_id_a').alias('qry_id'),
+    # ])
 
     df_join = (
         pairwise_intersect.join(df_ins, df_del)

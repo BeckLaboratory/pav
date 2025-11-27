@@ -29,7 +29,7 @@ wheels = [
 
 [[package]]
 name = "agglovar"
-version = "0.0.1.dev5"
+version = "0.0.1.dev6"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "biopython" },
@@ -38,9 +38,9 @@ dependencies = [
     { name = "ply" },
     { name = "polars", extra = ["numpy", "pandas", "pyarrow"] },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/84/3e/7de173acca5de51618b182a29adc1557dbb3963531dcf2ca4f7fb32d7034/agglovar-0.0.1.dev5.tar.gz", hash = "sha256:4613480719504ed3ce71f351285dfa201f71003fd9235dcb10700eb2159bac56", size = 69631, upload-time = "2025-11-26T16:53:23.294Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/9d/f5/8834ae5729c522bf35170ed95dd8a2e246afaada2bb6239d54cf6dd81145/agglovar-0.0.1.dev6.tar.gz", hash = "sha256:58787808580f3e525452a6f349e10761d7f15c5e90ee758c0f20925b9b138627", size = 69691, upload-time = "2025-11-27T01:15:24.929Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/d1/f0/6a08e3b8ce52efb632550997e55811e5449b9ba2a63cda1f64160c43abab/agglovar-0.0.1.dev5-py3-none-any.whl", hash = "sha256:f6d57fe47e53a2d84ef06d7500c922c551d0fd12a2567b0f53fdee8297b42921", size = 79500, upload-time = "2025-11-26T16:53:22.375Z" },
+    { url = "https://files.pythonhosted.org/packages/80/e2/8cd534e4f2f48553e22465b9c135f172a0809fc9c3f797e919e4639cab17/agglovar-0.0.1.dev6-py3-none-any.whl", hash = "sha256:2143628157fb407db021665258aa3aab9d6bf25e509b18063cc10f074ef6f8dc", size = 79551, upload-time = "2025-11-27T01:15:23.782Z" },
 ]
 
 [[package]]
@@ -1316,7 +1316,7 @@ plot = [
 
 [package.metadata]
 requires-dist = [
-    { name = "agglovar", specifier = ">=0.0.1.dev5" },
+    { name = "agglovar", specifier = ">=0.0.1.dev6" },
     { name = "biopython", specifier = ">=1.85" },
     { name = "fastexcel", specifier = ">=0.14.0" },
     { name = "frozendict", specifier = ">=2.4.6" },
