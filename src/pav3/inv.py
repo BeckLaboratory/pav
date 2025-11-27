@@ -621,34 +621,52 @@ def cluster_table(
     )
 
     # Self-join to find overlapping regions
+    # df_inter = (
+    #     df
+    #     .join(
+    #         df, how='cross'
+    #     )
+    #     .filter(
+    #         pl.col('chrom') == pl.col('chrom_right'),
+    #         pl.col('index') >= pl.col('index_right'),
+    #         pl.col('pos') < pl.col('end_right') + pav_params.inv_sig_merge_flank,
+    #         pl.col('end') > pl.col('pos_right') - pav_params.inv_sig_merge_flank,
+    #     )
+    #     # .join_where(
+    #     #     df,
+    #     #     pl.col('chrom') == pl.col('chrom_right'),
+    #     #     pl.col('pos') < pl.col('end_right') + pav_params.inv_sig_merge_flank,
+    #     #     pl.col('end') > pl.col('pos_right') - pav_params.inv_sig_merge_flank,
+    #     # )
+    #     .drop('chrom_right')
+    #     .sort(['index', 'index_right'])
+    # ).collect()
+
     df_inter = (
-        df
-        .join(
-            df, how='cross'
+        agglovar.bed.join.pairwise_join(
+            df.select('chrom', 'pos', 'end'),
+            df.select(
+                pl.col('chrom'),
+                pl.col('pos') - pav_params.inv_sig_merge_flank,
+                pl.col('end') + pav_params.inv_sig_merge_flank,
+            ),
         )
         .filter(
-            pl.col('chrom') == pl.col('chrom_right'),
-            pl.col('pos') < pl.col('end_right') + pav_params.inv_sig_merge_flank,
-            pl.col('end') > pl.col('pos_right') - pav_params.inv_sig_merge_flank,
+            pl.col('index_a') < pl.col('index_b')
         )
-        # .join_where(
-        #     df,
-        #     pl.col('chrom') == pl.col('chrom_right'),
-        #     pl.col('pos') < pl.col('end_right') + pav_params.inv_sig_merge_flank,
-        #     pl.col('end') > pl.col('pos_right') - pav_params.inv_sig_merge_flank,
-        # )
-        .drop('chrom_right')
-        .sort(['index', 'index_right'])
-    ).collect()
+        .select('index_a', 'index_b')
+        .sort('index_a', 'index_b')
+        .collect()
+    )
 
     # Group by join. Dict key is the index, value is the group ID
     group_map = dict()
 
     for row in df_inter.iter_rows(named=True):
-        if row['index'] not in group_map:
-            group_map[row['index']] = row['index']
+        if row['index_a'] not in group_map:
+            group_map[row['index_a']] = row['index_a']
 
-        group_map[row['index_right']] = group_map[row['index']]
+        group_map[row['index_b']] = group_map[row['index_a']]
 
     df_schema = df.collect_schema()
 
