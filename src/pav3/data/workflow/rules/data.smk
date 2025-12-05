@@ -17,44 +17,6 @@ global shell
 
 
 #
-# Pre-run targets
-#
-
-def data_init_targets(wildcards=None):
-    """
-    Get a list of input files to be generated before running samples. This target can be used to setup so that each
-    sample can be run independently.
-
-    :param wildcards: Ignored. Function signature needed for Snakemake input function.
-
-    :returns: List of run targets.
-    """
-
-    part_set = set()
-
-    # Get a set of aligners and partitions
-    for asm_name in ASM_TABLE['name']:
-
-        pav_params = pav3.params.PavParams(asm_name, PAV_CONFIG, ASM_TABLE)
-
-        part_set.add(pav_params.cigar_partitions)
-        part_set.add(pav_params.merge_partitions)
-
-    # Construct target list
-    target_list = [
-        'data/ref/ref.fofn',
-        'data/ref/ref_info.parquet'
-    ]
-
-    for part_count in part_set:
-        target_list.append(
-            f'data/ref/partition_{part_count}.tsv.gz'
-        )
-
-    return target_list
-
-
-#
 # Rules
 #
 

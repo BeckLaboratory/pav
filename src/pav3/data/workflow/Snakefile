@@ -66,7 +66,27 @@ def get_rules_path(rule_file):
 
 
 # Load config as PAV_CONFIG
-configfile: config.get('config_file', 'config.json')
+default_config_filename = Path('pav.json')
+deprecated_config_filename = Path('config.json')
+
+if default_config_filename.is_file():
+    config_filename = default_config_filename
+elif deprecated_config_filename.is_file():
+    config_filename = deprecated_config_filename
+
+    print(
+        '\n'
+        'WARNING: Using deprecated config "config.json", rename to "pav.json".\n'
+        'A future version will ignore "config.json"\n'
+    )
+
+    import time
+    time.sleep(5)
+
+else:
+    raise FileNotFoundError('No config file found (expected "pav.json" or deprecated "config.json")')
+
+configfile: config.get('config_file', str(config_filename))
 
 PAV_CONFIG = config
 
@@ -122,10 +142,14 @@ localrules: pav_all
 
 rule pav_all:
     input:
-        pq_integrated=lambda wildcards: pav3.pipeline.expand_pattern(
-            'results/{asm_name}/call_hap/call_insdel_{hap}.parquet',
+        vcf=lambda wildcards: pav3.pipeline.expand_pattern(
+            '{asm_name}.vcf.gz',
             ASM_TABLE, PAV_CONFIG,
         ),
+        # pq_integrated=lambda wildcards: pav3.pipeline.expand_pattern(
+        #     'results/{asm_name}/call_hap/call_insdel_{hap}.parquet',
+        #     ASM_TABLE, PAV_CONFIG,
+        # ),
         # pq_merge=lambda wildcards: pav3.pipeline.expand_pattern(
         #     'results/{asm_name}/call/call_{vartype}.parquet',
         #     ASM_TABLE, PAV_CONFIG,
