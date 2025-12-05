@@ -8,67 +8,68 @@ Variant caller for assembled genomes.
 
 ## Development release (Please read)
 
-PAV 3 is currently a development release and may contain bugs. Please report bugs if you find any.
+PAV 3 is currently a development release and may contain bugs. Please report problems you encounter.
 
-PAV now uses Polars for data processing, which is much faster, although it presents some limitations. If your job fails
-with strange Polars errors, such as "capacity overflow" or "PanicException", this is likely from Polars running out of
-memory. Increase the amount of memory or reduce the number of threads used by PAV. For human genomes, the GRCh38
-(hg38 on UCSC) reference will produce more memory errors than T2T-CHM13v2.0 (hs1 on UCSC).
-
-Polars is developing a new streaming engine, although it often fails with erroneous errors. Once this engine is stable,
-PAV will become faster and use far less memory, especially for merging haplotypes.
-
-By default, PAV will run just haplotypes and stop before merging. Unmerged haplotype callsets will appear in:
-
-```
-results/NAME/call/call_insdel.parquet
-results/NAME/call/call_inv.parquet
-results/NAME/call/call_snv.parquet
-results/NAME/call/call_cpx.parquet
-```
-
-...where "NAME" is the assembly name ("NAME" column in the assembly table, see below).
-
-To run through merging, run "pav call_tables_all". Variant call tables will appear in
-`results/NAME/call`.
-
-The VCF writer is in progress.
+PAV now uses Polars for fast data manipulation. If your job fails with strange Polars errors, such as "capacity
+overflow" or "PanicException", this is likely from Polars running out of memory.
 
 
-## Install
+### Notes for early adopters
 
+If you have been using development versions, please read about these changes.
+
+**Call subcommand is deprecated.** If you have been running pav3 with the "call" subcommand, switch it to "batch"
+(i.e. ("pav3 batch ...")). A future version will use "call" for single assemblies (with multiple haplotypes) defined on
+the command-line and "batch" to run all assemblies from an assembly table.
+
+**Moving configuration to pav.json.** The configuration file "config.json" is being moved to "pav.json". A future
+version will ignore "config.json".
+
+
+## Install and run
+
+
+### Install
 ```
 pip install pav3
 ```
 
-To run PAV, use the `pav3` command after setting up configuration files.
+### Run
+To run PAV, use the `pav3 batch` command after setting up configuration files (see below). A future version will add
+`pav call` for single-assemblies without requiring configuration files. 
 
+Some Python environments may require you to run `pav3` through the `python` command:
 ```
-python -m pav3
+python -m pav3 batch
 ```
 
-Currently, PAV needs `minimap2` in the environment where it is run. This may change in future releases.
+
+### Dependencies
+Currently, PAV needs `minimap2` in the environment where it is run. This may change in future releases. All other
+dependencies are handled by the installer.
 
 
-## Configuring PAV
+### Output
+PAV will output a VCF file for each sample called `NAME.vcf.gz`.
 
-PAV reads two configuration files:
+* `results/NAME/call_hap`: Unmerged variant calls.
+  * Includes tables of callable regions in reference ("callable_ref") and query ("callable_qry") coordinates.
+* `results/NAME/call`: Variant calls merged across haplotypes.
 
-* `config.json`: Points to the reference genome and can be used to set optional parameters.
+All tables are in parquet format.
+
+
+## Configuring PAV for batch runs
+
+To run assemblies in batches ("pav3 batch" command), PAV reads two configuration files:
+
+* `pav.json`: Points to the reference genome and can be used to set optional parameters.
 * `assemblies.tsv`: A table of input assemblies.
 
-Final results and temporary files are created in the analysis directory. Typically, these
-configuration files will also be found in the analysis directory, although `config.json` may point
-to an assembly outside the analysis directory.
+### Base config: pav.json
 
-Each analysis directory runs a single reference genome. Typically, all runs in the directory will use the same
-configuration options in `config.json`, although per-sample configuration may be set with the "CONFIG" column in
-`assemblies.json`.
-
-### Base config: config.json
-
-A JSON configuration file, `config.json`, configures PAV. Default options are built-in, and the only required option is
-`reference` pointing to a reference FASTA file variants are called against.
+A JSON configuration file, `pav.json`, configures PAV. Default options are built-in, and the only required option is
+`reference` pointing to a reference FASTA file.
 
 Example:
 
@@ -80,33 +81,58 @@ Example:
 
 ### Assembly table
 
-The assembly table has one line per sample. The `NAME` column contains the assembly name (or sample name). This column
-must be present and must be unique within the file.
+The assembly table points PAV to input assemblies. It may be in TSV, CSV, Excel, or parquet formats (TSV and CSV may
+optionally be gzipped). Each assembly has one row in the table.
 
-PAV accepts one or more assembled haplotypes per sample, each with a column in the table:
+Columns:
+* NAME: Assembly or sample name.
+* HAP_\*: One column for each assembled haplotype.
 
-* HAP_* (where * is a haplotype name): A named haplotype. For example, "HAP_h1", "HAP_h2" would be typical columns
-  for a phased assembly. Other pseudo-haplotypes may be added, such as "HAP_unphased". Haplotypes must only contain
-  alpha-numeric and "-", "+", "." characters. Underscores are currently not allowed to avoid filename format ambiguity.
 
-Each entry in a "HAP_" column is the name of a file (FASTA, FASTQ, GFA, or FOFN). Multiple files can be input by
-separating them by semi-colons (i.e. "path/to/file1.fasta.gz;path/to/file2.fasta.gz").
+#### Name column
 
-PAV will run for all haplotypes with a non-empty "HAP_" column. The variant calling process is done independently for
-each haplotype, and variant calls are merged at the end in the order they are found in this table. To include a
-haplotype with no input, add an entry to a zero-byte file to make the haplotype appear in the merged variant table and
-in VCF genotypes.
+The `NAME` column contains the assembly name (or sample name). This column must be present and each row must have a
+unique value.
 
-#### Assembly-specific configuration
 
-Global configuration parameters (those found in `config.json`) can be set per-sample, which wil override `config.json`
-for specific assemblies. The configuration string can be placed into the optional "CONFIG" column and is a
-semicolon-separated list of key-value pairs (i.e. "key1=val1;key2=val2"). The reference cannot be overridden.
+#### Haplotype columns
 
-### Suitable references
+PAV accepts one or more assembled haplotypes per assembly, each with a column in the table starting with "HAP_". Each
+is a path to an input file for one assembly haplotype.
+
+Common column names are "HAP_h1" for haplotype "h1" and "HAP_h2" for haplotype "h2". For some assemblies with known
+parental origins, "HAP_mat" and "HAP_pat" are commonly used.
+
+There must be at least one haplotype per assembly, and PAV has no limits on the number of haplotypes (i.e. 3 or more
+are acceptable).
+
+Not all assemblies need to have the same haplotypes. PAV will ignore empty the "HAP_" values for each assembly. For
+example, if some assemblies have an "unphased" haplotype and other do not, include "HAP_unphased" and leave it blank
+for assemblies that do not have it.
+
+Note that genotypes in the VCF file will have one allele for each haplotype defined for the assembly. For an assembly
+with haplotypes "h1", "h2", and "unphased", three genotype alleles will be possible (e.g. "1|0|." for a heterozygous
+variant present in "h1", not present in "h2", and uncallable in "unphased"). The order of genotypes is determined by
+the order of haplotype columns in the assembly table.
+
+Each "HAP_" column contains paths to input files in FASTA, FASTQ, GFA, or FOFN format. FOFN may contain paths to these
+same file types including other FOFNs (recursive FOFNs are not recommended, but PAV will detect cycles). Multiple files
+can be input by separating them by semi-colons (i.e. "path/to/file1.fasta.gz;path/to/file2.fasta.gz") and a mix of
+types is possible. PAV will be fastest if the input is a single bgzipped and indexed FASTA file, it will build its
+own FASTA file for all other cases.
+
+
+#### Configuration column for global overrides
+
+An optional "CONFIG" column can override global configuration parameters per assembly. Global configuration parameters
+are defined in `pav.json` or are PAV default values if not defined. Values in this column are semicolon-separated lists
+of key-value pairs (i.e. "key1=val1;key2=val2"). The "reference" parameter cannot be overridden per assembly.
+
+
+### A note on references
 
 Do not use references with ALT, PATCH, or DECOY scaffolds for PAV, or generally, any assembly-based or long-read
-variant calling tool. Reference redundancy may increase false-negative errors.
+variant calling tool. Reference redundancy may increase callset errors.
 
 The GRCh38 HGSVC no-ALT reference for long reads can be found here:
 ftp://ftp.1000genomes.ebi.ac.uk/vol1/ftp/data_collections/HGSVC2/technical/reference/20200513_hg38_NoALT/
@@ -115,32 +141,6 @@ The T2T-CHM13v2.0 (hs1 on UCSC) is suitable without alteration. Custom per-sampl
 single-haplotype or an unphased ("squashed") assembly typically also make a suitable reference as long as they are
 free of large structural misassemblies and especially large false duplications.
 
-### Assembly input files
-
-Each sample has one or more "haplotype" assemblies. For example, a diploid human sample would have two complete
-assemblies, one for haplotype 1 and one for haplotype 2.
-
-The most efficient input is bgzipped and indexed FASTA files with ".fai" and ".gzi" indices. If files are not bgzipped,
-they are bgzipped and stored in the "data" directory, which slows PAV significantly. Samtools can be used to prepare
-files with `bgzip` and `samtools faidx` commands (Samtools package, not part of PAV).
-
-Assemblies may be in FASTA, FASTQ, or GFA (hifiasm compatible) formats, and files may be gzipped. File indexes such as
-".fai" files are generated if missing. Note that PAV never alters input or index files outside its own run directory.
-
-PAV can also take an FOFN (File Of File Names) pointing to multiple input files and processing them as one. An FOFN
-file ends with ".fofn" and is a plain text file with one filename per line. PAV will gather all input files from the
-FOFN and create a compressed and indexed FASTA file in the "data" directory for it to use. If FOFN files contain
-other FOFN files, they are followed recursively. Absolute paths should be used, and paths are relative to the run
-directory otherwise.
-
-### Input filename wildcards
-
-PAV will attempt to replace "{asm_name}" and "{hap}" wildcards in paths with the assembly name (NAME column) and
-the haplotype name making it easier to generate paths in the assembly table if input files follow the same file naming
-conventions (can use the same path pattern for many samples and haplotype columns). For example, with sample "HG00733"
-and haplotype "h2", path pattern "/path/to/assemblies/{asm_name}/{asm_name}_{hap}.fa.gz" becomes
-"/path/to/assemblies/HG00733/HG00733_h1.fa.gz". Another wildcard "{sample}" is treated as an alias of "asm_name"
-(i.e. the example above could have used either the "{asm_name}" or "{sample}" wildcards to achieve the same result).
 
 ## PAV versions
 
@@ -161,10 +161,7 @@ release and should not be considered production-ready.
 
 ## Cite PAV
 
+PAV 3 does not yet have a citation. For now, use the citation for previous PAV versions, but check back for updates.
+
 Ebert et al., “Haplotype-Resolved Diverse Human Genomes and Integrated Analysis of Structural Variation,”
 Science, February 25, 2021, eabf7117, https://doi.org/10.1126/science.abf7117 (PMID: 33632895).
-
-PAV was also presented at ASHG 2021:
-
-Audano et al., "PAV: An assembly-based approach for discovering structural variants, indels, and point mutations
-in long-read phased genomes," ASHG Annual Meeting, October 20, 2021 (10:45 - 11:00 AM), PrgmNr 1160

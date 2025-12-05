@@ -396,30 +396,7 @@ _CONFIG_PARAM_LIST: list[_ConfigParamElement] = [
         advanced=True
     ),
     _ConfigParamElement(
-        'no_link_qry', 'bool', False,
-        description='If set, always copy the input query (assembly) FASTA file into the run directory and '
-                    're-write. By default (False), the input query file is only stored in the run directory if '
-                    'it is not a single compressed FASTA file (e.g. plain text FASTA, multiple FASTAs, or GFA '
-                    'input). This option is helpful if there are input FASTA irregularities that cause '
-                    'downstream steps to fail, but it requires time and space to reformat and store input '
-                    'files. Not recommended for most use cases.'
-    ),
-    # ConfigParamElement(
-    #     'align_agg_min_score', 'float', 0.0, max=0.0,
-    #     description='Aggregate alignment records that are adjacent if the sum of the gap scores (reference gap '
-    #                 'and query gap) is not less than this value (gap scores are negative). Two or more '
-    #                 'alignment records are merged into one. A value of 0.0 disables alignment aggregation. '
-    #                 'scores are computed based on "align_score_model" values.'
-    # ),
-    _ConfigParamElement(
-        'align_agg_noncolinear_penalty', 'bool', True,
-        description='Penalize alignment records that are adjacent by the difference in lengths of the '
-                    'reference and query gaps (i.e. add "gap(abs(ref_gap - qry_gap))" to the gap score when '
-                    'choosing to aggregate or not (the total sum must be greater than align_agg_min_score).',
-        advanced=True
-    ),
-    _ConfigParamElement(
-        'align_trim_max_depth', 'int', 20, min=1,
+        'align_trim_max_depth', 'int', const.DEFAULT_ALIGN_TRIM_MAX_DEPTH, min=1,
         description='When trimming alignment records, filter out records where a proportion of the alignment '
                     'record is in regions with this depth or greater (see "align_trim_max_depth_prop").',
         advanced=True
@@ -432,24 +409,6 @@ _CONFIG_PARAM_LIST: list[_ConfigParamElement] = [
     ),
 
     # Variant calling
-    _ConfigParamElement(
-        'merge_partitions', 'int', 20, min=1,
-        description='Split variants into this many partitions to merge.',
-        advanced=True
-    ),
-    _ConfigParamElement(
-        'cigar_partitions', 'int', 10, min=1,
-        description='For intra-alignment (not alignment truncating), split chromosomes into this many '
-                    'partitions and search for INS/DEL/SNV inside alignment records for each partition.',
-        advanced=True
-    ),
-    _ConfigParamElement(
-        'query_filter', 'str', None,
-        description='Query filter BED file. May be multiple file names separated by semicolons (";"). Each BED '
-                    'file contains regions in query-coordinates (assembled sequence) matching sequences in the '
-                    'input FASTA file. Any variants intersecting these loci are dropped from the callset. May '
-                    'be used to  apply quality filtering for known mis-assembled loci.'
-    ),
     _ConfigParamElement(
         'min_anchor_score', 'str', const.DEFAULT_MIN_ANCHOR_SCORE,
         description='Minimum score of an aligned segment to allow it to be used as an anchor. This value may '
@@ -474,7 +433,7 @@ _CONFIG_PARAM_LIST: list[_ConfigParamElement] = [
                     'candidate anchor alignments (reference gap) is greater than the alignment score of '
                     'either anchor. The gap score between anchors is multiplied by this value before it is '
                     'compared to the anchor scores. A value of less than 1.0 reduces the gap penalty (i.e. '
-                    'allows smaller alignments to anchor larger variantns), and a value greater than 1.0 '
+                    'allows smaller alignments to anchor larger variants), and a value greater than 1.0 '
                     'increases the gap penalty (i.e. variant require more substantial anchoring alignments. '
                     'See parameter "align_score_model" for how gap and anchor alignments are score.',
         advanced=True
@@ -496,29 +455,9 @@ _CONFIG_PARAM_LIST: list[_ConfigParamElement] = [
         advanced=True
     ),
     _ConfigParamElement(
-        'merge_insdel', 'str', 'nr::ro(0.5):szro(0.5,200,2):match',
-        description='Parameters for merging INS and DEL variants.',
-        advanced=True
-    ),
-    _ConfigParamElement(
-        'merge_inv', 'str', 'nr::ro(0.2)',
-        description='Parameters for merging INV variants.',
-        advanced=True
-    ),
-    _ConfigParamElement(
-        'merge_snv', 'str', 'nrsnv::exact',
-        description='Parameters for merging SNV variants.',
-        advanced=True
-    ),
-    _ConfigParamElement(
-        'merge_cpx', 'str', 'nr::ro(0.5):szro(0.5,200,2):match',
-        description='Parameters for merging CPX (Complex) variants.',
-        advanced=True
-    ),
-    _ConfigParamElement(
-        'merge_dup', 'str', 'nr::ro(0.5):szro(0.5,200,2):match',
-        description='Parameters for merging DUP (Duplication) variants.',
-        advanced=True
+        'vcf_haplotypes', 'str', None,
+        description='A comma-separated list of haplotype names to include in the VCF where genotypes are given in this'
+                    'order. If not defined, then all haplotypes are written in the order they are defined.'
     ),
 
     # Inversion site flagging from variant call clusters
@@ -566,13 +505,6 @@ _CONFIG_PARAM_LIST: list[_ConfigParamElement] = [
     _ConfigParamElement(
         'inv_max', 'int', 0, min=0, description='Maximum inversion size. Unlimited inversion size if value is 0.'
     ),
-    # ConfigParamElement(
-    #     'inv_inner', 'str', 'core',
-    #     allowed={'core', 'none', 'full'}, to_lower=True,
-    #     description='Filter variants inside the inverted core (no flanking repeats) inversions if "core", full '
-    #                 'inversion including repeats if "full", and do not filter if "none".',
-    #     advanced=True
-    # ),
 
     _ConfigParamElement(
         'inv_region_limit', 'int', const.INV_REGION_LIMIT,
@@ -640,7 +572,7 @@ _CONFIG_PARAM_LIST: list[_ConfigParamElement] = [
         advanced=True
     ),
 
-    # Misc
+    # Troubleshooting and verbosity
     _ConfigParamElement(
         'verbose', 'bool', default=False,
         description='Verbose output.'

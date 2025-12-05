@@ -5,10 +5,6 @@ from typing import Any
 __all__ = [
     'FILTER_REASON',
     'DEFAULT_MIN_ANCHOR_SCORE',
-    'MERGE_PARAM_INSDEL',
-    'MERGE_PARAM_INV',
-    'MERGE_PARAM_SNV',
-    'MERGE_PARAM_DEFAULT',
     'DEFAULT_LG_OFF_GAP_MULT',
     'DEFAULT_LG_GAP_SCALE',
     'DEFAULT_LG_SMOOTH_SEGMENTS',
@@ -29,53 +25,28 @@ __all__ = [
 
 
 #
-# Filters
-#
-
-# Explanations for filter codes
-FILTER_REASON: dict[str, str] = {
-    'LCALIGN': 'Variant inside a low-confidence alignment record',
-    'ALIGN': 'Variant inside an alignment record that had a filtered flag (matches 0x700 in alignment flags) or did '
-             'not meet a minimum MAPQ threshold',
-    'DISCORD': 'Discordant with another variant (i.e. small variants inside a deletion)',
-    'INNER': 'Part of a larger variant call (i.e. SNVs and indels inside a duplication or complex event)',
-    'DERIVED': 'A noncanonical variant form derived from another (i.e. DUP derived from an INS variant or DELs and DUPs from complex events)',
-    'VARLEN': 'Variant size out of set bounds (sizes set in the PAV config file)',
-    'TRIMREF': 'Alignment trimming in reference coordinates removed variant',
-    'TRIMQRY': 'Alignment trimming in query coordinates removed variant',
-}
-"""Explanation of filter codes found in alignment and variant records."""
-
-
-#
 # Call parameters
 #
 
 DEFAULT_MIN_ANCHOR_SCORE: str | float = '50bp'
 """Minimum score for anchoring sites in large alignment-truncating SVs (LGSV module)"""
 
-# Default merge for INS/DEL/INV
-MERGE_PARAM_INSDEL: str = 'nr::ro(0.5):szro(0.5,200,2):match'
-"""Default merge for INS/DEL."""
-
-MERGE_PARAM_INV: str = 'nr::ro(0.2)'
-"""Default merge for INV."""
-
-MERGE_PARAM_SNV: str = 'nrsnv::exact'
-"""Default merge for SNV."""
-
-MERGE_PARAM_DEFAULT: dict[str, str] = {
-    'ins': MERGE_PARAM_INSDEL,
-    'del': MERGE_PARAM_INSDEL,
-    'insdel': MERGE_PARAM_INSDEL,
-    'inv': MERGE_PARAM_INV,
-    'snv': MERGE_PARAM_SNV
-}
-"""Default merge parameters by variant type."""
-
 DEFAULT_LG_OFF_GAP_MULT: float = 4.5
+"""
+For large variantns, multiply penalties for gaps inconsistent with their variant types (e.g. DEL around an INS) by
+this factor. A higher number will require cleaner variants for simple variant types (INS, DEL, INV) and push noisier
+breakpoints into complex (CPX) events.
+"""
 
 DEFAULT_LG_GAP_SCALE: float = 0.2
+"""
+Controls how strong anchoring alignments need to be to support large alignment-truncatincg variants. The gap is penalty
+calculated on the number of query bases between the anchors and multiplied by this factor, and if the magnitude of the
+penalty exceeds the magnitude of the anchor score, the two alignments are not allowed to anchor a variant. A number
+less than 1.0 will allow smaller anchors to support larger variants, and a number greater than 1.0 will require stronger
+anchors. 
+"""
+
 
 DEFAULT_LG_SMOOTH_SEGMENTS: float = 0.05
 """
@@ -84,6 +55,14 @@ any segment smaller than 5% of the total SV length is smoothed out (assuming app
 simplifying the annotated structure. Variant calls retain the original segments, so while this creates an
 approximation of the structure for the call, the full structure is not lost.
 """
+
+
+#
+# Align parameters
+#
+
+DEFAULT_ALIGN_TRIM_MAX_DEPTH = 20
+"""Default maximum depth for alignments before applying the DEPTH filter."""
 
 
 #
@@ -144,18 +123,63 @@ available and falls back to "conv" otherwise.
 
 DEFAULT_MERGE_PARAMS: dict[str, list[dict[str, Any]]] = {
     'insdel': [
-        {'ro_min': 0.5, 'match_prop_min': 0.8},
-        {'size_ro_min': 0.8, 'offset_max': 200, 'match_prop_min': 0.8},
-        {'offset_prop_max': 2.0, 'size_ro_min': 0.8, 'match_prop_min': 0.8}
+        {
+            'ro_min': 0.5,
+            'match_prop_min': 0.8,
+            'match_vartype': True,
+        },
+        {
+            'size_ro_min': 0.8,
+            'offset_max': 200,
+            'match_prop_min': 0.8,
+            'match_vartype': True,
+        },
+        {
+            'offset_prop_max': 2.0,
+            'size_ro_min': 0.8,
+            'match_prop_min': 0.8,
+            'match_vartype': True,
+        }
     ],
     'inv': [
-        {'ro_min': 0.2},
+        {
+            'ro_min': 0.2,
+        },
     ],
     'snv': [
-        {'offset_max': 0, 'match_ref': True, 'match_alt': True},
+        {
+            'offset_max': 0,
+            'match_ref': True,
+            'match_alt': True,
+        },
     ],
     'cpx': [
-        {'ro_min': 0.5, 'seg_ro_min': 0.5, 'match_prop_min': 0.8},
+        {
+            'ro_min': 0.5,
+            'seg_ro_min': 0.5,
+            'match_prop_min': 0.8,
+        },
     ]
 }
 """Default parameters for merging haplotypes."""
+
+
+#
+# Filters
+#
+
+# Explanations for filter codes
+FILTER_REASON: dict[str, str] = {
+    'LCALIGN': 'Variant inside a low-confidence alignment record',
+    'ALIGN': 'Variant inside an alignment record that had a filtered flag (matches 0x700 in alignment flags) or did '
+             'not meet a minimum MAPQ threshold',
+    'DISCORD': 'Discordant with another variant (i.e. small variants inside a deletion)',
+    'INNER': 'Part of a larger variant call (i.e. SNVs and indels inside a duplication or complex event)',
+    'DERIVED': 'A noncanonical variant form derived from another (i.e. DUP derived from an INS variant or DELs and DUPs from complex events)',
+    'VARLEN': 'Variant size out of set bounds (sizes set in the PAV config file)',
+    'TRIMREF': 'Alignment trimming in reference coordinates removed variant',
+    'TRIMQRY': 'Alignment trimming in query coordinates removed variant',
+    'DEPTH': f'Region was covered by many redundant alignments '
+             f'({DEFAULT_ALIGN_TRIM_MAX_DEPTH} by default, tunable with parameter align_trim_max_depth)'
+}
+"""Explanation of filter codes found in alignment and variant records."""

@@ -7,17 +7,33 @@ __all__ = [
     'DecodeIterator',
     'NullWriter',
     'ResourceReader',
+    'TempDirContainer',
+    'BGZFWriterIO',
 ]
 
+import codecs
+from collections.abc import Mapping
 import gzip
 import importlib.resources
+import io
 import os
-import pathlib
+from pathlib import Path
 import pysam
 import subprocess
+import tempfile
 from types import TracebackType
-from typing import IO, BinaryIO, Iterator, TextIO
+from typing import (
+    AnyStr,
+    BinaryIO,
+    IO,
+    Iterator,
+    List,
+    Optional,
+    Self,
+    TextIO,
+)
 
+import Bio.bgzf
 
 class PlainOrGzFile:
     """Read a plain or a gzipped file using context guard.
@@ -317,14 +333,14 @@ class ResourceReader(object):
     :ivar resource_type: "package" to locate a package resource, or "filesystem" to search the filesystem.
     :ivar text_mode: If True, open files in text mode, otherwise, open in binary mode.
     """
-    anchor: str | pathlib.Path
+    anchor: str | Path
     name: str
     resource_type: str
     text_mode: bool
 
     def __init__(
             self,
-            anchor: str | pathlib.Path,
+            anchor: str | Path,
             name: str,
             resource_type: str = 'package',
             text_mode: bool = True
@@ -352,7 +368,7 @@ class ResourceReader(object):
                 self.file_handle = importlib.resources.open_binary(self.anchor, self.name)
 
         elif self.resource_type == 'filesystem':
-            self.file_handle = open(pathlib.Path(self.anchor) / self.name, 'r' + ('t' if self.text_mode else 'b'))
+            self.file_handle = open(Path(self.anchor) / self.name, 'r' + ('t' if self.text_mode else 'b'))
 
         else:
             raise ValueError(f'Unknown resource type: {self.resource_type}')
@@ -369,3 +385,312 @@ class ResourceReader(object):
 
         self.file_handle.close()
         self.file_handle = None
+
+
+class TempDirContainer(Mapping[int, Path]):
+    """A container for temporary files.
+
+    Implements a context guard for temporary files grouped in a temporary directory.
+
+    Each call to `next()` returns a new temporary file name created within the temporary directory.
+    Each temporary file is stored in order, which is returned in order through iteration and
+    through `__getitem__()` with integer indices (including slices and iterables of index values).
+    """
+
+    def __init__(
+            self,
+            temp_dir: Optional[str | Path] = None,
+            prefix: Optional[str] = None,
+            suffix: Optional[str] = None,
+            rel_sys: bool = False
+    ) -> None:
+        """Create a temporary directory container.
+
+        :param temp_dir: Directory name for temporary files. If None, uses the system temporary directory.
+        :param prefix: Directory prefix.
+        :param suffix: Directory suffix.
+        :param rel_sys: If True, make `dir` relative to the system temporary directory.
+        """
+        if temp_dir is None:
+            temp_dir = Path(tempfile.gettempdir())
+        elif rel_sys:
+            temp_dir = Path(tempfile.gettempdir()) / Path(temp_dir)
+        else:
+            temp_dir = Path(temp_dir)
+
+        self.temp_dir = Path(temp_dir)
+        self.prefix = str(prefix) if prefix is not None else None
+        self.suffix = str(suffix) if suffix is not None else None
+
+        self._files: Optional[list[Path]] = None
+        self._dir_path: Optional[Path] = None
+
+    @property
+    def path(self) -> Path:
+        if self._dir_path is None:
+            raise RuntimeError('TempDirContainer: Not entered context')
+
+        return self._dir_path
+
+    @property
+    def files(self) -> list[Path]:
+        if self._files is None:
+            raise RuntimeError('TempDirContainer: Not entered context')
+
+        return [file for file in self._files]
+
+    def next(
+            self,
+            prefix: Optional[str] = None,
+            suffix: Optional[str] = None,
+    ) -> Path:
+        """
+        Get a new temporary filename in this temp directory.
+
+        :return: Path for filename.
+        """
+        if self._dir_path is None:
+            raise RuntimeError('TempDirContainer: Not entered context')
+
+        temp_file = tempfile.NamedTemporaryFile(
+            dir=self._dir_path, prefix=prefix, suffix=suffix
+        )
+        temp_file_path = Path(temp_file.name)
+
+        temp_file.close()
+
+        temp_file_path.unlink(missing_ok=True)
+
+        self._files.append(temp_file_path)
+
+        return temp_file_path
+
+    def path_index(self, path: object) -> Optional[int]:
+        if self._dir_path is None:
+            raise RuntimeError('TempDirContainer: Not entered context')
+
+        if not isinstance(path, Path):
+            return None
+
+        path = path.resolve()
+
+        for i in range(len(self._files)):
+            if path == self._files[i].resolve():
+                return i
+
+        return None
+
+    def clear(
+            self,
+            n: Optional[int] = None
+    ) -> None:
+        """Clear temporary files, oldest first.
+
+        Removes temporary files from the oldest to the newest. The temporary directory stays open.
+
+        :param n: Number of files to clear, oldest first. If `None`, clears all files. If n is negative, then remove all
+            files except the newest abs(n) files.
+        """
+        if self._dir_path is None:
+            raise RuntimeError('TempDirContainer: Not entered context')
+
+        if n is None:
+            n = len(self._files)
+        elif n < 0:
+            n = len(self._files) + n
+
+            if n <= 0:
+                return
+        else:
+            n = max(n, len(self._files))
+
+        for i in range(n):
+            self._files[i].unlink()
+
+        self._files = self._files[n:]
+
+    def __len__(self) -> int:
+        if self._dir_path is None:
+            raise RuntimeError('TempDirContainer: Not entered context')
+
+        return len(self._files)
+
+    def __iter__(self):
+        if self._dir_path is None:
+            raise RuntimeError('TempDirContainer: Not entered context')
+
+        return iter([i for i in range(len(self._files))])
+
+    def __getitem__(
+            self,
+            key: int
+    ) -> Path | list[Path]:
+        if self._dir_path is None:
+            raise RuntimeError('TempDirContainer: Not entered context')
+
+        if isinstance(key, slice):
+            return [
+                self._files[i] for i in range(*key.indices(len(self)))
+            ]
+
+        if isinstance(key, int):
+            try:
+                return self._files[key]
+            except IndexError:
+                raise KeyError(f'TempDirContainer: Index out of bounds: {key}')
+
+        try:
+            return [
+                self._files[i] for i in key
+            ]
+        except KeyError:
+            raise KeyError(f'TempDirContainer: Index out of bounds: {key}')
+
+
+    def __enter__(self) -> Self:
+        if self._dir_path is not None:
+            raise RuntimeError(f'TempDirContainer: Entered context twice: Existing directory="{str(self._dir_path)}"')
+
+        self.temp_dir.mkdir(parents=True, exist_ok=True)
+
+        self._dir_path = Path(tempfile.mkdtemp(dir=self.temp_dir, prefix=self.prefix, suffix=self.suffix))
+        self._files = []
+
+        return self
+
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        if self._dir_path is None:
+            return
+
+        for temp_file_path in self._files:
+            temp_file_path.unlink(missing_ok=True)
+
+        self._files = []
+
+        self._dir_path.rmdir()
+
+        self._files = None
+        self._dir_path = None
+
+
+class BGZFWriterIO(IO[bytes]):
+    """A BGZFWriter IO compatible wrapper that fixes bugs in the BGZF writer."""
+    file_path: Path
+
+    def __init__(
+            self,
+            filename: str | Path,
+            encoding: str = 'utf-8',
+    ) -> None:
+        self.file_path = Path(filename)
+        self._bgzf_file = None
+        self._mode = 'wb'
+        self._encoding = encoding
+
+        # Raises an exception if the encoding is unknown
+        codecs.lookup(self._encoding)
+
+    def __enter__(self) -> Self:
+        if self._bgzf_file is not None:
+            raise IOError(f'Cannot open BGZF File: Already open')
+
+        self._bgzf_file = Bio.bgzf.BgzfWriter(self.file_path, self._mode)
+        return self
+
+    def __exit__(self, exc_type, exc_val, exc_tb) -> None:
+        self.close()
+
+    def close(self) -> None:
+        if self._bgzf_file is None:
+            return
+
+        self._bgzf_file.close()
+        self._bgzf_file = None
+
+    def fileno(self) -> int:
+        if self._bgzf_file is None:
+            raise ValueError(f'Fileno on a closed BGZF file')
+
+        return self._bgzf_file.fileno()
+
+    def flush(self) -> None:
+        if self._bgzf_file is None:
+            raise ValueError('Flush on a closed BGZF file')
+
+        self._bgzf_file.flush()
+
+    def isatty(self) -> bool:
+        if self._bgzf_file is None:
+            raise ValueError(f'Isatty on a closed BGZF file')
+
+        return self._bgzf_file.isatty()
+
+    def seekable(self) -> bool:
+        return False
+        # if self._bgzf_file is None:
+        #     raise ValueError(f'Seekable on a closed BGZF file')
+        #
+        # return self._bgzf_file.seekable()
+
+    def tell(self) -> int:
+        if self._bgzf_file is None:
+            raise ValueError(f'Tell on a closed BGZF file')
+
+        return self._bgzf_file.tell()
+
+    def write(
+            self, s: str | bytes,
+    ) -> int:
+        if self._bgzf_file is None:
+            raise ValueError(f'Write to a closed BGZF file')
+
+        if isinstance(s, str):
+            s = s.encode(self._encoding)
+
+        elif not isinstance(s, bytes):
+            raise TypeError('BGZFWriterIO.write() argument must be str or bytes')
+
+        # Bio.bgzf.BgzfWriter.write() returns None, but should not. Write and return the length of the writen bytes.
+        self._bgzf_file.write(s)
+        return len(s)
+
+    @property
+    def closed(self) -> bool:
+        return self._bgzf_file is None
+
+    @property
+    def mode(self) -> str:
+        if self._bgzf_file is None:
+            raise ValueError(f'Mode on a closed BGZF file')
+
+        return self._mode
+
+    @property
+    def name(self) -> str:
+        return str(self.file_path)
+
+    @property
+    def encoding(self) -> str:
+        return self._encoding
+
+    def read(self) -> AnyStr:
+        raise NotImplementedError('BGZF writer is write-only')
+
+    def readline(self) -> AnyStr:
+        raise NotImplementedError('BGZF writer is write-only')
+
+    def readlines(self) -> list[AnyStr]:
+        raise NotImplementedError('BGZF writer is write-only')
+
+    def seek(self, offset: int, whence: int = 0) -> int:
+        raise NotImplementedError('BGZF writer is not seekable')
+
+    def truncate(self, size: int = None) -> int:
+        raise NotImplementedError('BGZF writer is not seekable')
+
+    def writable(self) -> bool:
+        return True
+
+    def writelines(self, lines: List[str | bytes]) -> None:
+        for line in lines:
+            self.write(line)

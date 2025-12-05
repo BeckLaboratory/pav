@@ -1,6 +1,6 @@
 """PAV Python library routines."""
 
-__version__ = '3.0.0.dev12'
+__version__ = '3.0.0.dev13'
 
 __all__ = [
     'align',
@@ -19,6 +19,7 @@ __all__ = [
     'schema',
     'seq',
     'util',
+    'vcf',
 ]
 
 __license__ = 'MIT License'

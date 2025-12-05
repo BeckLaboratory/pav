@@ -327,6 +327,8 @@ def align_depth_table(
     if not retain_filtered:
         df = df.filter(pl.col('filter').list.len() == 0)
 
+    df = df.filter(col_end > col_pos)
+
     # Get depth per chromosome
     chrom_list = df.select(col_chrom).unique().collect().to_series().sort().to_list()
 

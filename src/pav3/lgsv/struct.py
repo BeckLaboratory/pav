@@ -426,11 +426,11 @@ def qry_trace_str(
 
             if row['chrom'] != last_chrom:
                 last_chrom = row['chrom']
-                struct_list.append(f'TSCHR[{last_chrom}:{row["pos"]:,}({row["strand"]})]')
+                struct_list.append(f'TSCHR[{last_chrom}-{row["pos"]:,}({row["strand"]})]')
             else:
                 struct_list.append(f'TS[{row["pos"] - last_pos:,}({row["strand"]})]')
 
-            struct_list.append(f'DUP[{row["len_ref"]:,}:{row["len_qry"]:,}({row["strand"]})]')
+            struct_list.append(f'DUP[{row["len_ref"]:,}-{row["len_qry"]:,}({row["strand"]})]')
 
         else:
             struct_list.append(f'INS[{row["len_qry"]:,}({row["strand"]})]')
@@ -443,7 +443,7 @@ def qry_trace_str(
     else:
         struct_list.append(f'TS[{row["pos"] - last_pos:,}({row["strand"]})]')
 
-    return ';'.join(struct_list)
+    return ':'.join(struct_list)
 
 
 def ref_trace_str(
