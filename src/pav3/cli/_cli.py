@@ -9,6 +9,7 @@ from typing import Any, Optional
 
 from ._subcommand_license import _add_subparser_license, subcommand_license
 from ._subcommand_call import _add_subparser_call, subcommand_call
+from ._subcommand_batch import _add_subparser_batch, subcommand_batch
 from ._common_opt import _add_opt_version
 
 def parse_arguments(
@@ -40,6 +41,7 @@ def parse_arguments(
 
     # Command: call
     _add_subparser_call(subparsers)
+    _add_subparser_batch(subparsers)
     _add_subparser_license(subparsers)
 
     # Parse
@@ -68,6 +70,14 @@ def main(
             **{
                 attr: getattr(args, attr)
                     for attr in list(inspect.signature(subcommand_call).parameters.keys())
+            }
+        )
+
+    if args.subcommand == 'batch':
+        return subcommand_batch(
+            **{
+                attr: getattr(args, attr)
+                    for attr in list(inspect.signature(subcommand_batch).parameters.keys())
             }
         )
 

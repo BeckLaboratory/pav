@@ -13,7 +13,7 @@ from ._common_opt import (
     _add_opt_version,
 )
 
-def subcommand_call(
+def subcommand_batch(
         targets: Optional[list[str]],
         config: Optional[str],
         profile: Optional[str],
@@ -26,20 +26,8 @@ def subcommand_call(
         no_temp: bool = False,
 ) -> int:
 
-    print(
-        '\n'
-        'WARNING: Use "pav3 batch" to run PAV from a table of assemblies.\n'
-        'WARNING: "pav3 call" will be for single-samples in a future version.\n'
-        '\n'
-        'Running "pav3 batch"...'
-        '\n'
-    )
-
-    import time
-    time.sleep(5)
-
     if debug:
-        print('PAV command: call')
+        print('PAV command: batch')
         print(f'\t* targets: {targets}')
         print(f'\t* config: {config}')
         print(f'\t* profile: {profile}')
@@ -120,70 +108,70 @@ def subcommand_call(
     return 0
 
 
-def _add_subparser_call(
+def _add_subparser_batch(
         subparsers,
 ) -> argparse.ArgumentParser:
-    """Add call subcommand to parser.
+    """Add batch subcommand to parser.
 
     :param subparsers: Subparser object.
 
     :returns: Configured subparser.
     """
 
-    parser_call = subparsers.add_parser(
-        'call',
-        description=f'Call variants from assemblies',
-        help='Call variants.'
+    parser_batch = subparsers.add_parser(
+        'batch',
+        description=f'Call variants on all assemblies in an assembly table.',
+        help='Call variants from assembly table.'
     )
 
-    _add_opt_version(parser_call)
-    _add_opt_debug(parser_call)
-    _add_opt_verbose(parser_call)
+    _add_opt_version(parser_batch)
+    _add_opt_debug(parser_batch)
+    _add_opt_verbose(parser_batch)
 
-    parser_call.add_argument(
+    parser_batch.add_argument(
         '--config',
         type=str,
         help='Specify a JSON configuration file used by all samples. Must include "reference".',
     )
 
-    parser_call.add_argument(
+    parser_batch.add_argument(
         '--profile', '-p',
         type=str,
         help='Path to a Snakemake profile for setting advanced Snakemake options.',
     )
 
-    parser_call.add_argument(
+    parser_batch.add_argument(
         '--dry-run', '--dryrun', '-n',
         action='store_true',
         help='Do not execute, show what would be done.',
     )
 
-    parser_call.add_argument(
+    parser_batch.add_argument(
         '--keep-going', '-k',
         action='store_true',
         help='Continue even if some jobs fail.',
     )
 
-    parser_call.add_argument(
+    parser_batch.add_argument(
         '--force', '-f',
         action='store_true',
         help='Force execution of targets.',
     )
 
-    parser_call.add_argument(
+    parser_batch.add_argument(
         '--no-temp', '--notemp', '--nt',
         action='store_true',
         help='Ignore temporary file declarations (temp files are not automatically removed).',
     )
 
-    parser_call.add_argument(
+    parser_batch.add_argument(
         '--cores', '-c',
         type=str,
         default=None,
         help='Use at most this many cores. If not set or "all", try to use all available cores.',
     )
 
-    parser_call.add_argument(
+    parser_batch.add_argument(
         'targets',
         type=str,
         nargs='*',
@@ -191,4 +179,4 @@ def _add_subparser_call(
     )
 
 
-    return parser_call
+    return parser_batch
