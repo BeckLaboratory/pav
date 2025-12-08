@@ -882,7 +882,12 @@ def reformat_vcf_table(
     """Reformat VCF table to VCF format."""
 
     sample_col_exprs = [
-        pl.col(f'_vcf_sample_{i}').list.join(';').alias(sample)
+        (
+            pl.col(f'_vcf_sample_{i}')
+            .list.eval(  # Replacing semicolons should not be needed, but don't break VCFs if they are present
+                pl.element().str.replace_all(';', ':')
+            )
+        ).list.join(';').alias(sample)
         for i, sample in sample_columns.items()
     ] if sample_columns is not None else []
 
@@ -896,13 +901,16 @@ def reformat_vcf_table(
             pl.col('_vcf_alt').alias('ALT').str.to_uppercase(),
             pl.lit('.').alias('QUAL'),
             pl.col('_vcf_filter').alias('FILTER'),
-            pl.col('_vcf_info').list.join(';').alias('INFO'),
+            (
+                pl.col('_vcf_info')
+                .list.eval(  # Replacing semicolons should not be needed, but don't break VCFs if they are present
+                    pl.element().str.replace_all(';', ':')
+                )
+            ).list.join(';').alias('INFO'),
             pl.col('_vcf_format').list.join(';').alias('FORMAT'),
             *sample_col_exprs,
         )
     )
-
-    return df
 
 
 def get_hap_source(

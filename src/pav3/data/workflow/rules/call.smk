@@ -49,6 +49,7 @@ rule call_vcf:
     output:
         vcf='{asm_name}.vcf.gz',
         tbi='{asm_name}.vcf.gz.csi',
+    threads: POLARS_MAX_THREADS
     run:
 
         pattern_var = 'results/{asm_name}/call/call_{vartype}.parquet'
