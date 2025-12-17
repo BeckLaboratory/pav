@@ -20,6 +20,7 @@ __all__ = [
     'seq',
     'util',
     'vcf',
+    'workflow',
 ]
 
 __license__ = 'MIT License'

@@ -340,6 +340,7 @@ def get_inv_row(
         'qry_id': region_qry_inner.chrom,
         'qry_pos': region_qry_inner.pos,
         'qry_end': region_qry_inner.end,
+        'qry_rev': region_ref_inner.is_rev,
         'outer_ref': region_ref_outer.as_dict(),
         'outer_qry': region_qry_outer.as_dict()
     }

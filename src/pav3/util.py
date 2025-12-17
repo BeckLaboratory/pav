@@ -2,13 +2,14 @@
 
 __all__ = [
     'as_bool',
-    'collapse_to_set'
+    'collapse_to_set',
+    'init_logger',
 ]
 
+import logging
 from typing import Any, Callable, Iterable, Optional
 
-import polars as pl
-
+import agglovar
 
 def as_bool(
         val: Any,
@@ -80,3 +81,43 @@ def collapse_to_set(
 def _ident(x):
     """Parameter identity function."""
     return x
+
+def init_logger(
+        level: Optional[int | str] = logging.INFO,
+        console_format: str = '[%(asctime)s]: %(levelname)s (%(name)s): %(message)s',
+        force: bool = False,
+) -> None:
+    """Initialize the PAV root logger.
+
+    :param level: Logging level by name or integer.
+    :console_format: Format for console logger.
+    :force: If the PAV root logger already has a handler, then stop. Otherwise, clear handlers.
+    """
+
+    root_logger = logging.getLogger(__name__.split('.')[0])
+    root_logger_agg = logging.getLogger(agglovar.__name__)
+
+    if root_logger.handlers:
+        if not force:
+            return
+
+        for handler in root_logger.handlers:
+            root_logger.removeHandler(handler)
+
+    if level is None:
+        level = logging.INFO
+
+    root_logger.setLevel(level)
+    root_logger_agg.setLevel(level)
+
+    # Add console handler
+    console_handler = logging.StreamHandler()
+    console_handler.setFormatter(
+        logging.Formatter(
+            console_format,
+            datefmt='%Y-%m-%d %H:%M:%S'
+        )
+    )
+
+    root_logger.addHandler(console_handler)
+    root_logger_agg.addHandler(console_handler)

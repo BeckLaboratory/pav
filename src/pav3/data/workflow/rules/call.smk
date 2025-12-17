@@ -7,15 +7,14 @@ Identifies each variant type using multiple sources for calls:
 """
 
 import collections
-import itertools
 import os
+from pathlib import Path
 import tarfile
 import tempfile
 import traceback
 
 import agglovar
 import polars as pl
-import pysam
 import pysam.bcftools
 
 import pav3
@@ -30,6 +29,8 @@ global temp
 # Rules
 #
 
+CALL_VCF_VARTYPES = ('insdel', 'inv', 'snv', 'cpx', 'dup')
+
 # Generate the VCF
 rule call_vcf:
     input:
@@ -37,7 +38,7 @@ rule call_vcf:
             'results/{asm_name}/call/call_{vartype}.parquet',
             ASM_TABLE, PAV_CONFIG,
             asm_name=wildcards.asm_name,
-            vartype=('insdel', 'inv', 'snv', 'cpx')
+            vartype=CALL_VCF_VARTYPES,
         ),
         callable_ref=lambda wildcards: pav3.pipeline.expand_pattern(
             'results/{asm_name}/call_hap/callable_ref_{hap}.parquet',
@@ -48,7 +49,7 @@ rule call_vcf:
         ref_info='data/ref/ref_info.parquet',
     output:
         vcf='{asm_name}.vcf.gz',
-        tbi='{asm_name}.vcf.gz.csi',
+        csi='{asm_name}.vcf.gz.csi',
     threads: POLARS_MAX_THREADS
     run:
 
@@ -84,7 +85,7 @@ rule call_vcf:
         with pav3.io.TempDirContainer(
                 prefix=f'pav_vcf_{wildcards.asm_name}_'
         ) as temp_file_container:
-            for vartype in ('insdel', 'inv', 'snv', 'cpx'):
+            for vartype in CALL_VCF_VARTYPES:
 
                 # Read variants
                 df = (
@@ -178,7 +179,7 @@ rule call_vcf:
                     separator='\t',
                 )
 
-        pysam.bcftools.index(output.vcf)
+        pysam.bcftools.index('--csi', output.vcf)
 
 
 rule call_tables_callable:
@@ -245,7 +246,7 @@ rule call_tables_all:
         pq_merge=lambda wildcards: pav3.pipeline.expand_pattern(
             'results/{asm_name}/call/call_{vartype}.parquet',
             ASM_TABLE, PAV_CONFIG,
-            vartype=('insdel', 'inv', 'snv', 'cpx')
+            vartype=('insdel', 'inv', 'snv', 'cpx', 'dup')
         )
 
 # Merge one sample and variant type
@@ -262,124 +263,29 @@ rule call_tables:
         pq='results/{asm_name}/call/call_{vartype}.parquet'
     threads: POLARS_MAX_THREADS
     run:
-
-        pav_params = pav3.params.PavParams(wildcards.asm_name, PAV_CONFIG, ASM_TABLE)
-
-        # Get merge params
-        try:
-            merge_params = pav3.const.DEFAULT_MERGE_PARAMS[wildcards.vartype]
-        except KeyError:
-            raise ValueError(f'No merge parameters for variant type: {wildcards.vartype}')
-
-        pairwise_join = agglovar.pairwise.overlap.PairwiseOverlap.from_definiton(
-            merge_params
-        )
-
-        merge_runner = agglovar.merge.cumulative.MergeCumulative(
-            pairwise_join,
-            lead_strategy=agglovar.merge.cumulative.LeadStrategy.LEFT,
-        )
-
-        # Get chromosome list
         with open(input.ref_fofn) as in_file:
-            ref_filename = next(in_file).strip()
+            ref_path = Path(next(in_file).strip())
 
-        with open(ref_filename + '.fai') as in_file:
-            chrom_list = sorted([
-                chrom for chrom in (
-                    line.split('\t')[0].strip() for line in in_file
-                ) if chrom
-            ])
-
-        # Get filters for variant type
-        if wildcards.vartype == 'insdel':
-            vartype_list = ['INS', 'DEL']
-        else:
-            vartype_list = [None,]
-
-        with pav3.io.TempDirContainer(
-                prefix=f'pav_call_tables_{wildcards.asm_name}_{wildcards.vartype}_'
-        ) as temp_file_container:
-
-            concat_chrom_list = []
-
-            for chrom in chrom_list:
-                if pav_params.verbose:
-                    print(f'call_tables (asm_name={wildcards.asm_name}, vartype={wildcards.vartype}): Merging chrom "{chrom}"')
-
-                df_chrom_list = []
-
-                for vartype, filter_pass in itertools.product(vartype_list, (True, False)):
-                    # print(f'{vartype} - {filter_pass}')
-
-                    filters = [pl.col('chrom') == chrom]
-
-                    if filter_pass:
-                        filters.append(pl.col('filter').list.len() == 0)
-                    else:
-                        filters.append(pl.col('filter').list.len() > 0)
-
-                    if vartype != None:
-                        filters.append(pl.col('vartype') == vartype)
-
-                    next_filename = temp_file_container.next(
-                        prefix=f'split_{chrom}_{vartype if vartype else wildcards.vartype}_{filter}_'
-                    )
-
-                    df_chrom_list.append(next_filename)
-
-                    (
-                        merge_runner(
-                            (
-                                (
-                                    pl.scan_parquet(
-                                        f'results/{wildcards.asm_name}/call_hap/call_{wildcards.vartype}_{hap}.parquet'
-                                    )
-                                    .with_row_index('_index')
-                                    .filter(*filters)
-                                    .with_columns(
-                                        pl.col('id').str.replace(r'\..*$', '').alias('_id_base')
-                                    )
-                                    .unique('_id_base', keep='first')
-                                    .drop('_id_base')
-                                    ,
-                                    f'{wildcards.asm_name}-{hap}',
-                                ) for hap in pav3.pipeline.get_hap_list(wildcards.asm_name, ASM_TABLE)
-                            ),
-                            retain_index=True
-                        )
-                        .with_columns(agglovar.util.var.id_version_expr())
-                        .sort('chrom', 'pos', 'end', 'id')
-                        .sink_parquet(next_filename)
-                    )
-
-                # Merge and sort this chromosome
-                chrom_next_filename = temp_file_container.next(
-                    prefix=f'concat_{chrom}_'
-                )
-
-                concat_chrom_list.append(chrom_next_filename)
-
-                (
-                    pl.concat([
-                        pl.scan_parquet(filename)
-                        for filename in df_chrom_list
-                    ])
-                    .sort('chrom', 'pos', 'end', 'id')
-                    .sink_parquet(chrom_next_filename)
-                )
-
-            # Merge all
-            if pav_params.verbose:
-                print(f'call_tables (asm_name={wildcards.asm_name}, vartype={wildcards.vartype}): Concat chroms')
-
+        callsets = (
             (
-                pl.concat([
-                    pl.scan_parquet(filename)
-                    for filename in concat_chrom_list
-                ])
-                .sink_parquet(output.pq)
+                pl.scan_parquet(
+                    f'results/{wildcards.asm_name}/call_hap/call_{wildcards.vartype}_{hap}.parquet'
+                ),
+                f'{wildcards.asm_name}-{hap}',
             )
+            for hap in pav3.pipeline.get_hap_list(wildcards.asm_name, ASM_TABLE)
+        )
+
+        pav3.workflow.call.merge_haplotypes(
+            vartype=wildcards.vartype,
+            callsets=callsets,
+            ref_path=ref_path,
+            out_path=Path(output.pq),
+            merge_params=None,
+            merge_name=f'{wildcards.asm_name}_{wildcards.vartype}',
+            temp_file_container=None,
+        )
+
 
 # Integrate variant sources
 rule call_integrate_sources:
@@ -604,7 +510,7 @@ rule call_integrate_sources:
 
                 df = (
                     df
-                    .sort(['chrom', 'pos', 'end', 'id'])
+                    .sort(pav3.call.expr.sort_expr())
                     .with_columns(pl.col('filter').list.unique().list.sort())
                     .select([col for col in pav3.schema.VARIANT.keys() if col in col_names])
                 )
@@ -649,7 +555,7 @@ rule call_integrate_sources:
         (
             df
             .with_columns(pl.col('filter').list.unique().sort())
-            .sort(['chrom', 'pos', 'end', 'id'])
+            .sort(pav3.call.expr.sort_expr())
             .select([col for col in pav3.schema.VARIANT.keys() if col in df.collect_schema().names()])
             .sink_parquet(output.dup)
         )
@@ -700,6 +606,8 @@ rule call_inter:
         score_model = pav3.align.score.get_score_model(pav_params.align_score_model)
 
         min_anchor_score = pav3.lgsv.chain.get_min_anchor_score(pav_params.min_anchor_score, score_model)
+
+        sort_expr = pav3.call.expr.sort_expr(has_id=False)
 
         # Read alignments
         df_align_qry = pl.scan_parquet(input.align_qry)
@@ -842,7 +750,7 @@ rule call_inter:
                 )
                 .lazy()
                 .select(schema_insdel.keys())
-                .sort(['chrom', 'pos', 'end', 'qry_id', 'qry_pos', 'qry_end'])
+                .sort(sort_expr)
                 .sink_parquet(output.pq_insdel)
             )
 
@@ -853,7 +761,7 @@ rule call_inter:
                 )
                 .lazy()
                 .select(schema_inv.keys())
-                .sort(['chrom', 'pos', 'end', 'qry_id', 'qry_pos', 'qry_end'])
+                .sort(sort_expr)
                 .sink_parquet(output.pq_inv)
             )
 
@@ -863,7 +771,7 @@ rule call_inter:
                 )
                 .lazy()
                 .select(schema_cpx.keys())
-                .sort(['chrom', 'pos', 'end', 'qry_id', 'qry_pos', 'qry_end'])
+                .sort(sort_expr)
                 .sink_parquet(output.pq_cpx)
             )
 

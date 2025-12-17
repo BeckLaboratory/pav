@@ -105,7 +105,7 @@ rule align_tables:
         align_head='results/{asm_name}/align/{hap}/align_headers.gz'
     benchmark:
         'data/benchmarks/align/align_tables/align_tables_{asm_name}_{hap}.txt'
-    threads: POLARS_MAX_THREADS
+    threads: 1
     run:
 
         # Get parameters

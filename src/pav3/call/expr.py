@@ -45,6 +45,17 @@ def id_nonsnv() -> pl.Expr:
     )
 
 
+def sort_expr(has_id: bool = True) -> list[pl.Expr]:
+    """Arguments to `sort()` for variant tables."""
+    return [
+        pl.col('chrom'),
+        pl.col('pos'),
+        pl.col('end'),
+        pl.col('filter').list.len(),
+    ] + (
+        [pl.col('id')] if has_id else []
+    )
+
 # def id() -> pl.Expr:
 #     """Generate variant IDs for any variant type.
 #

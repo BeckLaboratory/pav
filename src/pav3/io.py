@@ -402,7 +402,7 @@ class TempDirContainer(Mapping[int, Path]):
             temp_dir: Optional[str | Path] = None,
             prefix: Optional[str] = None,
             suffix: Optional[str] = None,
-            rel_sys: bool = False
+            rel_sys: bool = False,
     ) -> None:
         """Create a temporary directory container.
 
@@ -424,6 +424,7 @@ class TempDirContainer(Mapping[int, Path]):
 
         self._files: Optional[list[Path]] = None
         self._dir_path: Optional[Path] = None
+        self._depth: int = 0  # Depth of context guard (allows re-entrant behavior)
 
     @property
     def path(self) -> Path:
@@ -551,10 +552,15 @@ class TempDirContainer(Mapping[int, Path]):
         if self._dir_path is not None:
             raise RuntimeError(f'TempDirContainer: Entered context twice: Existing directory="{str(self._dir_path)}"')
 
-        self.temp_dir.mkdir(parents=True, exist_ok=True)
+        if self._depth == 0:
+            self.temp_dir.mkdir(parents=True, exist_ok=True)
 
-        self._dir_path = Path(tempfile.mkdtemp(dir=self.temp_dir, prefix=self.prefix, suffix=self.suffix))
-        self._files = []
+            self._dir_path = Path(tempfile.mkdtemp(dir=self.temp_dir, prefix=self.prefix, suffix=self.suffix))
+            self._files = []
+
+        self._depth += 1
+
+        assert self._dir_path is not None
 
         return self
 
@@ -562,15 +568,21 @@ class TempDirContainer(Mapping[int, Path]):
         if self._dir_path is None:
             return
 
-        for temp_file_path in self._files:
-            temp_file_path.unlink(missing_ok=True)
+        assert self._depth > 0
 
-        self._files = []
+        if self._depth == 1:
 
-        self._dir_path.rmdir()
+            for temp_file_path in self._files:
+                temp_file_path.unlink(missing_ok=True)
 
-        self._files = None
-        self._dir_path = None
+            self._files = []
+
+            self._dir_path.rmdir()
+
+            self._files = None
+            self._dir_path = None
+
+        self._depth -= 1
 
 
 class BGZFWriterIO(IO[bytes]):

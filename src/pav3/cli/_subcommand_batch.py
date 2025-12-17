@@ -1,5 +1,6 @@
 """Call subcommand."""
 
+import logging
 import argparse
 import importlib.resources
 import pathlib
@@ -13,11 +14,13 @@ from ._common_opt import (
     _add_opt_version,
 )
 
+logger = logging.getLogger(__name__)
+
 def subcommand_batch(
         targets: Optional[list[str]],
         config: Optional[str],
         profile: Optional[str],
-        verbose: bool = False,
+        verbose: bool | str | int = 'INFO',
         debug: bool = False,
         cores: Optional[str | int] = None,
         dry_run: bool = False,

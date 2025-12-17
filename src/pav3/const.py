@@ -159,7 +159,12 @@ DEFAULT_MERGE_PARAMS: dict[str, list[dict[str, Any]]] = {
             'seg_ro_min': 0.5,
             'match_prop_min': 0.8,
         },
-    ]
+    ],
+    'dup': [
+        {
+            'ro_min': 0.5,
+        },
+    ],
 }
 """Default parameters for merging haplotypes."""
 

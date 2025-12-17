@@ -100,7 +100,8 @@ def variant_tables_snv_insdel(
     if temp_dir_name is not None and not os.path.isdir(temp_dir_name):
         raise ValueError(f'Temporary directory does not exist or is not a directory: {temp_dir_name}')
 
-    # Temporary schema - Leave align_index as an integer until the end (after align table join)
+    # Temporary schema - Leave align_index as an integer until the end (after align table join) -
+    # then it becomes a list of integers (as defined by the PAV variant table schema).
     build_schema = schema.VARIANT | {'align_index': pl.Int32}
 
     # Create variant tables
@@ -199,6 +200,7 @@ def variant_tables_snv_insdel(
                         # Add variant
                         row_list['snv'].append((
                             pos_ref,
+                            'SNV',
                             align_index,
                             pos_qry,
                             base_ref,
@@ -262,14 +264,13 @@ def variant_tables_snv_insdel(
 
                 # Collect SNV and INS/DEL tables for this alignment record (row)
                 # TODO: Defer chrom and id to chromosome-level variants
-                # TODO: Add qry_rev
                 df_snv = (
                     pl.DataFrame(
                         row_list['snv'],
                         orient='row',
                         schema={
                             key: build_schema[key]
-                            for key in ('pos', 'align_index', 'qry_pos', 'ref', 'alt')
+                            for key in ('pos', 'vartype', 'align_index', 'qry_pos', 'ref', 'alt')
                         }
                     )
                     .lazy()
@@ -322,7 +323,7 @@ def variant_tables_snv_insdel(
                     (
                         df_align
                         .select(
-                            pl.col(['align_index', 'qry_id', 'filter']),
+                            'align_index', 'filter', 'is_rev',
                             pl.col('score').alias('_align_score')
                         )
                     ),
@@ -330,7 +331,8 @@ def variant_tables_snv_insdel(
                     how='left'
                 )
                 .with_columns(  # align_index back to a list
-                    pl.concat_list(['align_index']).alias('align_index')
+                    pl.concat_list(['align_index']).alias('align_index'),
+                    pl.col('is_rev').alias('qry_rev'),
                 )
                 .sort(
                     ['pos', 'alt', '_align_score', 'qry_id', 'qry_pos'],
@@ -348,7 +350,7 @@ def variant_tables_snv_insdel(
                     (
                         df_align
                         .select(
-                            pl.col(['align_index', 'qry_id', 'filter']),
+                            'align_index', 'filter', 'is_rev',
                             pl.col('score').alias('_align_score')
                         )
                     ),
@@ -356,7 +358,8 @@ def variant_tables_snv_insdel(
                     how='left'
                 )
                 .with_columns(  # align_index back to a list
-                    pl.concat_list(['align_index']).alias('align_index')
+                    pl.concat_list(['align_index']).alias('align_index'),
+                    pl.col('is_rev').alias('qry_rev'),
                 )
                 .sort(
                     ['pos', 'end', '_align_score', 'qry_id', 'qry_pos'],
