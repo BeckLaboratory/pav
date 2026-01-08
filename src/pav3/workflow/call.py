@@ -17,6 +17,8 @@ from .. import const
 
 from ..io import TempDirContainer
 
+from ..call.expr import sort_expr
+
 logger = logging.getLogger(__name__)
 
 def merge_haplotypes(
@@ -44,6 +46,8 @@ def merge_haplotypes(
         is used.
     """
     known_vartype = ['ins', 'del', 'insdel', 'snv', 'inv', 'cpx', 'dup']
+
+    merge_sort_expr = sort_expr(has_id=False)
 
     if vartype is None or (vartype := vartype.lower().strip()) not in known_vartype:
         raise ValueError(f'Unknown variant type "{vartype}" (expected one of {", ".join(known_vartype)})')
@@ -102,7 +106,7 @@ def merge_haplotypes(
     if vartype == 'insdel':
         vartype_list = ['INS', 'DEL']
     else:
-        vartype_list = [None,]
+        vartype_list = [vartype.upper(),]
 
     if temp_file_container is None:
         prefix_name = 'pav3_merge_hap'
@@ -118,25 +122,23 @@ def merge_haplotypes(
             df_chrom_list = []
 
             for vartype, filter_pass in itertools.product(vartype_list, (True, False)):
-                logger.debug('%sMerging chromosome %s (pass=%s): ' % (log_prefix, chrom, filter_pass))
+                logger.debug('%sMerging chromosome %s (vartype=%s, pass=%s): ' % (log_prefix, chrom, vartype, filter_pass))
 
                 pre_filter = [
                     pl.col('chrom') == chrom,
+                    pl.col('vartype').str.to_uppercase() == vartype,
                     pl.concat_list(
-                        *(['chrom', 'pos', 'end'] if vartype != 'snv' else ['chrom', 'pos', 'alt'])
-                    ).is_first_distinct()
+                        *(['chrom', 'pos', 'end', 'varlen'] if vartype != 'SNV' else ['chrom', 'pos', 'alt'])
+                    ).is_first_distinct(),
+                    (
+                        pl.col('filter').list.len() == 0
+                        if filter_pass else
+                        pl.col('filter').list.len() > 0
+                    )
                 ]
 
-                if filter_pass:
-                    pre_filter.append(pl.col('filter').list.len() == 0)
-                else:
-                    pre_filter.append(pl.col('filter').list.len() > 0)
-
-                if vartype != None:
-                    pre_filter.append(pl.col('vartype').str.to_uppercase() == vartype.upper())
-
                 next_filename = temp_file_container.next(
-                    prefix=f'split_{chrom}_{vartype if vartype else vartype}_{filter}_'
+                    prefix=f'split_{chrom}_{vartype if vartype else vartype}_{filter_pass}_'
                 )
 
                 df_chrom_list.append(next_filename)
@@ -144,10 +146,11 @@ def merge_haplotypes(
                 (
                     merge_runner(
                         callsets,
+                        retain_index=True,
                         pre_filter=pre_filter,
                     )
+                    .sort(merge_sort_expr)
                     .with_columns(agglovar.util.var.id_version_expr())
-                    .sort('chrom', 'pos', 'end', 'id')
                     .sink_parquet(next_filename)
                 )
 
