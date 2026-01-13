@@ -1,0 +1,23 @@
+field	required	type	name	desc	info
+chrom	TRUE	string	chrom	Reference chromosome	Reference chromosome
+pos	TRUE	uint	chromStart	Start position	Start position
+end	TRUE	uint	chromEnd	End position	End position
+id	TRUE	string	name	Variant ID	Variant ID
+track_score	TRUE	uint	score	Score	Score
+strand	TRUE	char[1]	strand	Strand	Strand
+pos_thick	TRUE	uint	thickStart	Coding region start	Coding region start
+end_thick	TRUE	uint	thickEnd	Coding region end	Coding region end
+color	TRUE	uint	reserved	Hap color	Color by haplotype
+asm_name	FALSE	lstring	asmName	Assembly	Assembly name
+hap	FALSE	lstring	hap	Haplotype	Haplotype
+trim	FALSE	lstring	trim	Align trim	Alignment trim level
+filter	FALSE	lstring	filter	Align filters	Filters applied to this record or empty if record was not filtered
+align_index	FALSE	uint	recordIndex	Record index	Unique index (per haplotype) for each alignment record
+score	FALSE	float	alignScore	Align score	Alignment score assigned by the PAV score model
+score_prop	FALSE	float	alignScoreProp	Align score prop	Proportion of score to maximum possible score
+match_prop	FALSE	float	matchProp	Match prop	Proportion of bases matching in the alignment
+qry_prop	FALSE	float	qryProp	Qry prop	Proportion of the total query sequence aligned in this record
+qry_order	FALSE	uint	qryOrd	Query order	Order of the aligned query segment from the start of the query sequence to the end
+mapq	FALSE	uint	mapq	MAPQ	Mapping quality
+flags	FALSE	uint	alignFlags	Flags	Alignment flags
+qry_region	FALSE	lstring	qryRegion	Query region	Location of this variant in the assembly

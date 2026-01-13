@@ -33,6 +33,7 @@ from .. import schema
 from ..align import op
 
 from ..align.lift import AlignLift
+from ..align.score import ScoreModel, get_score_model
 from ..inv import cluster_table, get_inv_row, try_intra_region
 from ..kde import KdeTruncNorm
 from ..region import Region
@@ -89,6 +90,8 @@ def variant_tables_snv_insdel(
         pav_params = PavParams()
 
     debug = pav_params.debug
+
+    score_model = get_score_model(pav_params.align_score_model)
 
     # Alignment dataframe
     if not isinstance(df_align, pl.LazyFrame):
@@ -314,6 +317,8 @@ def variant_tables_snv_insdel(
                 df_chrom_list['insdel'].append(df_insdel)
 
             # Save chromosome
+            score_snv = score_model.mismatch(1)
+
             df_snv = (
                 pl.concat(df_chrom_list['snv'])
                 .with_columns(
@@ -333,6 +338,7 @@ def variant_tables_snv_insdel(
                 .with_columns(  # align_index back to a list
                     pl.concat_list(['align_index']).alias('align_index'),
                     pl.col('is_rev').alias('qry_rev'),
+                    pl.lit(score_snv).cast(build_schema['var_score']).alias('var_score'),
                 )
                 .sort(
                     ['pos', 'alt', '_align_score', 'qry_id', 'qry_pos'],
@@ -360,6 +366,7 @@ def variant_tables_snv_insdel(
                 .with_columns(  # align_index back to a list
                     pl.concat_list(['align_index']).alias('align_index'),
                     pl.col('is_rev').alias('qry_rev'),
+                    pl.col('varlen').map_elements(score_model.gap).cast(build_schema['var_score']).alias('var_score'),
                 )
                 .sort(
                     ['pos', 'end', '_align_score', 'qry_id', 'qry_pos'],
@@ -397,6 +404,7 @@ def variant_tables_inv(
         df_ref_fai: pl.DataFrame,
         df_qry_fai: pl.DataFrame,
         pav_params: Optional[PavParams] = None,
+        score_model: Optional[ScoreModel | str] = None,
 ) -> pl.DataFrame:
     """Call intra-alignment inversions.
 

@@ -57,7 +57,7 @@ def get_rules_path(rule_file):
 
     if disk_path.is_file():
         return str(disk_path)
-    
+
     # If neither strategy works, raise an error
     raise FileNotFoundError(
         f'Workflow rule file "{rule_file}" not found in package resources '
@@ -163,4 +163,5 @@ include: get_rules_path('pipeline.smk')
 
 include: get_rules_path('align.smk')
 include: get_rules_path('call.smk')
+include: get_rules_path('tracks.smk')
 include: get_rules_path('data.smk')

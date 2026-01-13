@@ -28,6 +28,11 @@ dependencies = [
 [project.scripts]
 pav3 = "pav3.cli:main"
 
+[project.optional-dependencies]
+fig = [
+    "matplotlib>=3.10.8",
+]
+
 [pav.urls]
 Homepage = "https://github.com/BeckLaboratory/pav"
 Documentation = "https://pav3.readthedocs.io"
@@ -82,10 +87,6 @@ dev = [
     "sphinx-rtd-theme>=3.0.2",
     "tox>=4.30.2",
 ]
-plot = [
-    "matplotlib>=3.10.6",
-]
-
 
 [build-system]
 requires = ["setuptools"]

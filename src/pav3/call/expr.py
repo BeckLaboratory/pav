@@ -11,7 +11,7 @@ import polars as pl
 def id_snv() -> pl.Expr:
     """Generate SNV IDs.
 
-    :returns: Expression for generating the ID column.
+    :return: Expression for generating the ID column.
     """
     return (
         pl.concat_str(
@@ -29,7 +29,7 @@ def id_snv() -> pl.Expr:
 def id_nonsnv() -> pl.Expr:
     """Generate non-SNV IDs.
 
-    :returns: Expression for generating the ID column.
+    :return: Expression for generating the ID column.
     """
     return (
         pl.concat_str(
@@ -46,7 +46,10 @@ def id_nonsnv() -> pl.Expr:
 
 
 def sort_expr(has_id: bool = True) -> list[pl.Expr]:
-    """Arguments to `sort()` for variant tables."""
+    """Arguments to `sort()` for variant tables.
+
+    :return: Sort expression.
+    """
     return [
         pl.col('chrom'),
         pl.col('pos'),
@@ -56,10 +59,19 @@ def sort_expr(has_id: bool = True) -> list[pl.Expr]:
         [pl.col('id')] if has_id else []
     )
 
+def qry_region() -> pl.Expr:
+    """Get query region string from `qry_id`, `qry_pos`, and `qry_end` columns.
+
+    :return: Query region expression.
+    """
+    return pl.concat_str(
+        'qry_id', pl.lit(':'), pl.col('qry_pos') + 1, pl.lit('-'), pl.col('qry_end')
+    ).alias('qry_region')
+
 # def id() -> pl.Expr:
 #     """Generate variant IDs for any variant type.
 #
-#     :returns: ID expression.
+#     :return: ID expression.
 #     """
 #     return (
 #         pl.when(pl.col('vartype').str.to_uppercase() == 'SNV')
