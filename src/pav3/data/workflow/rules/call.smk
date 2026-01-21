@@ -396,7 +396,11 @@ rule call_integrate_sources:
             is_insdel, is_inv, is_snv, is_cpx = (vartype == val for val in ('insdel', 'inv', 'snv', 'cpx'))
 
             # Read variant table
-            df = pl.scan_parquet(input[sourcetype_vartype])
+            df = pav3.call.integrate.set_base_cols(
+                pl.scan_parquet(input[sourcetype_vartype]),
+                sourcetype,
+                vartype,
+            )
 
             # Apply variant length filters
             if is_inv:

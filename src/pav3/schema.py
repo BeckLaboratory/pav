@@ -89,7 +89,6 @@ VARIANT: dict[str, pl.DataType] = {
     'derived': pl.List(pl.String),
     'discord': pl.List(pl.String),
     'inner': pl.List(pl.String),
-    'inv_dup': pl.Boolean,
     'seq': agglovar.schema.VARIANT['seq'],
 }
 """
@@ -165,6 +164,5 @@ Fields:
     * inner: IDs of a variant this variant was inside of. These are typically small variants inside aligned segments
         that are part of a larger variant (i.e. duplicated region of an insertion or complex event). If not empty, then
         "INNER" must also be present in "filter".
-    * inv_dup: DUP variant is inverted relative to the reference. Only be defined for DUP variants (null otherwise).
     * seq: Variant sequence in reference orientation. Null if not defined (never "*" or other placeholders).
 """

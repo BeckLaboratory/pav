@@ -15,8 +15,13 @@ __all__ = [
     'read_assembly_table',
     'expand_fofn',
     'link_fasta',
+    'get_rules_path',
+    'get_pav_config_path',
+    'get_pav_asm_table_path',
+    'get_pav_env_path',
 ]
 
+import importlib.resources
 import itertools
 import os
 from pathlib import Path
@@ -549,7 +554,7 @@ def get_override_config(
 
 
 def read_assembly_table(
-        filename: str,
+        assembly_table_path: Path | str,
         pav_config: Optional[dict[str, Any]] = None
 ) -> pl.DataFrame:
     """Read assembly table.
@@ -577,13 +582,13 @@ def read_assembly_table(
     :raises ValueError: If the table contains no haplotypes.
     :raises FileNotFoundError: If the table file does not exist or is not a regular file.
     """
-    if filename is None:
+    if assembly_table_path is None:
         raise ValueError('Cannot read assembly table: None')
 
-    filename = filename.strip()
+    assembly_table_path = Path(assembly_table_path)
 
-    if not os.path.isfile(filename):
-        raise FileNotFoundError(f'Assembly table file missing or is not a regular file: {filename}')
+    if not assembly_table_path.is_file():
+        raise FileNotFoundError(f'Assembly table file missing or is not a regular file: {assembly_table_path}')
 
     if pav_config is None:
         pav_config = dict()
@@ -591,20 +596,20 @@ def read_assembly_table(
     ignore_cols = set(pav_config.get('ignore_cols', set())) | {'config', 'name'}
 
     # Read table
-    filename_lower = filename.lower()
+    filename_lower = str(assembly_table_path).lower()
 
     if filename_lower.endswith(('.tsv', '.tsv.gz', '.tsv.txt', 'tsv.txt.gz')):
-        df = pl.read_csv(filename, separator='\t', infer_schema_length=0)
+        df = pl.read_csv(assembly_table_path, separator='\t', infer_schema_length=0)
     elif filename_lower.endswith('.xlsx'):
-        df = pl.read_excel(filename, infer_schema_length=0)
+        df = pl.read_excel(assembly_table_path, infer_schema_length=0)
     elif filename_lower.endswith(('.csv', '.csv.gz', '.csv.txt', '.csv.txt.gz')):
-        df = pl.read_csv(filename, infer_schema_length=0)
+        df = pl.read_csv(assembly_table_path, infer_schema_length=0)
     elif filename_lower.endswith('parquet'):
-        df = pl.read_parquet(filename)
+        df = pl.read_parquet(assembly_table_path)
     else:
         raise ValueError(
             f'Unrecognized table file type (expected ".tsv", ".tsv.gz", ".xlsx", ".csv", ".csv.gz", or ".parquet"): '
-            f'{filename}'
+            f'{assembly_table_path}'
         )
 
     # Make standard columns lowercase
@@ -617,7 +622,7 @@ def read_assembly_table(
             continue
 
         if col_lower in col_map:
-            raise ValueError(f'Duplicate column names found in assembly table when ignoring case: {filename}')
+            raise ValueError(f'Duplicate column names found in assembly table when ignoring case: {assembly_table_path}')
 
         col_map[col] = col_lower
 
@@ -643,15 +648,15 @@ def read_assembly_table(
     )
 
     if df.select(pl.col('name').is_null().any())[0, 0]:
-        raise ValueError(f'Found null entries in the assembly table with empty name values: {filename}')
+        raise ValueError(f'Found null entries in the assembly table with empty name values: {assembly_table_path}')
 
     if df.select(pl.col('name').n_unique())[0, 0] < df.height:
-        raise ValueError(f'Found duplicate name values in the assembly table: {filename}')
+        raise ValueError(f'Found duplicate name values in the assembly table: {assembly_table_path}')
 
     bad_name = {name for name in df['name'] if '\t' in name}
 
     if bad_name:
-        raise ValueError(f'Found {len(bad_name)} column names with tab characters in the name: {filename}')
+        raise ValueError(f'Found {len(bad_name)} column names with tab characters in the name: {assembly_table_path}')
 
     # Map haplotype names to column names
     hap_list = list()
@@ -683,16 +688,16 @@ def read_assembly_table(
             else:
                 dup_source = f'(derived from columns {hap_col_map[hap]} and {col})'
 
-            raise ValueError(f'Duplicate haplotype name "{hap}" found in assembly table {dup_source}: {filename}')
+            raise ValueError(f'Duplicate haplotype name "{hap}" found in assembly table {dup_source}: {assembly_table_path}')
 
         hap_col_map[hap] = col
 
     if unknown_cols:
         col_list = ', '.join(unknown_cols[:5]) + '...' if len(unknown_cols) > 5 else ''
-        raise ValueError(f'Unknown columns in assembly table: {col_list}: {filename}')
+        raise ValueError(f'Unknown columns in assembly table: {col_list}: {assembly_table_path}')
 
     if not hap_list:
-        raise ValueError(f'No haplotype columns found in assembly table: {filename}')
+        raise ValueError(f'No haplotype columns found in assembly table: {assembly_table_path}')
 
     # Set index and column names
     df = df.rename({col: f'hap_{hap}' for hap, col in hap_col_map.items()})
@@ -876,3 +881,132 @@ def link_fasta(
     return [
         dest_fa_path, dest_fai_path
     ] + [dest_gzi_path] if dest_gzi_path is not None else []
+
+
+def get_rules_path(
+        rule_filename: str | Path,
+) -> Path:
+    """Get the path to a rule file.
+
+    :param rule_filename: Name of the rule file (e.g., 'align.smk')
+
+    :returns: Path to the rules file.
+
+    :raises FileNotFoundError: If the rule file cannot be found in any mode
+    """
+    try:
+        resource_dir = importlib.resources.files('pav3.data.workflow.rules')
+    except ModuleNotFoundError:
+        resource_dir = None
+
+    if resource_dir is not None and resource_dir.is_dir():
+        try:
+            with importlib.resources.as_file(
+                importlib.resources.files('pav3.data.workflow.rules').joinpath(rule_filename)
+            ) as rule_path:
+                if rule_path.exists():
+                    return str(rule_path)
+        except (ImportError, FileNotFoundError, AttributeError, ModuleNotFoundError) as e:
+            raise FileNotFoundError(
+                f'Rule file "{rule_filename}" not found in package resources: {e}'
+            ) from e
+
+    raise FileNotFoundError(
+        f'Workflow rule file "{rule_filename}" not found in package resources '
+        f'(src.workflow.rules.{rule_filename}): File missing or not a regular file.'
+    )
+
+
+def get_pav_config_path(
+        config_filename: Optional[str | Path] = None,
+) -> Path:
+    """Locate the PAV configuration filename.
+
+    :param config_filename: Path to the config file. If None, the default config file is used.
+
+    :return: Path to the config file.
+
+    :raises FileNotFoundError: If the specified configuration (`config_filename`) or default
+        configuration file is not found.
+    """
+    default_config_filename = Path('pav.json')
+    deprecated_config_filename = Path('config.json')
+
+    if config_filename is not None:
+        config_filename = Path(config_filename)
+
+        if not config_filename.is_file():
+            raise FileNotFoundError(f'Specified config file not found or not a regular file: {config_filename}')
+
+        return config_filename
+
+    if default_config_filename.is_file():
+        return default_config_filename
+
+    if deprecated_config_filename.is_file():
+        config_filename = deprecated_config_filename
+
+        print(
+            f'\nWARNING: Using deprecated config "{deprecated_config_filename}", rename to "pav.json".\n'
+            f'A future PAV version will ignore "config.json"\n'
+        )
+
+        import time
+        time.sleep(5)
+
+        return deprecated_config_filename
+
+    raise FileNotFoundError('No config file found (expected "pav.json" or deprecated "config.json")')
+
+def get_pav_asm_table_path(
+        asm_table_path: Optional[str | Path] = None,
+) -> Path:
+    """Get a path to the assembly table.
+
+    :param asm_table_path: Table path, if specified.
+
+    :return: Path to the assembly table.
+
+    :raises FileNotFoundError: If the specified assembly table or default assembly table is not found.
+    """
+
+    if asm_table_path is not None:
+        asm_table_path = Path(asm_table_path)
+
+        if not asm_table_path.is_file():
+            raise FileNotFoundError(f'Specified assembly table file not found or not a regular file: {asm_table_path}')
+
+        return asm_table_path
+
+    for asm_table_path in (
+        Path('assemblies.tsv'),
+        Path('assemblies.xlsx')
+    ):
+        if asm_table_path.is_file():
+            return asm_table_path
+
+    raise FileNotFoundError('No assembly table file found (tried default "assemblies.tsv" and "assemblies.xlsx")')
+
+
+def get_pav_env_path(
+        env_path: Optional[Path | str] = None,
+) -> Optional[Path]:
+    """Get path to shell environment file.
+
+    :param env_path: Path to the environment file. If None, the default environment file is used.
+
+    :return: Path to the environment file or `None` if a shell environment file is not found.
+
+    :raises FileNotFoundError: If a file is specified and is missing.
+    """
+
+    if env_path is not None:
+        if not env_path.is_file():
+            raise FileNotFoundError(f'Specified environment file not found or not a regular file: {env_path}')
+
+        return env_path
+
+    if (env_path := Path('setenv.sh')).is_file():
+        return env_path
+
+    return None

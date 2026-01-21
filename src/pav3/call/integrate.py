@@ -10,6 +10,29 @@ import polars as pl
 from .expr import id_snv, id_nonsnv
 from .. import schema
 
+def set_base_cols(
+        df: pl.LazyFrame,
+        sourcetype: str,
+        vartype: str,
+) -> pl.LazyFrame:
+
+    col_set = set(df.collect_schema().names())
+
+    if 'call_source' not in col_set:
+        df = df.with_columns(pl.lit(None).cast(schema.VARIANT['call_source']).alias('call_source'))
+
+    df = (
+        df
+        .with_columns(
+            pl.coalesce(
+                pl.col('call_source').cast(schema.VARIANT['call_source']),
+                pl.lit(sourcetype.upper()).cast(schema.VARIANT['call_source'])
+            ).alias('call_source')
+        )
+    )
+
+    return df
+
 def read_trim_table(
     df_align_none: pl.LazyFrame,
     df_align_qry: pl.LazyFrame,
@@ -320,7 +343,7 @@ def add_cpx_derived(
                 pl.when(pl.col('varlen') < 0)
                 .then(pl.col('is_rev') ^ pl.col('qry_rev'))
                 .otherwise(pl.lit(None).cast(pl.Boolean))
-            ).alias('inv_dup')
+            ).alias('_inv_dup')
         )
         .filter(pl.col('vartype').is_not_null())
     )
@@ -338,7 +361,7 @@ def add_cpx_derived(
         .with_columns(
             (pl.col('end') - pl.col('pos')).alias('varlen'),
             pl.lit('DUP').alias('vartype'),
-            (pl.col('is_rev') ^ pl.col('qry_rev')).alias('inv_dup'),
+            (pl.col('is_rev') ^ pl.col('qry_rev')).alias('_inv_dup'),
             pl.concat_list([pl.col('align_index')]).alias('align_index')
         )
     )
@@ -347,9 +370,13 @@ def add_cpx_derived(
     df_derived = (
         pl.concat([df_a, df_b], how='diagonal')
         .with_columns(
+            pl.when(pl.col('_inv_dup'))
+            .then(pl.lit('INVDUP'))
+            .otherwise(None)
+            .alias('varsubtype'),
             id_nonsnv().alias('id')
         )
-        .drop('var_index')
+        .drop('var_index', '_inv_dup')
     )
 
     collect_list['insdel'].append(
@@ -357,7 +384,6 @@ def add_cpx_derived(
             df=(
                 df_derived
                 .filter(pl.col('vartype').is_in(['INS', 'DEL']))
-                .drop('inv_dup')
             ),
             is_snv=False,
             existing_ids=collect_list['insdel']

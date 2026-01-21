@@ -7,9 +7,6 @@ import pav3
 global ASM_TABLE
 global PAV_CONFIG
 
-# def get_override_config(asm_name):
-#     return pavlib.config.get_override_config(asm_name, config, ASM_TABLE)
-
 def get_config(key, wildcards):
     """
     Get a config object that might be modified by CONFIG parameters in the assembly table.

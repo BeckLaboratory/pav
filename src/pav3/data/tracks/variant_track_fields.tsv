@@ -14,17 +14,24 @@ hap	FALSE	string	haplotype	Haplotype	Haplotype variant was discovered on.
 vartype	FALSE	string	varType	Var. type	Variant type	
 varsubtype	FALSE	string	varSubtype	Var. subtype	Variant subtype	
 varlen	FALSE	uint	varLen	Length	Variant length	
+inv_inner	FALSE	lstring	invInner	INV coordinates	Inner (actual) inversion coordinates.	
+inv_outer	FALSE	lstring	invOuter	INV and flanking repeats	Outer coordinates for inversion.	
 ref	FALSE	string	ref	Ref	Reference base/sequence (SNVs)	
 alt	FALSE	string	alt	Alt	Variant base/sequence (SNVs)	
 call_source	FALSE	string	callSrc	Call source	PAV caller reporting this variant	
-var_index	FALSE	int	varIndex	Variant index from the call source		
-var_score	FALSE	float	varScore	Variant score	Score assigned by PAV score model	
-align_index	FALSE	lstring	alignIndex	Comma-separated list of alignment indexes supporting this variant		
+DISABLED_var_index	FALSE	int	varIndex	Variant index from the call source		
+DISABLED_var_score	FALSE	float	varScore	Variant score	Score assigned by PAV score model	
 dup	FALSE	lstring	dup	Dup loc	Duplicated loci	
 hom_ref	FALSE	string	homRef	Hom. Ref	"Homology from reference (upstream, downstream)"	
 hom_qry	FALSE	string	homQry	Hom. Qry	"Homology from query (upstream, downstream)"	
+trace_ref	FALSE	lstring	traceRef	CPX REF trace	Reference trace for CPX events	
+trace_qry	FALSE	lstring	traceQry	CPX QRY trace	Query trace for CPX events	
+seg_n	FALSE	uint	segN	CPX segments	Number of aligned and unaligned segments in a complex event	
+cpx_info	FALSE	lstring	cpxInfo	CPX info	Formatted CPX information	
+align_hap	FALSE	string	alignGap	INV align gap bp	"For alignment-truncating INVs, the difference between the aligned (inverted) segment and gap between flanking segments (closer to 0 is a clean INV, high numbers point to complex breakpoints)"	
 derived	FALSE	lstring	derived	Derived from (var.)	Derived from this variant (e.g. a duplication may be derived from an insertion)	
 discord	FALSE	lstring	discord	Discord with	Variant(s) this record is discordant with	
 inner	FALSE	lstring	inner	Variant this record is embedded in		
 qry_region	FALSE	lstring	qryRegion	Query region	Query region	Location of this variant in the assembly
+align_index	FALSE	lstring	alignIndex	Comma-separated list of alignment indexes supporting this variant		
 seq	FALSE	lstring	seq	Sequence	Variant sequence	

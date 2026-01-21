@@ -2,7 +2,11 @@
 
 __all__ = [
     'TRACK_RESOURCE',
+    'call_hap_insdelsnv',
+    'call_hap_invdupcpx',
     'align',
+    'set_default_as_types',
+
 ]
 
 from collections.abc import (
@@ -16,6 +20,7 @@ import re
 from typing import Optional
 
 import polars as pl
+import polars.selectors as cs
 
 from . import const as fig_const
 from . import util as fig_util
@@ -33,13 +38,30 @@ TRIM_DESC = {
     'qryref': 'Qry-Ref',
 }
 
+VARCLASS_FMT = {
+    'sv': 'SV',
+    'indel': 'Indel',
+    'svindel': 'SV/Indel',
+    'snv': 'SNV',
+}
+
+VARTYPE_FMT = {
+    'ins': 'INS',
+    'del': 'DEL',
+    'insdel': 'INS/DEL',
+    'snv': 'SNV',
+    'cpx': 'CPX',
+    'inv': 'INV',
+    'dup': 'DUP',
+    'invdupcpx': 'INV/DUP/CPX',
+}
+
 
 #
 # Variant tracks
 #
 
-
-def call_hap_insdel(
+def call_hap_insdelsnv(
         callset_def: dict[str, str | Path],
         df_fai: pl.LazyFrame | pl.DataFrame,
         field_path: Optional[Path | str] = None,
@@ -56,55 +78,19 @@ def call_hap_insdel(
 
     :return: Tuple of variant LazyFrame and AS file lines.
     """
-    mpl_local = fig_util.require_matplotlib()
-
     if isinstance(df_fai, pl.DataFrame):
         df_fai = df_fai.lazy()
 
     asm_name = asm_name if (asm_name := callset_def.get('asm_name', '').strip()) else 'Unknown'
     hap = hap if (hap := callset_def.get('hap', '').strip()) else 'Unknown'
-    vartype = (vartype if (vartype := callset_def.get('varclass', '').strip()) else 'unknown').lower()
+    vartype = (vartype if (vartype := callset_def.get('vartype', '').strip()) else 'unknown').lower()
     varclass = (varclass if (varclass := callset_def.get('varclass', '').strip()) else 'svindel').lower()
 
-    track_desc_short = f'PAVCallHap{asm_name}{hap}{vartype.capitalize()}'
-    track_desc_long = f'PAV Call Hap ({asm_name}-{hap}: {vartype.capitalize()})'
+    track_desc_short = f'PAVCallHap{asm_name}{hap}{varclass.capitalize()}{vartype.capitalize()}'
+    track_desc_long = f'PAV Call Hap ({asm_name}-{hap}: {VARCLASS_FMT[varclass]} {VARTYPE_FMT[vartype]})'
 
-    # Read field table
-    if field_path is None:
-        if not importlib.resources.is_resource(TRACK_RESOURCE, VAR_TRACK_TABLE_FILENAME):
-            raise FileNotFoundError(f'Track field table not found in resource: {TRACK_RESOURCE}.{VAR_TRACK_TABLE_FILENAME}')
-
-        field_path = importlib.resources.files(TRACK_RESOURCE).joinpath(VAR_TRACK_TABLE_FILENAME)
-    else:
-        field_path = Path(field_path)
-
-    if not field_path.is_file():
-        raise FileNotFoundError(f'Field table not found: {field_path}')
-
-    df_as = pl.read_csv(field_path, separator='\t')
-
-    # Color table
-    color_table = pl.DataFrame(
-        [
-            {
-                'vartype': vartype,
-                '_is_pass': is_pass,
-                'color': (
-                    fig_util.color_to_ucsc_string(
-                        color if is_pass else fig_util.lighten_color(color, 0.25)
-                    )
-                )
-            }
-            for vartype, color in fig_const.COLOR_VARTYPE.items()
-            for is_pass in (True, False)
-        ],
-        orient='row',
-        schema={
-            'vartype': pl.String,
-            '_is_pass': pl.Boolean,
-            'color': pl.String,
-        },
-    ).lazy()
+    df_as = _read_df_as(VAR_TRACK_TABLE_FILENAME, field_path)
+    color_table = _read_var_color_table()
 
     # Read callset
     callset_path = Path(p) if (p := callset_def.get('callset_path', None)) is not None else None
@@ -118,13 +104,14 @@ def call_hap_insdel(
     if varclass == 'sv':
         filter_list.append(pl.col('varlen') >= 50)
     elif varclass == 'indel':
-        filter_list.append(pl.col('varlen') >= 50)
-    elif varclass != 'svindel':
-        raise ValueError('Unknown variant class: {varclass}')
+        filter_list.append(pl.col('varlen') < 50)
+    elif varclass not in {'svindel', 'snv'}:
+        raise ValueError(f'Unknown variant class: {varclass}')
 
     df = (
         pl.scan_parquet(callset_path)
         .with_row_index('_index')
+        .filter(*filter_list)
         .with_columns((pl.col('filter').list.len() == 0).alias('_is_pass'))
         .join(color_table, on=['vartype', '_is_pass'], how='left')
         .join(
@@ -133,121 +120,20 @@ def call_hap_insdel(
             ),
             on='chrom', how='left',
         )
-        .with_columns(
-            pl.col('color').fill_null(fig_util.color_to_ucsc_string((0, 0, 0))),
-            pl.col('filter').list.join(',').cast(pl.String).alias('filter'),
-            pl.lit(asm_name).alias('asm_name'),
-            pl.lit(hap).alias('hap'),
-            expr.qry_region().alias('qry_region'),
-            (pl.when('qry_rev').then(pl.lit('-')).otherwise(pl.lit('+'))).cast(pl.String).alias('strand'),
-            pl.col('align_index').cast(pl.List(pl.String)).list.join(',').cast(pl.String).alias('align_index'),
-            pl.col('call_source').fill_null('.'),
-            pl.col('varsubtype').fill_null('.'),
-            (
-                pl.when(pl.col('hom_ref').is_not_null())
-                .then(pl.concat_str(
-                    pl.col('hom_ref').struct.field('up'),
-                    pl.lit(','),
-                    pl.col('hom_ref').struct.field('dn'),
-                ))
-                .otherwise(pl.lit('.'))
-                .alias('hom_ref')
-            ),
-            (
-                pl.when(pl.col('hom_qry').is_not_null())
-                .then(pl.concat_str(
-                    pl.col('hom_qry').struct.field('up'),
-                    pl.lit(','),
-                    pl.col('hom_qry').struct.field('dn'),
-                ))
-                .otherwise(pl.lit('.'))
-                .alias('hom_qry')
-            ),
-            pl.col('discord').list.join(','),
-            pl.col('inner').list.join(','),
-            pl.col('dup').list.eval(
-                pl.concat_str(
-                    pl.element().struct.field('chrom'),
-                    pl.lit(':'),
-                    pl.element().struct.field('pos'),
-                    pl.lit('-'),
-                    pl.element().struct.field('end'),
-                    pl.lit('('),
-                    (
-                        pl.when(pl.element().struct.field('is_rev'))
-                        .then(pl.lit('-'))
-                        .otherwise(pl.lit('+'))
-                    ),
-                    pl.lit(')'),
-                )
-            ).list.join(','),
-            pl.lit(1000).alias('track_score'),
-            (
-                pl.when(pl.col('seq').str.len_chars() > 20)
-                .then(
-                    pl.concat_str(
-                        pl.col('seq').str.slice(0, 10),
-                        pl.lit('...('),
-                        pl.col('seq').str.len_chars() - 20,
-                        pl.lit(')...'),
-                        pl.col('seq').str.slice(-10, 10),
-                    )
-                )
-                .otherwise('seq')
-            )
-        )
     )
 
-    if thick_lines:
-        df = (
-            df
-            .with_columns(
-                (
-                    pl.when(pl.col('vartype') == 'INS')
-                    .then(pl.col('pos') + pl.col('varlen'))
-                    .otherwise(pl.col('end'))
-                )
-                .clip(0, pl.col('_chrom_len'))
-                .alias('end'),
-            )
-            .with_columns(
-                pl.min_horizontal('pos', 'end').alias('pos_thick'),
-                pl.max_horizontal('pos', 'end').alias('end_thick'),
-            )
-        )
-    else:
-        divider = 2 if center_ins else 1
+    # Add standard fields
+    df = df.with_columns(
+        *_var_fields(df, asm_name, hap)
+    )
 
-        df = (
-            df
-            .with_columns(
-                pl.col('pos').alias('pos_thick'),
-                (
-                    pl.when(pl.col('vartype') == 'INS')
-                    .then('end')
-                    .otherwise('pos')  # No thick part of pos_thick == end_thick
-                    .alias('end_thick')
-                ),
-                (
-                    pl.when(pl.col('vartype') == 'INS')
-                    .then(
-                        (pl.col('pos') + pl.col('varlen') // divider)
-                        .clip(0, pl.col('_chrom_len'))
-                    )
-                    .otherwise('end')
-                    .alias('end')
-                )
-            )
-            .with_columns(
-                pl.when(pl.col('vartype') == 'INS')
-                .then(
-                    # Shift back if centered or runs off chrom
-                    (pl.col('end') - pl.col('varlen')).clip(0)
-                )
-                .otherwise('pos')
-                .alias('pos')
-            )
-        )
+    # Set POS and END (including thick lines)
+    df = _set_lines(
+        df,
+        thick_lines,
+        center_ins,
+        vartype == 'snv',
+    )
 
     df = (
         df
@@ -266,13 +152,14 @@ def call_hap_insdel(
         n = len(missing_cols)
         missing_cols = ', '.join(sorted(missing_cols)[:3]) + ('...' if n > 0 else '')
 
-        raise ValueError(f'Missing {n} columns in alignment track definition {i}: {missing_cols}')
+        raise ValueError(f'Missing {n} columns in alignment track definition: {missing_cols}')
 
     df_as = df_as.filter(
         pl.col('field').is_in(col_set)
     )
 
     df = df.select(df_as.select('field').to_series().to_list())
+    df = set_default_as_types(df, df_as, strict=True)
 
     # AS file lines
     as_lines = [
@@ -289,6 +176,214 @@ def call_hap_insdel(
     return df, as_lines
 
 
+def call_hap_invdupcpx(
+        callset_def: dict[str, str | Path],
+        df_fai: pl.LazyFrame | pl.DataFrame,
+        field_path: Optional[Path | str] = None,
+) -> tuple[pl.LazyFrame, list[str]]:
+    if isinstance(df_fai, pl.DataFrame):
+        df_fai = df_fai.lazy()
+
+    asm_name = asm_name if (asm_name := callset_def.get('asm_name', '').strip()) else 'Unknown'
+    hap = hap if (hap := callset_def.get('hap', '').strip()) else 'Unknown'
+    vartype = (vartype if (vartype := callset_def.get('vartype', '').strip()) else 'unknown').lower()
+    varclass = (varclass if (varclass := callset_def.get('varclass', '').strip()) else 'invdupcpx').lower()
+
+    track_desc_short = f'PAVCallHap{asm_name}{hap}{varclass.capitalize()}{vartype.capitalize()}'
+    track_desc_long = f'PAV Call Hap ({asm_name}-{hap}: {VARCLASS_FMT[varclass]} {VARTYPE_FMT[vartype]})'
+
+    df_as = _read_df_as(VAR_TRACK_TABLE_FILENAME, field_path)
+    color_table = _read_var_color_table()
+
+    # Read callset
+    callset_path = {}
+
+    for key in ('inv', 'dup', 'cpx', 'segment'):
+        callset_path[key] = Path(p) if (p := callset_def.get(f'callset_path_{key}', None)) is not None else None
+
+        if callset_path[key] is None or not callset_path[key].is_file():
+            raise FileNotFoundError(f'Callset file not found for {key}: {callset_path[key]}')
+
+    # Read tables, initial formatting
+    df_inv = (
+        pl.scan_parquet(callset_path['inv'])
+        .with_columns(
+            pl.concat_str(
+                pl.lit('REF='),
+                pl.col('chrom'), pl.lit(':'), pl.col('pos'), pl.lit('-'), pl.col('end'),
+                pl.lit(' - QRY='),
+                expr.qry_region()
+            ).alias('inv_inner'),
+            pl.concat_str(
+                pl.lit('REF='),
+                pl.col('outer_ref').struct.field('chrom'), pl.lit(':'), pl.col('outer_ref').struct.field('pos'), pl.lit('-'), pl.col('outer_ref').struct.field('end'),
+                pl.lit(' - QRY='),
+                pl.col('outer_qry').struct.field('chrom'), pl.lit(':'), pl.col('outer_qry').struct.field('pos'), pl.lit('-'), pl.col('outer_qry').struct.field('end'),
+            ).alias('inv_outer'),
+            pl.col('pos').alias('pos_thick'),
+            pl.col('end').alias('end_thick'),
+            pl.col('outer_ref').struct.field('pos').alias('pos'),
+            pl.col('outer_ref').struct.field('end').alias('end'),
+            pl.col('align_gap').cast(pl.String),
+        )
+    )
+
+    df_cpx = (
+        pl.scan_parquet(callset_path['cpx'])
+        .join(df_fai.select('chrom', pl.col('len').alias('_chrom_len')), on='chrom', how='left',)
+        .with_columns(
+            pl.col('pos').alias('pos_thick'),
+            pl.col('end').alias('end_thick'),
+            ((pl.col('pos') + pl.col('end')) // 2 + pl.col('varlen') // 2).clip(pl.col('end'), pl.col('_chrom_len')).alias('end')
+        )
+        .with_columns(
+            (pl.col('end') - pl.col('varlen')).clip(0, pl.col('pos_thick')).alias('pos')
+        )
+        .drop('_chrom_len')
+    )
+
+    df_seg = pl.scan_parquet(callset_path['segment'])
+
+    df_seg = (
+        df_seg
+        .drop('filter')
+        .join(
+            df_cpx.select(
+                'var_index',
+                pl.col('qry_rev').alias('_cpx_is_rev'),
+                pl.col('filter')
+            ),
+            on='var_index', how='left'
+        )
+        .join(
+            (
+                df_seg
+                .group_by('var_index')
+                .agg(pl.col('seg_index').max().alias('_n_seg'))
+            ),
+            on='var_index', how='left'
+        )
+        .filter(pl.col('_cpx_is_rev').is_not_null())  # Onlly CPX segments, drop INV segments
+        .with_columns(
+            pl.col('pos').fill_null(strategy='forward').alias('_pos_fwd'),
+            pl.col('pos').fill_null(strategy='backward').alias('_pos_bak'),
+            pl.col('chrom').fill_null(strategy='forward').alias('_chrom_fwd'),
+            pl.col('chrom').fill_null(strategy='backward').alias('_chrom_bak'),
+        )
+        .with_columns(
+            pl.col('pos').fill_null(
+                pl.when(pl.col('_cpx_is_rev'))
+                .then('_pos_bak')
+                .otherwise('_pos_fwd')
+            ),
+            pl.col('chrom').fill_null(
+                pl.when(pl.col('_cpx_is_rev'))
+                .then('_chrom_bak')
+                .otherwise('_chrom_fwd')
+            ),
+            (pl.col('is_rev') ^ pl.col('_cpx_is_rev')).alias('is_rev'),
+        )
+        .filter(~ pl.col('is_anchor'))
+        .select(
+            'chrom', 'pos',
+            pl.col('end').fill_null(pl.col('pos') + 1).alias('end'),
+            (
+                pl.when(~ pl.col('is_aligned'))
+                .then(pl.lit('CPX_INS'))
+                .when(pl.col('is_rev'))
+                .then(pl.lit('CPX_INVDUP'))
+                .otherwise(pl.lit('CPX_DUP'))
+                .alias('vartype')
+            ),
+            pl.concat_str('id', pl.lit(':'), 'seg_index').alias('id'),
+            'qry_id', 'qry_pos', 'qry_end',
+            'filter',
+            (
+                pl.when(pl.col('align_index').is_not_null())
+                .then(pl.concat_list('align_index'))
+                .otherwise(pl.lit([]))
+            ).alias('align_index'),
+            pl.concat_str(
+                pl.lit('Segment '), pl.col('seg_index') + 1, pl.lit('/'), '_n_seg',
+                pl.lit(', len_ref='), 'len_ref', pl.lit(', len_qry='), 'len_qry',
+            ).alias('cpx_info'),
+            'var_index'
+        )
+        .with_columns(
+            pl.col('pos').alias('pos_thick'),
+            pl.col('end').alias('end_thick'),
+        )
+    )
+
+    df_dup = (
+        pl.scan_parquet(callset_path['dup']).with_row_index('_index')
+        .join(df_cpx, left_on='derived', right_on='id', how='anti')
+    )
+
+    # Concat tables
+    df = (
+        pl.concat(
+            [
+                df_inv,
+                df_cpx,
+                df_dup,
+                (
+                    df_seg
+                    .join(
+                        df_cpx, on='var_index', how='left'
+                    )
+                    .drop(
+                        cs.ends_with('_right'),
+                        'seg', 'dup', 'trace_ref', 'trace_qry', 'hom_ref', 'hom_qry', 'seq'
+                    )
+                ),
+            ],
+            how='diagonal',
+        )
+        .with_columns(
+            (pl.col('filter').list.len() == 0).alias('_is_pass'),
+            pl.col('pos_thick').fill_null('pos'),
+            pl.col('end_thick').fill_null('end'),
+        )
+        .join(color_table, on=['vartype', '_is_pass'], how='left')
+        .sort('chrom', 'pos', 'end')
+    )
+
+    df = (
+        df.with_columns(
+            *_var_fields(df, asm_name, hap)
+        )
+    )
+
+    # Check columns
+    col_set = set(df.collect_schema().names())
+
+    if (missing_cols := set(df_as.filter('required').select('field').to_series()) - col_set):
+        n = len(missing_cols)
+        missing_cols = ', '.join(sorted(missing_cols)[:3]) + ('...' if n > 0 else '')
+
+        raise ValueError(f'Missing {n} columns in alignment track definition: {missing_cols}')
+
+    df_as = df_as.filter(
+        pl.col('field').is_in(col_set)
+    )
+
+    df = df.select(df_as.select('field').to_series().to_list())
+    df = set_default_as_types(df, df_as, strict=True)
+
+    # AS file lines
+    as_lines = [
+        f'table {track_desc_short}',
+        f'"{track_desc_long}"',
+        f'('
+    ] + [
+        '{type} {name}; "{desc}"'.format(**row)
+        for row in df_as.iter_rows(named=True)
+    ] + [
+        ')'
+    ]
+
+    return df, as_lines
 
 
 #
@@ -298,7 +393,7 @@ def call_hap_insdel(
 def align(
         align_defs: list[dict[str, str | Path]],
         field_path: Optional[Path | str] = None,
-) -> tuple[pl.DataFrame, list[str]]:
+) -> tuple[pl.LazyFrame, list[str]]:
     """Create alignment track.
 
     :param trim: Trim type (none, qry, qryref).
@@ -318,18 +413,7 @@ def align(
     )
 
     # Read field table
-    if field_path is None:
-        if not importlib.resources.is_resource(TRACK_RESOURCE, ALIGN_TRACK_TABLE_FILENAME):
-            raise FileNotFoundError(f'Track field table not found in resource: {TRACK_RESOURCE}.{ALIGN_TRACK_TABLE_FILENAME}')
-
-        field_path = importlib.resources.files(TRACK_RESOURCE).joinpath(ALIGN_TRACK_TABLE_FILENAME)
-    else:
-        field_path = Path(field_path)
-
-    if not field_path.is_file():
-        raise FileNotFoundError(f'Field table not found: {field_path}')
-
-    df_as = pl.read_csv(field_path, separator='\t')
+    df_as = _read_df_as(ALIGN_TRACK_TABLE_FILENAME, field_path)
 
     # Initialise colors
     colormap = mpl_local.colormaps[fig_const.ALIGN_COLORMAP]
@@ -419,6 +503,7 @@ def align(
     )
 
     df = df.select(df_as.select('field').to_series().to_list())
+    df = set_default_as_types(df, df_as, strict=True)
 
     # AS file lines
     as_lines = [
@@ -432,7 +517,7 @@ def align(
         ')'
     ]
 
-    return df, as_lines
+    return df.lazy(), as_lines
 
 
 def get_track_desc_align(
@@ -519,3 +604,303 @@ def rotate_map() -> Iterator[float]:
 
         yield i
         i += step
+
+
+def set_default_as_types(
+        df: pl.LazyFrame,
+        df_as: pl.DataFrame,
+        strict: bool = True,
+) -> pl.LazyFrame:
+    """Set default values for BED table columns based on AutoSQL types.
+
+    Each column is coerced to the type specified in the AutoSQL table and missing values are
+    filled with an appropriate default value for the type ("." for string/char, 0 for integer,
+    and 0.0 for float types).
+
+    :param df: LazyFrame of the BED track table to be converted to BigBed format.
+    :param df_as: DataFrame of the data types including columns "field" (column name in `df` and
+        "type" (AutoSQL type as a string).
+    :param strict: Whether to raise an error if a column is missing in the AutoSQL table. If False,
+        unknown columns are skipped.
+    """
+
+    schema = df.collect_schema()
+
+    bracket_pattern = re.compile(r'\[[1-9]\d*]$')
+
+    for col_name, col_type in schema.items():
+        try:
+            as_select = df_as.filter(pl.col('field') == col_name).select('type')
+        except pl.exceptions.ColumnNotFoundError:
+            raise ValueError('AS table is missing "field" or "type" columns')
+
+        if as_select.is_empty():
+            if strict:
+                raise ValueError(f'Missing column "{col_name}" (dtype {col_type}) in AS table')
+            continue
+
+        try:
+            as_type = as_select.item()
+        except ValueError:
+            raise ValueError(f'Multiple values for column "{col_name}" in AS table')
+
+        default_value = {
+            'string': '.',
+            'lstring': '.',
+            'char': '.',
+            'int': '0',
+            'uint': '0',
+            'short': '0',
+            'ushort': '0',
+            'byte': '0',
+            'ubyte': '0',
+            'float': '0',
+        }.get(
+            bracket_pattern.sub('', as_type),
+            None
+        )
+
+        if default_value is None:
+            raise ValueError(f'Unsupported column type in AS table: {as_type} (column "{col_name}")')
+
+        df = df.with_columns(
+            pl.col(col_name).cast(pl.String).fill_null(default_value)
+        )
+
+    return df
+
+
+def _read_df_as(
+        track_table_filename: str,
+        field_path: Optional[Path | str] = None,
+) -> pl.DataFrame:
+    """Get the table of fields for variant tracks.
+
+    :param track_table_filename: Name of the default track table file in the resource.
+    :param field_path: Path to the field table file. If None, the default track table file is used.
+
+    :return: DataFrame of the field table.
+    """
+    # Read field table
+    if field_path is None:
+        if not importlib.resources.is_resource(TRACK_RESOURCE, track_table_filename):
+            raise FileNotFoundError(f'Track field table not found in resource: {TRACK_RESOURCE}.{track_table_filename}')
+
+        field_path = importlib.resources.files(TRACK_RESOURCE).joinpath(track_table_filename)
+    else:
+        field_path = Path(field_path)
+
+    if not field_path.is_file():
+        raise FileNotFoundError(f'Field table not found: {field_path}')
+
+    return pl.read_csv(field_path, separator='\t')
+
+def _read_var_color_table():
+    return pl.DataFrame(
+        [
+            {
+                'vartype': vartype,
+                '_is_pass': is_pass,
+                'color': (
+                    fig_util.color_to_ucsc_string(
+                        color if is_pass else fig_util.lighten_color(color, 0.25)
+                    )
+                )
+            }
+            for vartype, color in fig_const.COLOR_VARTYPE.items()
+            for is_pass in (True, False)
+        ],
+        orient='row',
+        schema={
+            'vartype': pl.String,
+            '_is_pass': pl.Boolean,
+            'color': pl.String,
+        },
+    ).lazy()
+
+def _var_fields(
+        df: pl.LazyFrame,
+        asm_name: str,
+        hap: str,
+) -> list[pl.Expr]:
+    col_set = set()
+
+    if df is not None:
+        col_set |= set(df.collect_schema().names())
+
+    field_list = [
+        pl.col('color').fill_null(fig_util.color_to_ucsc_string((0, 0, 0))),
+        pl.col('filter').list.join(',').cast(pl.String).alias('filter'),
+        pl.lit(asm_name).alias('asm_name'),
+        pl.lit(hap).alias('hap'),
+        expr.qry_region().alias('qry_region'),
+        pl.col('align_index').cast(pl.List(pl.String)).list.join(',').cast(pl.String).alias('align_index'),
+        pl.lit(1000).alias('track_score'),
+    ]
+
+    if 'is_rev' in col_set:
+        field_list.append(
+            (
+                pl.when(pl.col('is_rev') is True)
+                .then(pl.lit('+'))
+                .when(pl.col('is_rev') is False)
+                .then(pl.lit('-'))
+                .otherwise(pl.lit('.'))
+            ).cast(pl.String).alias('strand'),
+        )
+    else:
+        field_list.append(
+            pl.lit('.').alias('strand')
+        )
+
+    if 'call_source' in col_set:
+        field_list.append(
+            pl.col('call_source').fill_null('.')
+        )
+
+    if 'varsubtype' in col_set:
+        field_list.append(
+            pl.col('varsubtype').fill_null('.')
+        )
+
+    if 'hom_ref' in col_set:
+        field_list.append(
+            pl.when(pl.col('hom_ref').is_not_null())
+            .then(pl.concat_str(
+                pl.col('hom_ref').struct.field('up'),
+                pl.lit(','),
+                pl.col('hom_ref').struct.field('dn'),
+            ))
+            .otherwise(pl.lit('.'))
+            .alias('hom_ref')
+        )
+
+    if 'hom_qry' in col_set:
+        field_list.append(
+            pl.when(pl.col('hom_qry').is_not_null())
+            .then(pl.concat_str(
+                pl.col('hom_qry').struct.field('up'),
+                pl.lit(','),
+                pl.col('hom_qry').struct.field('dn'),
+            ))
+            .otherwise(pl.lit('.'))
+            .alias('hom_qry')
+        )
+
+    if 'discord' in col_set:
+        field_list.append(pl.col('discord').fill_null([]).list.join(','))
+
+    if 'inner' in col_set:
+        field_list.append(pl.col('inner').fill_null([]).list.join(','))
+
+    if 'dup' in col_set:
+        field_list.append(
+            pl.col('dup').fill_null([]).list.eval(
+                pl.concat_str(
+                    pl.element().struct.field('chrom'),
+                    pl.lit(':'),
+                    pl.element().struct.field('pos'),
+                    pl.lit('-'),
+                    pl.element().struct.field('end'),
+                    pl.lit('('),
+                    (
+                        pl.when(pl.element().struct.field('is_rev'))
+                        .then(pl.lit('-'))
+                        .otherwise(pl.lit('+'))
+                    ),
+                    pl.lit(')'),
+                )
+            ).list.join(',')
+        )
+
+    if 'seq' in col_set:
+        field_list.append(
+            pl.when(pl.col('seq').str.len_chars() > 50)
+            .then(
+                pl.concat_str(
+                    pl.col('seq').str.slice(0, 25),
+                    pl.lit('...('),
+                    pl.col('seq').str.len_chars() - 50,
+                    pl.lit(')...'),
+                    pl.col('seq').str.slice(-25, 25),
+                )
+            )
+            .otherwise('seq')
+        )
+
+    return field_list
+
+
+def _set_lines(
+        df: pl.LazyFrame,
+        thick_lines: bool = False,
+        center_ins: bool = True,
+        is_snv: bool = False,
+) -> pl.LazyFrame:
+    """
+    Set POS, END, POS_THICK, END_THICK based on variant type and thick-line settings.
+
+    :param df: Input DataFrame
+    :param thick_lines: Whether to use thick lines
+    :param center_ins: Whether to center INS variants (only if thick_lines is False)
+
+    :return: Table with positions set for a track.
+    """
+
+    if is_snv:
+        return df.with_columns(
+            pl.col('pos').alias('pos_thick'),
+            pl.col('end').alias('end_thick'),
+        )
+
+    if thick_lines:
+        return (
+            df
+            .with_columns(
+                (
+                    pl.when(pl.col('vartype') == 'INS')
+                    .then(pl.col('pos') + pl.col('varlen'))
+                    .otherwise(pl.col('end'))
+                )
+                .clip(0, pl.col('_chrom_len'))
+                .alias('end'),
+            )
+            .with_columns(
+                pl.min_horizontal('pos', 'end').alias('pos_thick'),
+                pl.max_horizontal('pos', 'end').alias('end_thick'),
+            )
+        )
+
+    # Thin lines
+    divider = 2 if center_ins else 1
+
+    return (
+        df
+        .with_columns(
+            pl.col('pos').alias('pos_thick'),
+            (
+                pl.when(pl.col('vartype') == 'INS')
+                .then('end')
+                .otherwise('pos')  # No thick part of pos_thick == end_thick
+                .alias('end_thick')
+            ),
+            (
+                pl.when(pl.col('vartype') == 'INS')
+                .then(
+                    (pl.col('end') + pl.col('varlen') // divider)
+                    .clip(0, pl.col('_chrom_len'))
+                )
+                .otherwise('end')
+                .alias('end')
+            )
+        )
+        .with_columns(
+            pl.when(pl.col('vartype') == 'INS')
+            .then(
+                # Shift back if centered or runs off chrom
+                (pl.col('end') - pl.col('varlen')).clip(0)
+            )
+            .otherwise('pos')
+            .alias('pos')
+        )
+    )
