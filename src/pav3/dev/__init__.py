@@ -7,6 +7,8 @@ such as in ipython or Jupyter notebooks.
 
 __all__ = [
     'imports',
+    'inter',
+    'path',
     'sm',
     'tables',
 ]
