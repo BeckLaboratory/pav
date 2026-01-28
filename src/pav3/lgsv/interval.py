@@ -144,13 +144,32 @@ class AnchoredInterval:
 
         if self.is_rev:
             ref_pos = self.df_segment[-1, 'end']
+            pos_align_index = self.df_segment[-1, 'align_index']
             ref_end = self.df_segment[0, 'pos']
+            end_align_index = self.df_segment[0, 'align_index']
         else:
             ref_pos = self.df_segment[0, 'end']
+            pos_align_index = self.df_segment[0, 'align_index']
             ref_end = self.df_segment[-1, 'pos']
+            end_align_index = self.df_segment[-1, 'align_index']
+
+        if ref_pos > ref_end:
+            ref_pos, ref_end = ref_end, ref_pos
+            pos_align_index, end_align_index = end_align_index, pos_align_index
+
+        if ref_end == ref_pos:  # If Insertion site (ref_end == ref_pos)
+           ref_end += 1
 
         # Get query region
-        self.region_ref = Region(chrom, min(ref_pos, ref_end), max(ref_pos, ref_end))
+        self.region_ref = Region(
+            chrom=chrom,
+            pos=ref_pos,
+            end=ref_end,
+            is_rev=self.is_rev,
+            pos_align_index=pos_align_index,
+            end_align_index=end_align_index,
+        )
+
         self.region_qry = Region(qry_id, qry_pos, qry_end, self.is_rev)
 
         self.len_ref = ref_end - ref_pos

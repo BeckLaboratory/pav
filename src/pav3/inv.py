@@ -16,7 +16,6 @@ __all__ = [
 from typing import Any, Optional
 
 import agglovar
-from dataclasses import dataclass, field
 import numpy as np
 import polars as pl
 import scipy.stats
@@ -26,7 +25,7 @@ from .align import lift
 from .params import PavParams
 from .region import Region
 from .seq import ref_kmers, region_seq_fasta
-from .kde import Kde, KdeTruncNorm, rl_encoder
+from .kde import Kde, KdeTruncNorm
 from .io import NullWriter
 
 # KDE states
@@ -40,36 +39,6 @@ KDE_STATE_FWDREV = 1
 KDE_STATE_REV = 2
 """KDE state for reverse-oriented matches between a query region and reference k-mers."""
 
-
-# Walk states
-_WS_FLANK_L = 0  # Left flank (unique sequence)
-_WS_REP_L = 1    # Left inverted repeat
-_WS_INV = 2      # Inverted core
-_WS_REP_R = 3    # Right inverted repeat
-_WS_FLANK_R = 4  # Right flank (unique sequence)
-
-# String representation for each walk state
-_WS_STATE_REPR = {
-    _WS_FLANK_L: 'FL',
-    _WS_REP_L: 'RL',
-    _WS_INV: 'V',
-    _WS_REP_R: 'RR',
-    _WS_FLANK_R: 'FR'
-}
-
-# Walk state to KDE table column (for scoring over the appropriate KDE state for a walk state)
-_WALK_STATE_COL = {
-    _WS_FLANK_L: 'kde_fwd',
-    _WS_REP_L: 'kde_fwdrev',
-    _WS_INV: 'kde_rev',
-    _WS_REP_R: 'kde_fwdrev',
-    _WS_FLANK_R: 'kde_fwd'
-}
-
-
-#
-# Public functions
-#
 
 def try_intra_region(
         region_flag: Region,
@@ -117,11 +86,10 @@ def try_intra_region(
     if region_flag.pos_align_index is None or region_flag.end_align_index is None:
         raise ValueError('region_flag must have both pos_align_index and end_align_index')
 
-    if region_flag.pos_align_index != region_flag.end_align_index:
-        raise ValueError(
-            f'region_flag must have the same pos_align_index ({region_flag.pos_align_index}) and end_align_index: '
-            f'{region_flag.end_align_index}'
-        )
+    # if region_flag.pos_align_index != region_flag.end_align_index:
+    #     raise ValueError(
+    #         f'region_flag must have the same pos_align_index ({region_flag.pos_align_index}) and end_align_index ({region_flag.end_align_index})'
+    #     )
 
     # Get parameters
     if pav_params is None:
@@ -152,30 +120,30 @@ def try_intra_region(
         max_expand = np.inf
 
     # Scan and expand
-    df_rl = None
+
+    df_inv = None
     df_kde = None
     region_qry = None
 
-    while inv_iterations <= min_expand and inv_iterations <= max_expand:
+    while df_inv is None and inv_iterations <= min_expand and inv_iterations <= max_expand:
 
         # Expand from last search
         if inv_iterations > 0:
             last_len = len(region_ref)
-            region_ref = _expand_region(region_ref, df_rl, df_ref_fai)
+            region_ref = _expand_region(region_ref, None, df_ref_fai)
 
             if len(region_ref) == last_len:
                 # Stop if expansion had no effect
-                return None
+                log_file.write(f'Intra-align inversion region {region_flag}: Reach maximum expansion: {region_ref}\n')
+                log_file.flush()
+                break
 
         inv_iterations += 1
 
-        # Reset, signal to code outside loop that the loop ended before df_rl is created
-        # (delete from previous iteration)
-        df_rl = None
-
         # Max region size
         if region_limit is not None and 0 < region_limit < len(region_ref):
-            return None
+            log_file.write(f'Intra-align inversion region {region_flag}: Reach region size limit ({region_limit}): {region_ref}\n')
+            break
 
         # Get query region
         region_qry = align_lift.region_to_qry(region_ref, same_index=True)
@@ -183,7 +151,8 @@ def try_intra_region(
         # Check for expansion through a break in the query sequence
         if region_qry is None:
             if stop_on_lift_fail:
-                return None
+                log_file.write(f'Intra-align inversion region {region_flag}: Lift failed: {region_ref}\n')
+                break
             continue
 
         # Create k-mer table
@@ -199,46 +168,64 @@ def try_intra_region(
 
         if df_kde is None:
             # No matching k-mers, ref & query are too divergent, not likely an inversion
-            return None
+            log_file.write(f'Intra-align inversion region {region_flag}: No matching k-mers (likely divergent region): {region_ref}\n')
+            break
 
         if df_kde.shape[0] < min_kmers:
             # Not enough k-mers, expand to find more
             continue
 
-        # Get run-length encoded states (list of (state, count) tuples).
-        df_rl = rl_encoder(df_kde)
+        # Test states for inversion
+        df_kde_index = (
+            df_kde
+            .group_by('state')
+            .agg(
+                pl.col('index').min().alias('index_min'),
+                pl.col('index').max().alias('index_max'),
+            )
+        )
 
-        # Done if reference oriented k-mers (state == 0) found on both sides
-        if df_rl.height > 2 and df_rl[0, 'state'] == 0 and df_rl[-1, 'state'] == 0:
-            break  # Stop searching and expanding
+        if not (
+            (0 in df_kde_index['state'])
+            and (2 in df_kde_index['state'])
+        ):
+            continue
+
+        inv_fwd_min, inv_fwd_max = (
+            df_kde_index
+            .filter(pl.col('state') == 0)
+            .select('index_min', 'index_max')
+            .row(0)
+        )
+
+        inv_rev_min, inv_rev_max = (
+            df_kde_index
+            .filter(pl.col('state') == 2)
+            .select('index_min', 'index_max')
+            .row(0)
+        )
+
+        if inv_fwd_min > inv_rev_min or inv_fwd_max < inv_rev_max:
+            continue
+
+        df_inv = kde_to_inv(df_kde)
+
+        # # Get run-length encoded states (list of (state, count) tuples).
+        # df_rl = rl_encoder(df_kde)
+        #
+        # # Done if reference oriented k-mers (state == 0) found on both sides
+        # if df_rl.height > 2 and df_rl[0, 'state'] == 0 and df_rl[-1, 'state'] == 0:
+        #     break  # Stop searching and expanding
 
     # Stop if no inverted sequence was found
-    if df_rl is None or not df_rl.select((pl.col('state') == 2).any()).item():
+    #if df_rl is None or not df_rl.select((pl.col('state') == 2).any()).item():
+    if df_inv is None:
         log_file.write(f'Intra-align inversion region {region_flag}: No inverted states found: {region_ref}\n')
         log_file.flush()
 
         return None
 
-    if df_rl[0, 'state'] != 0 or df_rl[-1, 'state'] != 0:
-        log_file.write(f'Intra-align inversion region {region_flag}: No inversion found after expansions')
-
-    # Estimate inversion breakpoints
-    inv_walk = _resolve_inv_from_rl(
-        df_rl, df_kde,
-        repeat_match_prop=repeat_match_prop,
-        min_inv_kmer_run=min_inv_kmer_run
-    )
-
-    if inv_walk is None:
-        log_file.write(
-            f'Intra-align inversion region {region_flag}: Failed to resolve inversion breakpoints: {region_ref}: '
-            f'No walk along KDE states was found\n'
-        )
-        log_file.flush()
-
-        return None
-
-    region_qry_inner, region_qry_outer = _walk_to_regions(inv_walk, df_rl, region_qry, k_size=k_util.k_size)
+    region_qry_inner, region_qry_outer = inv_table_to_regions(df_inv, region_qry)
 
     # Lift to reference
     region_ref_inner = align_lift.region_to_ref(region_qry_inner)
@@ -454,9 +441,10 @@ def get_state_table(
         .select(
             pl.col('kmer'),
             pl.col('index'),
-            pl.when(pl.col('kmer_fwd') & pl.col('kmer_rev')).then(2)
+            pl.when(pl.col('kmer_fwd') & pl.col('kmer_rev'))
+            .then(1)
             .when(pl.col('kmer_fwd')).then(0)
-            .when(pl.col('kmer_rev')).then(1)
+            .when(pl.col('kmer_rev')).then(2)
             .otherwise(-1)
             .alias('state_mer')
         )
@@ -621,28 +609,6 @@ def cluster_table(
         .with_row_index('index')
     )
 
-    # Self-join to find overlapping regions
-    # df_inter = (
-    #     df
-    #     .join(
-    #         df, how='cross'
-    #     )
-    #     .filter(
-    #         pl.col('chrom') == pl.col('chrom_right'),
-    #         pl.col('index') >= pl.col('index_right'),
-    #         pl.col('pos') < pl.col('end_right') + pav_params.inv_sig_merge_flank,
-    #         pl.col('end') > pl.col('pos_right') - pav_params.inv_sig_merge_flank,
-    #     )
-    #     # .join_where(
-    #     #     df,
-    #     #     pl.col('chrom') == pl.col('chrom_right'),
-    #     #     pl.col('pos') < pl.col('end_right') + pav_params.inv_sig_merge_flank,
-    #     #     pl.col('end') > pl.col('pos_right') - pav_params.inv_sig_merge_flank,
-    #     # )
-    #     .drop('chrom_right')
-    #     .sort(['index', 'index_right'])
-    # ).collect()
-
     df_inter = (
         agglovar.bed.join.pairwise_join(
             df.select('chrom', 'pos', 'end'),
@@ -761,20 +727,6 @@ def cluster_table_insdel(
             pl.col('qry_id_a').alias('qry_id'),
         ),
     )
-
-    # pairwise_intersect.append_join_predicates(
-    #     pl.col('align_index_a').list.first() == pl.col('align_index_b').list.first()
-    # )
-
-    # pairwise_intersect.append_join_cols([
-    #     pl.col('chrom_a').alias('chrom'),
-    #     pl.col('pos_a'), pl.col('end_a'),
-    #     pl.col('pos_b'), pl.col('end_b'),
-    #     pl.col('varlen_a'),
-    #     pl.col('varlen_b'),
-    #     pl.col('align_index_a').list.first().alias('align_index'),
-    #     pl.col('qry_id_a').alias('qry_id'),
-    # ])
 
     df_join = (
         pairwise_intersect.join(df_ins, df_del)
@@ -968,298 +920,182 @@ def cluster_table_sig(
     )
 
 
-#
-# Private functions and classes
-#
-
-def _score_range(
+def  kde_to_inv(
         df_kde: pl.DataFrame,
-        df_rl: pl.DataFrame,
-        rl_index: int,
-        i: int,
-        kde_col: str
-) -> float:
-    """Private function - Score a segment of the KDE between two run-length encoded positions.
+) -> pl.DataFrame:
+    """Create a table describing an inversion using a hidden Markov model (HMM) to set inversion
+    breakpoints from a KDE table.
 
-    :param df_kde: KDE DataFrame.
-    :param df_rl: Run-length encoded DataFrame.
-    :param rl_index: Index of first run-length encoded record (inclusive).
-    :param i: Index of last run-length encoded record (exclusive).
-    :param kde_col: KDE column to sum.
+    In a KDE table, the smoothed state values do not always correspond to the true state. Setting
+    breakpoints from a KDE table is challenging and arbitrary resulting in suboptimal inversion
+    structures. This function uses an HMM across the smoothed states to set breakpoints.
 
-    :returns: A sum of all KDE records in `df` between run-length encoded records at index `rl_index` and `i`
-        The KDE state summed is `kde_col` (name of the column in `df` to sum).
+    HMM states are:
+        0. Left unique region (fwd)
+        1. Left inverted repeat (fwd+rev)
+        2. Inversion (rev)
+        3. Right inverted repeat (fwd+rev)
+        4. Right unique region (fwd)
+        5. Inversion without inverted repeat (rev)
+
+    Allowed state transitions are "0-1-2-3-4" (with inverted repeats) or "0-5-4" (without inverted
+    repeats).
+
+    Each row in the inversion table returned is a range in the query sequence belonging to one
+    inversion state.
+
+    The table returned has these columns:
+        0. inv_state: DMM state.
+        #. inv_state_label: Label ("fwd", "fwdrev", and "rev").
+        #. index_start: First value of column "index" in the KDE table.
+        #. index_end: Last value of column "index" in the KDE table.
+        #. len: Length of the region.
+        #. states_mer: A struct of counts across original k-mer states (fwd, fwdrev, and rev).
+        #. states_kde: A struct of counts across smoothed states (fwd, fwdrev, and rev).
+
+    :param df_kde: KDE table.
+
+    :returns: Inversion table.
     """
-    return (
-        df_kde[df_rl[rl_index, 'index_kde']: df_rl[i - 1, 'index_kde'] + df_rl[i - 1, 'len_kde']]
-        .select(pl.col(kde_col).sum())
-        .item()
+    import numpy as np
+    import hmmlearn.hmm as hmm
+
+    # TODO: Train a real model and load weights. Hardcoded weights for now, tested on messy INVs.
+    a_trans = np.array(
+        [
+            # 0   1   2   3   4   5
+            [ 0.95, 0.04, 0.00, 0.00, 0.00, 0.01, ],  # 0: Left Ref
+            [ 0.00, 0.95, 0.05, 0.00, 0.00, 0.00, ],  # 1: Left Invdup
+            [ 0.00, 0.00, 0.95, 0.05, 0.00, 0.00, ],  # 2: Inv
+            [ 0.00, 0.00, 0.00, 0.95, 0.05, 0.00, ],  # 3: Right Invdup
+            [ 0.00, 0.00, 0.00, 0.00, 1.00, 0.00, ],  # 4: Right Ref
+            [ 0.00, 0.00, 0.00, 0.00, 0.05, 0.95, ],  # 5: Inv - no invdup
+        ]
     )
 
+    a_start = np.array([1.00, 0.00, 0.00, 0.00, 0.00, 0.00])
 
-def _range_len(
-        df_rl: pl.DataFrame,
-        rl_index: int,
-        i: int
-):
-    """Private function - Get the length (number of KDE records) between two run-length encoded records (inclusive).
+    a_emission = np.array(
+        [
+            [ 0.90, 0.05, 0.05 ],  # 0: Left Ref
+            [ 0.05, 0.90, 0.05 ],  # 1: Left Invdup
+            [ 0.05, 0.05, 0.90 ],  # 2: Inv
+            [ 0.05, 0.90, 0.05 ],  # 3: Right Invdup
+            [ 0.90, 0.05, 0.05 ],  # 4: Right Ref
+            [ 0.05, 0.05, 0.90 ],  # 5: Inv - no invdup
+        ]
+    )
 
-    :param df_rl: Run-length encoded DataFrame.
-    :param rl_index: Index of first run-length encoded record (inclusive).
-    :param i: Index of last run-length encoded record (inclusive).
+    model = hmm.CategoricalHMM(
+        n_components=a_trans.shape[0],
+    )
 
-    :returns: Number of KDE records in the range `rl_index` to `i` (inclusive).
+    model.startprob_ = a_start
+    model.transmat_ = a_trans
+    model.emissionprob_ = a_emission
+
+    hidden_states = model.predict(np.array(df_kde['state']).reshape(1, -1))
+
+    df_kde = (
+        df_kde
+        .drop('inv_state', strict=False)
+        .with_columns(pl.Series(hidden_states).cast(pl.Int32).alias('inv_state'))
+    )
+
+    df_inv = (
+        df_kde
+        .with_columns(
+            pl.col('inv_state').rle_id().alias('inv_state_rle'),
+        )
+        .group_by('inv_state_rle')
+        .agg(
+            pl.col('index').first().alias('index_start'),
+            pl.col('index').last().alias('index_end'),
+            (pl.col('index').last() - pl.col('index').first()).alias('len'),
+            pl.col('inv_state').first().alias('inv_state'),
+            pl.struct(
+                (pl.col('state_mer') == 0).sum().alias('fwd'),
+                (pl.col('state_mer') == 1).sum().alias('fwdrev'),
+                (pl.col('state_mer') == 2).sum().alias('rev'),
+            ).alias('states_mer'),
+            pl.struct(
+                (pl.col('state') == 0).sum().alias('fwd'),
+                (pl.col('state') == 1).sum().alias('fwdrev'),
+                (pl.col('state') == 2).sum().alias('rev'),
+            ).alias('states_kde'),
+        )
+        .filter(
+            ~pl.col('inv_state').is_in([0, 4]),
+            pl.col('len') > 0,
+        )
+        .select(
+            'inv_state',
+            pl.col('inv_state').replace_strict({1: 'fwdrev', 2: 'rev', 3: 'fwdrev', 5: 'rev'}).alias('inv_state_label'),
+            'index_start', 'index_end', 'len', 'states_mer', 'states_kde',
+        )
+    )
+
+    return df_inv
+
+
+def inv_table_to_regions(
+        df_inv: pl.DataFrame,
+        region_qry: Region,
+) -> tuple[Region, Region]:
+    """Convert an inversion table to a tuple of regions (inner, outer).
+
+    :param df_inv: Inversion table.
+    :param region_qry: Query region.
+
+    :returns: Tuple of regions (inner, outer).
+
+    :raises ValueError: If the inversion table does not progress through inversion states as
+        expected. Suggests an error in `kde_to_inv()`.
     """
-    return df_rl[i - 1, 'index_kde'] + df_rl[i - 1, 'len_kde'] - df_rl[rl_index, 'index_kde']
 
+    df_inv = (
+        df_inv
+        .filter(
+            pl.col('inv_state').is_in([1, 2, 3, 5])
+        )
+    )
 
-NEXT_WALK_STATE = {
-    (_WS_FLANK_L, KDE_STATE_FWDREV): _WS_REP_L,  # Left flank -> left inverted repeat
-    (_WS_FLANK_L, KDE_STATE_REV): _WS_INV,       # Left flank -> inverted core (no left inverted repeat)
-    (_WS_REP_L, KDE_STATE_REV): _WS_INV,         # Left inverted repeat -> inverted core
-    (_WS_INV, KDE_STATE_FWDREV): _WS_REP_R,      # Inverted core -> right inverted repeat
-    (_WS_INV, KDE_STATE_FWD): _WS_FLANK_R,       # Inverted core -> right flank (no right inverted repeat)
-    (_WS_REP_R, KDE_STATE_FWD): _WS_FLANK_R      # Right inverted repeat -> right flank
-}
-"""State transition given the current walk state and the next KDE state. Only legal transitions are defined"""
-
-
-@dataclass(repr=False)
-class _InvWalkState(object):
-    """
-    Private class - Tracks the state of a walk from the left-most run-length (RL) encoded record to a current state.
-
-    :ivar walk_state: Walk state ("WS_" constants)
-    :ivar rl_index: Index of the RL-encoded DataFrame where the current state starts.
-    :ivar walk_score: Cumulative score of the walk from the left-most RL record to the current state and position.
-    :ivar l_rep_len: Length of the right inverted repeat locus. Value is 0 if there was none or the state has not
-        yet reached the left inverted repeat. Used to give a score boost for records with similar-length inverted
-        repeats on both sides.
-    :ivar l_rep_score: Score of the right inverted repeat locus. Value is 0.0 if there was none or the state has
-        not yet reached the left inverted repeat. Used to give a score boost for records with similar-length
-        inverted repeats on both sides.
-    :ivar trace_list: List of walk state transitions to the current state. Each element is a tuple of an RL table index
-        and a walk state ("WS_" constants).
-    """
-
-    walk_state: int
-    rl_index: int
-    walk_score: float = 0.0
-    l_rep_len: int = 0
-    l_rep_score: float = 0.0
-    trace_list: list[tuple[int, int]] = field(default_factory=list)
-
-    def __repr__(self):
-        """Get a string representation of this state."""
-        trace_str = ', '.join([f'{te[0]}:{_WS_STATE_REPR[te[1]]}' for te in self.trace_list])
-        return (
-            f'InvWalkState(walk_state={self.walk_state}, '
-            f'rl_index={self.rl_index}, '
-            f'walk_score={self.walk_score}, '
-            f'l_rep_len={self.l_rep_len}, '
-            f'l_rep_score={self.l_rep_score}, '
-            f'trace_list=[{trace_str}])'
+    if tuple(df_inv['inv_state']) == (1, 2, 3):
+        coord_outer = (
+            df_inv['index_start'][0] + region_qry.pos,
+            df_inv['index_end'][2] + region_qry.pos + 1
         )
 
+        coord_inner = (
+          df_inv['index_start'][1] + region_qry.pos,
+          df_inv['index_end'][1] + region_qry.pos + 1
+        )
 
-def _resolve_inv_from_rl(
-        df_rl: pl.DataFrame,
-        df_kde: pl.DataFrame,
-        repeat_match_prop: float = 0.2,
-        min_inv_kmer_run: int = const.INV_MIN_INV_KMER_RUN,
-        final_state_node_list: Optional[list[_InvWalkState]] = None
-):
-    """Private function - Resolve the optimal walk along run-length (RL) encoded states.
+    elif tuple(df_inv['inv_state']) == (5,):
+        coord_outer = (
+            df_inv['index_start'][0] + region_qry.pos,
+            df_inv['index_end'][0] + region_qry.pos + 1
+        )
 
-    This walk sets the inversion breakpoints.
+        coord_inner = coord_outer
 
-    :param df_rl: RL-encoded table.
-    :param df_kde: State table after KDE.
-    :param repeat_match_prop: Give a bonus to the a walk score for similar-length inverted repeats. The bonus is
-        calculated by taking the minimum score from both left and right inverted repeat loci, multiplying by the
-        length similarity (min/max length), and finally multipyling by this value. Set to 0.0 to disable the bonus.
-    :param min_inv_kmer_run: Minimum number of k-mers in an inversion run. Set to 0 to disable the filter.
-    :param final_state_node_list: If not None, the list is populated with all InvWalkState objects reaching a final
-        state and is sorted by walk scores (highest scores first). This list is cleared by the method before
-        exploring RL walks. This can be used to see alternative inversion structures.
+    else:
+        raise ValueError(f'Unexpected inv_state progression: {" > ".join(df_inv["inv_state"].cast(pl.String))}')
 
-    :returns: An InvWalkState object representing the best walk along RL states.
-    """
-    if repeat_match_prop is None:
-        repeat_match_prop = 0.0
-
-    if min_inv_kmer_run is None:
-        min_inv_kmer_run = 0
-
-    if final_state_node_list is not None:
-        final_state_node_list.clear()
-
-    if df_rl.select((pl.col('state') == 2).sum()).item() == 0:
-        raise ValueError('No inverted segments found in the RL table')
-
-    df_rl_i = df_rl.with_row_index('_index')
-
-    # Location of the last inverted segment. Used to limit the search space in states before the inversion.
-    max_inv_index = df_rl_i.filter(pl.col('state') == 2).select(pl.col('_index').max()).item()
-
-    # Initialize first state
-    walk_state_node_stack = [
-        _InvWalkState(0, 0, 0.0, 0, 0.0, [(0, _WS_FLANK_L)])
-    ]
-
-    max_score = 0.0
-    max_score_node = None
-
-    while walk_state_node_stack:
-        walk_state_node = walk_state_node_stack.pop()
-
-        # Walk through downstream states
-        for i in range(
-            walk_state_node.rl_index + 1,
-            (df_rl.height if walk_state_node.walk_state >= _WS_INV else max_inv_index)
-        ):
-
-            # KDE state and next walk state
-            kde_state = df_rl_i[i, 'state']
-            next_walk_state = NEXT_WALK_STATE.get((walk_state_node.walk_state, kde_state), None)
-
-            if next_walk_state is None:
-                continue  # No transition from the current walk state to this KDE state
-
-            # Stop if inverted region is too short
-            if (
-                    walk_state_node.walk_state == _WS_INV and
-                    min_inv_kmer_run > 0 and
-                    _range_len(df_rl, walk_state_node.rl_index, i) < min_inv_kmer_run
-            ):
-                continue
-
-            # Score this step
-            score_step = _score_range(
-                df_kde, df_rl,
-                walk_state_node.rl_index, i,
-                _WALK_STATE_COL[walk_state_node.walk_state]
-            )
-
-            # Apply bonus for similar-length inverted repeats
-            if next_walk_state == _WS_FLANK_R and repeat_match_prop > 0.0:
-                rep_len_min, rep_len_max = sorted([
-                    walk_state_node.l_rep_len, _range_len(df_rl, walk_state_node.rl_index, i)
-                ])
-
-                score_step += (
-                    np.min([walk_state_node.l_rep_score, score_step]) * (
-                        (rep_len_min / rep_len_max) if rep_len_max > 0 else 0
-                    ) * repeat_match_prop
-                )
-
-            # Create next walk state node
-            next_walk_node = _InvWalkState(
-                next_walk_state, i,
-                walk_state_node.walk_score + score_step,
-                walk_state_node.l_rep_len,
-                walk_state_node.l_rep_score,
-                walk_state_node.trace_list + [(i, next_walk_state)]
-            )
-
-            # Save left inverted repeat
-            if next_walk_state == _WS_INV and walk_state_node.walk_state == _WS_REP_L:
-                next_walk_node.l_rep_len = _range_len(df_rl, walk_state_node.rl_index, i)
-                next_walk_node.l_rep_score = score_step
-
-            # Save/report state
-            if next_walk_state == _WS_FLANK_R:
-                # A final state
-
-                # Add score for right flank
-                next_walk_node.walk_score += _score_range(
-                    df_kde, df_rl, i, df_rl.height, _WALK_STATE_COL[next_walk_state]
-                )
-
-                # Update max state
-                if next_walk_node.walk_score > max_score:
-                    max_score = next_walk_node.walk_score
-                    max_score_node = next_walk_node
-
-                # Append state list
-                if final_state_node_list is not None:
-                    final_state_node_list.append(next_walk_node)
-
-            else:
-                # Not a final state, push to node stack
-                walk_state_node_stack.append(next_walk_node)
-
-    # Sort final states
-    if final_state_node_list is not None:
-        final_state_node_list.sort(key=lambda sl: sl.walk_score, reverse=True)
-
-    # Report max state (or None if no inversion found)
-    return max_score_node
-
-
-def _walk_to_regions(
-        inv_walk: _InvWalkState,
-        df_rl: pl.DataFrame,
-        region_qry: Region,
-        k_size: int = 0
-) -> tuple[Region, Region]:
-    """Private function - Translate a walk to inner and outer regions.
-
-    :param inv_walk: Inversion state walk.
-    :param df_rl: RL-encoded KDE table.
-    :param region_qry: Query region.
-    :param k_size: K-mer size.
-
-    :returns: A tuple of inner and outer regions.
-    """
-    # Validate walk
-    if len(set([walk_state for rl_index, walk_state in inv_walk.trace_list])) != len(inv_walk.trace_list):
-        raise ValueError(f'Walk node trace has repeated states: {inv_walk}')
-
-    for i in range(1, len(inv_walk.trace_list)):
-        if inv_walk.trace_list[i][1] <= inv_walk.trace_list[i - 1][1]:
-            raise ValueError(f'Walk node trace states are not monotonically increasing: {inv_walk}')
-
-    for i in range(1, len(inv_walk.trace_list)):
-        if inv_walk.trace_list[i][0] <= inv_walk.trace_list[i - 1][0]:
-            raise ValueError(f'Walk node trace indexes are not monotonically increasing: {inv_walk}')
-
-    for i in range(len(inv_walk.trace_list)):
-        if inv_walk.trace_list[i][1] not in {_WS_FLANK_L, _WS_FLANK_R, _WS_INV, _WS_REP_L, _WS_REP_R}:
-            raise ValueError(f'Walk node trace has invalid state: {inv_walk}')
-
-    # Get regions
-    state_dict = {
-        walk_state: rl_index for rl_index, walk_state in inv_walk.trace_list
-    }
-
-    if _WS_INV not in state_dict:
-        raise ValueError(f'Walk node trace does not contain an inverted state: {inv_walk}')
-
-    if _WS_FLANK_R not in state_dict or _WS_FLANK_L not in state_dict:
-        raise ValueError(f'Walk node trace does not contain flanking states: {inv_walk}')
-
-    i_inner_l = state_dict[_WS_INV]
-    i_inner_r = state_dict.get(_WS_REP_R, state_dict[_WS_FLANK_R])
-
-    i_outer_l = state_dict.get(_WS_REP_L, i_inner_l)
-    i_outer_r = state_dict[_WS_FLANK_R]
-
-    region_qry_outer = Region(
-        region_qry.chrom,
-        df_rl[i_outer_l, 'pos_qry'] + region_qry.pos,
-        df_rl[i_outer_r, 'pos_qry'] + region_qry.pos + k_size,
-        is_rev=region_qry.is_rev
+    return (
+        Region(
+            region_qry.chrom,
+            coord_inner[0],
+            coord_outer[1],
+            region_qry.is_rev,
+        ),
+        Region(
+            region_qry.chrom,
+            coord_outer[0],
+            coord_outer[1],
+            region_qry.is_rev,
+        ),
     )
-
-    region_qry_inner = Region(
-        region_qry.chrom,
-        df_rl[i_inner_l, 'pos_qry'] + region_qry.pos,
-        df_rl[i_inner_r, 'pos_qry'] + region_qry.pos + k_size,
-        is_rev=region_qry.is_rev
-    )
-
-    return region_qry_inner, region_qry_outer
 
 
 def _expand_region(
@@ -1267,7 +1103,7 @@ def _expand_region(
         df_rl: Optional[pl.DataFrame],
         df_ref_fai: pl.DataFrame
 ) -> Region:
-    """Private function - Expands region.
+    """Expands region.
 
     :param region_ref: Reference region to expand.
     :param df_rl: Run-length encoded table from the inversion search over `region_ref`.

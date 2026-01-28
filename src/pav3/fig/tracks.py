@@ -26,6 +26,8 @@ from . import const as fig_const
 from . import util as fig_util
 from ..call import expr
 
+from .. import util
+
 TRACK_RESOURCE = 'pav3.data.tracks'
 
 ALIGN_TRACK_TABLE_FILENAME = 'alignment_track_fields.tsv'
@@ -401,7 +403,7 @@ def align(
 
     :return: Tuple of alignment DataFrame and AS file lines.
     """
-    mpl_local = fig_util.require_matplotlib()
+    mpl = util.require_optional_module('matplotlib')
 
     # Get track description
     track_desc_short, track_desc_long = get_track_desc_align(
@@ -416,7 +418,7 @@ def align(
     df_as = _read_df_as(ALIGN_TRACK_TABLE_FILENAME, field_path)
 
     # Initialise colors
-    colormap = mpl_local.colormaps[fig_const.ALIGN_COLORMAP]
+    colormap = mpl.colormaps[fig_const.ALIGN_COLORMAP]
     rotate_iter = rotate_map()
 
     # Read alignments
@@ -607,8 +609,8 @@ def rotate_map() -> Iterator[float]:
 
 
 def set_default_as_types(
-        df: pl.LazyFrame,
-        df_as: pl.DataFrame,
+        df: pl.LazyFrame | pl.DataFrame,
+        df_as: pl.DataFrame | pl.LazyFrame,
         strict: bool = True,
 ) -> pl.LazyFrame:
     """Set default values for BED table columns based on AutoSQL types.
@@ -617,12 +619,17 @@ def set_default_as_types(
     filled with an appropriate default value for the type ("." for string/char, 0 for integer,
     and 0.0 for float types).
 
-    :param df: LazyFrame of the BED track table to be converted to BigBed format.
-    :param df_as: DataFrame of the data types including columns "field" (column name in `df` and
+    :param df: Table of the BED track table to be converted to BigBed format.
+    :param df_as: Table of the data types including columns "field" (column name in `df` and
         "type" (AutoSQL type as a string).
     :param strict: Whether to raise an error if a column is missing in the AutoSQL table. If False,
         unknown columns are skipped.
     """
+    if isinstance(df, pl.DataFrame):
+        df = df.lazy()
+
+    if isinstance(df_as, pl.LazyFrame):
+        df_as = df_as.collect()
 
     schema = df.collect_schema()
 

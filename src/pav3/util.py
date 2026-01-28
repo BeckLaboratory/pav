@@ -4,12 +4,65 @@ __all__ = [
     'as_bool',
     'collapse_to_set',
     'init_logger',
+    'require_optional_module',
 ]
 
+import importlib
 import logging
-from typing import Any, Callable, Iterable, Optional
+from types import ModuleType
+from typing import (
+    Any,
+    Callable,
+    Iterable,
+    Optional,
+)
 
 import agglovar
+
+
+_optional_modules: dict[str, tuple[Optional[ModuleType], str, Optional[Exception]]] = {
+    'matplotlib': (None, 'fig', None),
+    'matplotlib.pyplot': (None, 'fig', None),
+    'blablabla2': (None, 'bla', None),
+}
+
+
+def require_optional_module(
+        mod_name: str,
+) -> ModuleType:
+    """Load an optional module.
+
+    :param mod_name: Name of the module to load. Can be an alias (e.g. "mpl" for "matplotlib").
+
+    :returns: The loaded module.
+
+    :raises ModuleNotFoundError: If the module is not found.
+    :raises ValueError: If the module name is not a known optional module.
+    """
+    try:
+        module_obj, group, import_ex = _optional_modules[mod_name]
+    except KeyError as e:
+        raise ValueError(f'Unknown optional module "{mod_name}"') from e
+
+    if module_obj is not None:
+        return module_obj
+
+    if import_ex is None:
+        try:
+            module_obj = importlib.import_module(mod_name)
+            _optional_modules[mod_name] = (module_obj, group, import_ex)
+            return module_obj
+
+        except ImportError as e:
+            import_ex = e
+            _optional_modules[mod_name] = (module_obj, group, import_ex)
+
+    raise ModuleNotFoundError(
+        f'Optional module "{mod_name}" is missing: '
+        f'Install the optional dependency group, e.g. "pip install pav3[{group}]": '
+        f'{import_ex}'
+    ) from import_ex
+
 
 def as_bool(
         val: Any,

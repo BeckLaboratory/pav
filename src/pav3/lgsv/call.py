@@ -164,7 +164,8 @@ def call_from_interval(
             ComplexVariant, interval, caller_resources, variant_call, var_region_kde
         )
 
-    elif var_region_kde.try_inv:
+    elif var_region_kde.try_inv_kde:
+        # Try an inversion call if the KDE indicates a psosible inversion even if other tests fail
         variant_call = try_variant(
             InversionVariant, interval, caller_resources, variant_call, var_region_kde
         )

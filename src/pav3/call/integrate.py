@@ -298,7 +298,7 @@ def add_cpx_derived(
     df_base = (
         df
         .select(
-            *['var_index', 'chrom', 'qry_id', 'qry_rev', 'var_score'],
+            'var_index', 'chrom', 'qry_id', 'qry_rev', 'var_score',
             *[pl.lit(None).alias(col).cast(schema.VARIANT[col]) for col in ['qry_pos', 'qry_end']],
             pl.col('id').alias('derived'),
             pl.lit('DERIVED').alias('call_source'),
@@ -379,27 +379,71 @@ def add_cpx_derived(
         .drop('var_index', '_inv_dup')
     )
 
-    collect_list['insdel'].append(
-        id_and_version(
-            df=(
-                df_derived
-                .filter(pl.col('vartype').is_in(['INS', 'DEL']))
-            ),
-            is_snv=False,
-            existing_ids=collect_list['insdel']
+    df_derived_inv = (
+        df_b
+        .filter(pl.col('_inv_dup'))
+        .with_columns(
+            pl.lit('INV').alias('vartype'),
+            pl.struct(['chrom', 'pos', 'end']).alias('outer_ref'),
+            pl.struct(
+                pl.col('qry_id').alias('chrom'),
+                pl.col('qry_pos').alias('pos'),
+                pl.col('qry_end').alias('end'),
+            ).alias('outer_qry'),
         )
+        .with_columns(
+            id_nonsnv().alias('id'),
+        )
+        .drop('var_index', '_inv_dup', 'qry_rev')
+    )
+
+    collect_list['insdel'].append(
+        df_derived
+        .filter(pl.col('vartype').is_in(['INS', 'DEL']))
+        .with_columns(id_nonsnv().alias('id'))
     )
 
     collect_list['dup'].append(
-        id_and_version(
-            df=(
-                df_derived
-                .filter(pl.col('vartype') == 'DUP')
-            ),
-            is_snv=False,
-            existing_ids=collect_list['dup']
-        )
+        df_derived
+        .filter(pl.col('vartype') == 'DUP')
+        .with_columns(id_nonsnv().alias('id'))
     )
+
+    collect_list['inv'].append(
+        df_derived_inv
+        .with_columns(id_nonsnv().alias('id'))
+    )
+
+
+    # collect_list['insdel'].append(
+    #     id_and_version(
+    #         df=(
+    #             df_derived
+    #             .filter(pl.col('vartype').is_in(['INS', 'DEL']))
+    #         ),
+    #         is_snv=False,
+    #         existing_ids=collect_list['insdel']
+    #     )
+    # )
+    #
+    # collect_list['dup'].append(
+    #     id_and_version(
+    #         df=(
+    #             df_derived
+    #             .filter(pl.col('vartype') == 'DUP')
+    #         ),
+    #         is_snv=False,
+    #         existing_ids=collect_list['dup']
+    #     )
+    # )
+    #
+    # collect_list['inv'].append(
+    #     id_and_version(
+    #         df=df_derived_inv,
+    #         is_snv=False,
+    #         existing_ids=collect_list['inv']
+    #     )
+    # )
 
 
 def apply_discord_and_inner_filter(

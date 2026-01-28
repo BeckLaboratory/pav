@@ -22,7 +22,11 @@ from typing import Any, Optional
 import Bio.Seq
 
 from ..anno import perfect_homology
-from ..region import Region
+from ..region import (
+    Region,
+    region_from_dict,
+)
+from ..inv import try_intra_region
 
 from .interval import AnchoredInterval
 from .resources import CallerResources
@@ -698,7 +702,7 @@ class InversionVariant(Variant):
             return
 
         if min(self.interval.len_ref, self.interval.len_qry) / max(self.interval.len_ref, self.interval.len_qry) < 0.5:
-            # Neither ref or query region may be 2x greater than the other
+            # Neither ref nor query region may be 2x greater than the other
             return
 
         df_int = (
@@ -778,16 +782,24 @@ class InversionVariant(Variant):
 
                 self.res_type = 'ALIGN'
 
+                self.var_score = (
+                    # Penalize reference gap and inverted alignment diff
+                    caller_resources.score_model.gap(self.align_gap) +
+                    # Penalize template switches
+                    caller_resources.score_model.template_switch() * 2
+                )
+
+
         # Try call by KDE
         if self.region_ref_outer is None:
 
             # Pre-checks before trying inversion by KDE
             if df_int.filter('is_dist').select('len_qry').sum().item() > self.interval.len_qry * 0.1:
-                # No more than 10% aligned outside of the inversion site (allow for small alignments)
+                # No more than 10% aligned outside the inversion site (allow for small alignments)
                 return
 
             if (
-                not var_region_kde.try_inv
+                not var_region_kde.try_inv_kde
                 or df_int.filter('is_prox').select(
                     (
                         pl.col('len_qry').filter(pl.col('is_rev') == interval.is_rev).sum()
@@ -800,19 +812,39 @@ class InversionVariant(Variant):
                 return
 
             # Call variant by KDE
-            self.region_ref = self.interval.region_ref
-            self.region_qry = self.interval.region_qry
-
-            self.region_ref_outer = self.region_ref
-            self.region_qry_outer = self.region_qry
-
-            self.align_gap = np.abs(len(self.region_ref) - len(self.region_qry))
-            self.resolved_templ = (
-                    self.interval.qry_aligned_pass_prop >=
-                    caller_resources.pav_params.lg_cpx_min_aligned_prop
+            inv_dict = try_intra_region(
+                region_flag=self.interval.region_ref,
+                ref_fa_filename=self.caller_resources.ref_fa_filename,
+                qry_fa_filename=self.caller_resources.qry_fa_filename,
+                df_ref_fai=self.caller_resources.df_ref_fai,
+                df_qry_fai=self.caller_resources.df_qry_fai,
+                align_lift=self.caller_resources.align_lift,
+                pav_params=self.caller_resources.pav_params,
+                k_util=self.caller_resources.k_util,
+                kde_model=self.caller_resources.kde_model,
+                stop_on_lift_fail=True,
+                log_file=None,
             )
 
-            self.res_type = 'KDE'
+            if inv_dict is not None:
+                self.region_ref = Region(
+                    inv_dict['chrom'], inv_dict['pos'], inv_dict['end']
+                )
+
+                self.region_qry = Region(
+                    inv_dict['qry_id'], inv_dict['qry_pos'], inv_dict['qry_end'],
+                    is_rev=self.interval.is_rev
+                )
+
+                self.region_ref_outer = Region(**inv_dict['outer_ref'])
+                self.region_qry_outer = Region(**inv_dict['outer_qry'], is_rev=self.interval.is_rev)
+
+                self.align_gap = 0
+                self.resolved_templ = False
+
+                self.res_type = 'KDE'
+
+                self.var_score = 0.0
 
         # Call variant
         if self.region_ref_outer is None:
@@ -821,17 +853,11 @@ class InversionVariant(Variant):
 
         self.varlen = len(self.region_ref)
 
-        self.var_score = (
-            # Penalize reference gap and inverted alignment diff
-            caller_resources.score_model.gap(self.align_gap) +
-            # Penalize template switches
-            caller_resources.score_model.template_switch() * 2
-        )
-
         self.outer_ref = self.region_ref_outer.as_dict()
         self.outer_qry = self.region_qry_outer.as_dict()
 
         self._found_variant = True
+
         return
 
     @classmethod

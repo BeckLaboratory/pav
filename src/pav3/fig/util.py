@@ -8,31 +8,12 @@ __all__ = [
 
 
 import colorsys
-from types import ModuleType
 from typing import (
-    Optional,
     Tuple,
-    overload
+    overload,
 )
 
-try:
-    import matplotlib as mpl
-except ImportError as _e:  # pragma: no cover
-    mpl: Optional[ModuleType] = None
-    _mpl_import_error = _e
-else:
-    _mpl_import_error = None
-
-
-def require_matplotlib() -> ModuleType:
-    if mpl is None:
-        raise ModuleNotFoundError(
-            "matplotlib is required for pav3.fig: "
-            "Install the optional dependency group, e.g. `pip install 'pav3[fig]'"
-        ) from _mpl_import_error
-
-    return mpl
-
+from .. import util
 
 def lighten_color(
         color: str | Tuple[float, float, float],
@@ -51,14 +32,14 @@ def lighten_color(
     >> lighten_color('#F034A3', 0.6)
     >> lighten_color((.3,.55,.1), 0.5)
     """
-    mpl_local = require_matplotlib()
+    mpl = util.require_optional_module('matplotlib')
 
     try:
-        c = mpl_local.colors.cnames[color]
+        c = mpl.colors.cnames[color]
     except KeyError:
         c = color
 
-    c = colorsys.rgb_to_hls(*mpl_local.colors.to_rgb(c))
+    c = colorsys.rgb_to_hls(*mpl.colors.to_rgb(c))
 
     return colorsys.hls_to_rgb(c[0], 1 - amount * (1 - c[1]), c[2])
 

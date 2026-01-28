@@ -7,7 +7,11 @@ __all__ = [
 ]
 
 from dataclasses import dataclass
-from typing import Optional, Self
+from typing import (
+    Any,
+    Optional,
+    Self,
+)
 
 import polars as pl
 import re
@@ -58,6 +62,10 @@ class Region(object):
             raise ValueError(f'Missing required fields: {", ".join(missing_vals)}')
 
     def __repr__(self):
+        """Get coordinate string in 1-based closed coordinates (Samtools, UCSC browser)."""
+        return f'Region({self.chrom}, {self.pos}, {self.end}, {self.is_rev}, {self.pos_align_index}, {self.end_align_index})'
+
+    def __str__(self):
         """Get coordinate string in 1-based closed coordinates (Samtools, UCSC browser)."""
         return f'{self.chrom}:{self.pos + 1}-{self.end}'
 
@@ -158,11 +166,11 @@ class Region(object):
                 except ValueError as e:
                     raise ValueError(f'Failed casting max_end to int: {e}') from e
 
-        if (max_diff := new_end - max_end) > 0:
-            if shift:
-                new_pos = max(new_pos - max_diff, min_pos)
+            if (max_diff := new_end - max_end) > 0:
+                if shift:
+                    new_pos = max(new_pos - max_diff, min_pos)
 
-            new_end = max_end
+                new_end = max_end
 
         # Check for over-contraction (if expand_bp was negative)
         if new_end < new_pos:
@@ -364,6 +372,27 @@ def region_from_string(
         pos -= 1
 
     return Region(match_obj[1], pos, end, is_rev, pos_align_index, end_align_index)
+
+def region_from_dict(
+        d: dict[str, Any],
+):
+    """Get a region object from a dictionary with region attributes as keys.
+
+    """
+    if missing_keys := {'chrom', 'pos', 'end'} - set(d.keys()):
+        raise ValueError(f'Unrecognized keys in region dict: {missing_keys}')
+
+    if unknown_keys := set(d.keys()) - {'chrom', 'pos', 'end'}:
+        raise ValueError(f'Unrecognized keys in region dict: {unknown_keys}')
+
+    return Region(
+        chrom=d['chrom'],
+        pos=d['pos'],
+        end=d['end'],
+        is_rev=d.get('is_rev', False),
+        pos_align_index=d.get('pos_align_index', None),
+        end_align_index=d.get('end_align_index', None)
+    )
 
 
 def region_from_id(region_id: str) -> Region:

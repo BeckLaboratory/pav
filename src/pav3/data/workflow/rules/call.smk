@@ -517,8 +517,24 @@ rule call_integrate_sources:
 
                 df = (
                     df
+                    .with_row_index('_concat_index')
+                    .with_columns(
+                        pl.col('filter').list.unique().list.sort()
+                    )
+                    .sort(
+                        pl.col('filter').list.len(),
+                        '_concat_index',
+                        descending=(True, False),
+                    )
+                )
+
+                df = pav3.call.integrate.id_and_version(
+                    df=df, is_snv=is_snv,
+                )
+
+                df = (
+                    df
                     .sort(pav3.call.expr.sort_expr())
-                    .with_columns(pl.col('filter').list.unique().list.sort())
                     .select([col for col in pav3.schema.VARIANT.keys() if col in col_names])
                 )
 

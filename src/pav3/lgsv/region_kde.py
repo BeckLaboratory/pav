@@ -26,7 +26,7 @@ class VarRegionKde:
 
     :ivar df_kde: KDE table see :func:`pav3.inv.get_state_table`.
     :ivar df_rl: Run-length table see :func:`pav3.kde.rl_encoder`.
-    :ivar try_inv: If True, try to call an inversion.
+    :ivar try_inv_kde: If True, try to call an inversion from k-mer density.
     :ivar try_var: If True, try to call a variant. False indicates aberrant alignment patterns were identified and that
         calling this region would likely produce a false variant call.
     """
@@ -59,42 +59,47 @@ class VarRegionKde:
         self.df_kde = None
         self.df_rl = None
 
-        self.try_inv = False
-        self.try_var = False
+        self.try_inv_kde = False
+        self.try_var = True
 
-        if (
-                interval.len_ref <= 0 or (
-                    min([interval.len_qry, interval.len_ref]) / max([interval.len_qry, interval.len_ref])
-                ) < qry_ref_max_ident
-        ):
-            self.try_var = True
+        # Stop on max segments
+        if max_seg_n is not None and interval.seg_n > max_seg_n:
+            self.try_var = False
             return
 
-        if max_seg_n is not None and interval.seg_n >= max_seg_n:
-            return
+        # if (
+        #         interval.len_ref <= 0 or (
+        #             min([interval.len_qry, interval.len_ref]) / max([interval.len_qry, interval.len_ref])
+        #         ) < qry_ref_max_ident
+        # ):
+        #     # Always try a variant call if the region is sufficiently divergent (length ratio) or if
+        #     # non-reference sequence is found at the locus.
+        #     self.try_var = True
 
         kmer_n = len(interval.region_qry) - caller_resources.k_util.k_size + 1  # Number of k-mers in the query sequence
 
         if kmer_n <= 0:
-            self.try_var = True
+            # Stop on insufficient number of k-mers in the query region (may be a large DEL)
             return
 
         # Build KDE
+        # Expand regions by 20% of the region length (10% each flank) and 4x KDE band bound
+        # (density model limit flank limit, 2x each flank)
         region_ref_exp = interval.region_ref.expand(
-            len(interval.region_ref) * 0.2,
+            max((len(interval.region_ref) * 0.2, caller_resources.kde_model.band_bound * 4)),
             max_end=caller_resources.df_ref_fai,
             shift=False,
         )
 
         region_qry_exp = interval.region_qry.expand(
-            len(interval.region_qry) * 0.2,
+            max((len(interval.region_qry) * 0.2, caller_resources.kde_model.band_bound * 4)),
             max_end=caller_resources.df_qry_fai,
             shift=False,
         )
 
         if len(region_qry_exp) <= max_qry_len_kde:
 
-            # Match complex sequence to the gap region
+            # Match query sequence to the gap region
             self.df_kde = get_state_table(
                 region_ref=region_ref_exp,
                 region_qry=region_qry_exp,
@@ -110,9 +115,7 @@ class VarRegionKde:
             )
 
             if self.df_kde.height == 0:
-
                 # No matching k-mers
-                self.try_var = True
                 return
 
             self.df_rl = rl_encoder(self.df_kde)
@@ -129,7 +132,6 @@ class VarRegionKde:
             )
 
             if df_kde_noexp.shape[0] > 0:
-
                 df_rl_sv = rl_encoder(df_kde_noexp)
 
                 # Number of k-mers not dropped by KDE (found in both query and ref in either orientation)
@@ -160,49 +162,40 @@ class VarRegionKde:
                 # which PAV currently does not have. This prevents false substitution CSVs
                 # (INS + DEL).
                 if prop_fwd > qry_ref_max_ident:
+                    self.try_var = kmer_n < 1000
                     return
 
-                # Try a non-INV variant call if tests to this point have passed.
-                # Weed out misalignments around inverted repeats (human chrX)
                 self.try_var = (
-                    kmer_n_kde / kmer_n < 0.8  # Too many missing k-mers to be sure, try a variant
+                    # Too many missing k-mers to be sure, try a variant
+                    kmer_n_kde / kmer_n < 0.85
                 ) or (
                     # Weed out misalignments around inv repeats (human chrX)
-                    prop_fwdrev < 0.5 or prop_fwd + prop_fwdrev < 0.90
+                    prop_fwdrev < 0.5 or prop_rev > 0.5
                 )
 
                 # Test states for inverted or reference states
                 if self.df_rl.select((pl.col('state') == KDE_STATE_REV).any()).item():
                     p_binom = test_kde(self.df_rl)  # Test KDE for inverted state significance
-
-                    self.try_inv = p_binom < 0.01 and (prop_rev + prop_fwdrev) >= 0.5
+                    self.try_inv_kde = p_binom < 0.01 and (prop_rev + prop_fwdrev) >= 0.5
 
                 # Check all segments, should belong to the gap region
-                qry_exp_diff = interval.region_qry.pos - region_qry_exp.pos
-
-                if self.try_inv:
-                    qry_start = interval.df_segment[-1 if interval.is_rev else 0, 'qry_end']
+                if self.try_inv_kde:
+                    qry_start = region_qry_exp.pos
 
                     for row in interval.df_segment.filter(~ pl.col('is_anchor')).iter_rows(named=True):
-                        pos, end = sorted([abs(row['qry_pos'] - qry_start), abs(row['qry_end'] - row['qry_pos'])])
+                        index_start = max(0, row['qry_pos'] - qry_start)
+                        index_end = max(0, row['qry_end'] - qry_start)
 
-                        df_kde_seg = self.df_kde.filter(
-                            (pl.col('index') >= (pos + qry_exp_diff)) & (pl.col('index') <= (end + qry_exp_diff))
+                        df_kde_seg = df_kde_noexp.filter(
+                            (pl.col('index') >= index_start) & (pl.col('index') <= index_end)
                         )
 
-                        if df_kde_seg.height / len(interval.region_qry) < 0.05:  # Skip diminuitive segments
+                        if df_kde_seg.height / len(interval.region_qry) < 0.1:  # Skip small segments
                             continue
 
                         df_kde_seg = df_kde_seg.filter(pl.col('state').is_in({KDE_STATE_FWDREV, KDE_STATE_REV}))
 
-                        prop_mer = df_kde_seg.height / (end - pos - caller_resources.k_util.k_size + 1)
+                        prop_mer = df_kde_seg.height / (index_end - index_start)
 
-                        if prop_mer < 0.5:
-                            self.try_inv = False
-            else:
-                # Non-expanded KDE skipped
-                self.try_var = True
-
-        else:
-            # KDE skipped
-            self.try_var = True
+                        if prop_mer < 0.2:
+                            self.try_inv_kde = False
