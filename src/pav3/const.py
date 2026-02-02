@@ -176,11 +176,12 @@ DEFAULT_MERGE_PARAMS: dict[str, list[dict[str, Any]]] = {
 # Explanations for filter codes
 FILTER_REASON: dict[str, str] = {
     'LCALIGN': 'Variant inside a low-confidence alignment record',
-    'ALIGN': 'Variant inside an alignment record that had a filtered flag (matches 0x700 in alignment flags) or did '
-             'not meet a minimum MAPQ threshold',
+    'ALIGN': 'Variant inside an alignment record that had a filtered flag (matches 0x700 in alignment flags)',
+    'MAPQ': 'Variant inside an alignment record that did not meet a minimum MAPQ threshold',
     'DISCORD': 'Discordant with another variant (i.e. small variants inside a deletion)',
     'INNER': 'Part of a larger variant call (i.e. SNVs and indels inside a duplication or complex event)',
-    'DERIVED': 'A noncanonical variant form derived from another (i.e. DUP derived from an INS variant or DELs and DUPs from complex events)',
+    'DERIVED': 'A noncanonical variant form derived from another (i.e. DUP derived from an INS variant or DELs and '
+               'DUPs from complex events)',
     'VARLEN': 'Variant size out of set bounds (sizes set in the PAV config file)',
     'TRIMREF': 'Alignment trimming in reference coordinates removed variant',
     'TRIMQRY': 'Alignment trimming in query coordinates removed variant',

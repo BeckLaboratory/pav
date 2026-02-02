@@ -13,6 +13,7 @@ __all__ = [
     'check_table',
 ]
 
+import logging
 import numpy as np
 import os
 import polars as pl
@@ -29,6 +30,7 @@ from .lcmodel import LCAlignModel, null_model
 from .records import check_record
 from .score import ScoreModel, get_score_model
 
+logger = logging.getLogger(__name__)
 
 ALIGN_TABLE_SORT_ORDER = ['chrom', 'pos', 'end', 'align_index']
 """Sort order for alignment tables."""
@@ -131,7 +133,6 @@ def sam_to_align_table(
             line_number += 1
 
             try:
-
                 line = line.strip()
 
                 if line.startswith('@') or not line:
@@ -168,11 +169,15 @@ def sam_to_align_table(
                 pos_ref = int(tok[3]) - 1
 
                 # Skipped unmapped reads, low MAPQ reads, or other flag-based filters
-                if flags & 0x4 or mapq < min_mapq or pos_ref < 0:
+                if flags & 0x4 or pos_ref < 0:
                     continue
 
                 # Get alignment operations
-                op_arr = op.clip_soft_to_hard(op.cigar_to_arr(tok[5]))
+                try:
+                    op_arr = op.normalize_clipping(op.cigar_to_arr(tok[5]))
+                except ValueError as e:
+                    logger.warning(f'Failed to normalize alignment operations: {e}')
+                    continue
 
                 if np.any(op_arr[:, 0] * op.M):
                     raise ValueError('PAV does not allow match alignment operations (op "M", requires "=" and "X")')
@@ -192,13 +197,20 @@ def sam_to_align_table(
                 if chrom == '*' or qry_id == '*':
                     raise ValueError(f'Found mapped read with missing names (chrom={chrom}, qry_id={qry_id})')
 
+                filter = []
+
+                if flags & flag_filter:
+                    filter.append('ALIGN')
+                if mapq < min_mapq:
+                    filter.append('MAPQ')
+
                 # Save record
                 row = {
                     'chrom': chrom,
                     'pos': pos_ref,
                     'end': pos_ref + len_ref,
                     'align_index': align_index,
-                    'filter': [] if not flags & flag_filter else ['ALIGN'],
+                    'filter': filter,
                     'qry_id': qry_id,
                     'qry_pos': pos_qry,
                     'qry_end': pos_qry + len_qry,

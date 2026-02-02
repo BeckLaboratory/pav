@@ -31,13 +31,14 @@ __all__ = [
     'row_to_arr',
     'arr_to_row',
     'row_to_tuples',
-    'clip_soft_to_hard',
+    'normalize_clipping',
     'op_arr_add_coords',
 ]
 
 from typing import Any, Optional
 
 import numpy as np
+from numpy.typing import NDArray
 
 
 INT_STR_SET: frozenset[str] = frozenset({'0', '1', '2', '3', '4', '5', '6', '7', '8', '9', })
@@ -132,7 +133,7 @@ VAR_ARR: np.typing.NDArray[np.integer] = np.array([X, I, D])
 
 def cigar_to_arr(
         cigar_str: str
-) -> np.ndarray[np.int_]:
+) -> NDArray[np.int_]:
     """Convert a CIGAR string to an array.
 
     :param cigar_str: CIGAR string.
@@ -169,7 +170,7 @@ def cigar_to_arr(
 
 
 def arr_to_cigar(
-        op_arr: np.ndarray
+        op_arr: NDArray
 ) -> str:
     """Generate a CIGAR string from operation codes.
 
@@ -188,7 +189,7 @@ def arr_to_cigar(
 def row_to_arr(
         row: dict[str, Any],
         dtype: type = np.int64
-) -> np.ndarray:
+) -> NDArray[np.int_]:
     """Transform alignment operations in a row to an operation array.
 
     :param row: Full alignment record or just the "align_ops" field in a record (both are acceptable).
@@ -216,7 +217,7 @@ def row_to_arr(
 
 
 def arr_to_row(
-        op_arr: np.ndarray,
+        op_arr: NDArray[np.int_],
         row: Optional[dict[str, Any]] = None
 ) -> dict[str, Any]:
     """Transform an operation array to a dictionary with "op_code" and "op_len" keys (one array each) for rows.
@@ -260,10 +261,11 @@ def row_to_tuples(
     return list(zip(align_ops['op_code'], align_ops['op_len']))
 
 
-def clip_soft_to_hard(
-        op_arr: np.ndarray
-) -> np.ndarray:
-    """Shift soft clipped bases to hard clipped bases.
+def normalize_clipping(
+        op_arr: NDArray[np.int_]
+) -> NDArray[np.int_]:
+    """Shift soft clipped bases to hard clipped bases and eliminates non-matching (EQ, X, M) records
+    from the ends of the alignment.
 
     :param op_arr: Array of operations (n x 2, op_code/op_len columns).
 
@@ -276,17 +278,19 @@ def clip_soft_to_hard(
     clip_r = 0
     clip_r_i = op_arr.shape[0]
 
-    while clip_l_i < clip_r_i and op_arr[clip_l_i, 0] in CLIP_SET:
+    norm_set = CLIP_SET | {I, D}
+
+    while clip_l_i < clip_r_i and op_arr[clip_l_i, 0] in norm_set:
         clip_l += op_arr[clip_l_i, 1]
         clip_l_i += 1
 
-    while clip_r_i > clip_l_i and op_arr[clip_r_i - 1, 0] in CLIP_SET:
+    while clip_r_i > clip_l_i and op_arr[clip_r_i - 1, 0] in norm_set:
         clip_r += op_arr[clip_r_i - 1, 1]
         clip_r_i -= 1
 
     if clip_r_i == clip_l_i:
         if op_arr.shape[0] > 0:
-            raise ValueError('Alignment consists only of clipped bases')
+            raise ValueError('Alignment consists only of removed bases')
 
         return op_arr
 
@@ -300,10 +304,10 @@ def clip_soft_to_hard(
 
 
 def op_arr_add_coords(
-        op_arr: np.ndarray,
+        op_arr: NDArray[np.int_],
         pos_ref: int = 0,
         add_index: bool = True
-) -> np.ndarray:
+) -> NDArray[np.int_]:
     """Add coordinate and index columns to an operation array.
 
     Columns:
