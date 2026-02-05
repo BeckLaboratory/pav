@@ -120,9 +120,7 @@ def try_intra_region(
         max_expand = np.inf
 
     # Scan and expand
-
     df_inv = None
-    df_kde = None
     region_qry = None
 
     while df_inv is None and inv_iterations <= min_expand and inv_iterations <= max_expand:
@@ -146,7 +144,7 @@ def try_intra_region(
             break
 
         # Get query region
-        region_qry = align_lift.region_to_qry(region_ref, same_index=True)
+        region_qry = align_lift.region_to_qry(region_ref, same_align=True)
 
         # Check for expansion through a break in the query sequence
         if region_qry is None:

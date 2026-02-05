@@ -371,7 +371,10 @@ class AlignLift:
         self.df = df
         self.df_col_set = df_col_set
         self.df_index = df_index
-        self._fai_dict = dict(zip(df_qry_fai['chrom'], df_qry_fai['len']))
+        self._fai_dict = dict(zip(
+            df_qry_fai['qry_id' if 'qry_id' in df_qry_fai.columns else 'chrom'],
+            df_qry_fai['len']
+        ))
         self.cache_align = cache_align
 
         self._get_lift_seg = lru_cache(maxsize=self.cache_align)(self._get_lift_seg_nocache)

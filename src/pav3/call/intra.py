@@ -438,11 +438,11 @@ def variant_tables_inv(
     col_set = set(get_inv_row().keys())
 
     col_set.add('filter')
-    col_set.add('align_index')
+    col_set.add('align_source')
 
     table_schema = {col: type_ for col, type_ in schema.VARIANT.items() if col in col_set}
 
-    return (
+    df_inv = (
         pl.from_dicts(variant_table_list, schema=table_schema)
         .with_columns(
             expr.id_nonsnv().alias('id'),
@@ -450,12 +450,14 @@ def variant_tables_inv(
         )
         .join(
             df_align.select(['align_index', 'filter']),
-            left_on=pl.col('align_index').list.first(),
+            left_on=pl.col('align_source').list.first(),
             right_on='align_index',
             how='left'
         )
         .select(list(table_schema.keys()))
     )
+
+    return schema.cast(df_inv, schema.VARIANT)
 
 
 def variant_flag_inv(
