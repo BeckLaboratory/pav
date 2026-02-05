@@ -5,10 +5,15 @@ Alignment lift operations translate between reference and query alignments (both
 
 __all__ = [
     'AlignLift',
+    'get_lift_pairs',
     'DEFAULT_CACHE_SIZE',
+    'MULTI_REGION_POLICY',
+    'DEFAULT_MULTI_POLICY',
 ]
 
 from functools import lru_cache
+import itertools
+from operator import itemgetter
 
 from agglovar.meta.decorators import immutable
 import polars as pl
@@ -23,7 +28,6 @@ from typing import (
 from .. import schema
 
 from ..region import Region
-from ..seq import seq_len
 
 from . import op
 
@@ -31,6 +35,65 @@ from .features import FeatureGenerator
 
 DEFAULT_CACHE_SIZE: int = 100
 """Default number of liftover tree pairs (one per alignment record) to cache in memory."""
+
+MULTI_REGION_POLICY = {
+    'best':      ('score', 'filter', 'len', 'single_align', 'same_align'),
+    'align':     ('same_align', 'score', 'filter', 'len', 'single_align'),
+    'len':       ('len', 'score', 'filter', 'single_align', 'same_align'),
+    'align_len': ('same_align', 'len', 'score', 'filter', 'single_align'),
+    'fail': None,
+}
+"""Priority fields for multi-lift.
+
+When lifting a region, multiple alignment records may be found. This parameter defines how to
+prioritize them and choose the best one.
+
+Note that there are two coordinates lifted per region, a start position and an end position. These
+priorities operate on both and examine the alignment record for both.
+
+For example, "score" prioritizes alignment records by the lowest score first (lower score of the
+alignment record for the start position and end position). If scores are equal, it next prioritizes
+on the higher alignment record score. This ensures that a lift where a coordinate lands on a
+poor alignment record is not prioritized over one where both coordinates land on a better
+alignment record. 
+
+Values:
+* score: Prioritize by the alignment record scores. First by the lowest score, then by the highest.
+* filter: Prioritize by the lesser number of values in the alignment record "filter", first on
+  the record with more filters, then on the record with fewer filters.
+* len: Prioritize the alignment where the length of the lifted region most closely matches the
+  length of the original region before lifting.
+* single_align: Prioritize on lifts where the alignment record for both coordinates is the same
+  (i.e. "pos" and "end" land on the same record, not split across records).
+* same_align: Maximum number of alignment records retained through the lift. Values are lower
+  if a lift switches alignment records.
+
+Keys:
+* best: Prioritize on the best alignment records (score, filter, len, single_align, same_align).
+* align: Same align, then best (same_align, score, filter, len, single_align).
+* len: Same region length, then best (len, score, filter, single_align, same_align).
+* align_len: Same align, then length, then best (same_align, len, score, filter, single_align).
+* none: Fail if multiple alignment records are found, prioritize none.
+"""
+
+DEFAULT_MULTI_POLICY = MULTI_REGION_POLICY['best']
+"""Default multi-region policy."""
+
+_LIFT_SCHEMA = (
+    ('chrom', schema.ALIGN['chrom']),
+    ('pos', schema.ALIGN['pos']),
+    ('qry_id', schema.ALIGN['qry_id']),
+    ('qry_pos', schema.ALIGN['qry_pos']),
+    ('is_rev', schema.ALIGN['is_rev']),
+    ('index', schema.ALIGN['align_index']),
+    ('align_index', schema.ALIGN['align_index']),
+    ('score', pl.Float32),
+    ('filter', schema.ALIGN['filter']),
+    ('op_code', schema.ALIGN['align_ops'].fields[0].dtype.inner),
+    ('lift_id', schema.ALIGN['chrom']),
+    ('lift_pos', schema.ALIGN['pos']),
+)
+"""Schema for sorting lift pairs as a Polars table."""
 
 
 class LiftRange(NamedTuple):
@@ -372,6 +435,8 @@ class AlignLift:
                         'score': row['score'],
                         'filter': row['filter'],
                         'op_code': op_code,
+                        'lift_id': row['chrom'],
+                        'lift_pos': ref_pos,
                     }
                 )
 
@@ -435,98 +500,109 @@ class AlignLift:
                         'score': row['score'],
                         'filter': row['filter'],
                         'op_code': op_code,
+                        'lift_id': row['qry_id'],
+                        'lift_pos': qry_pos,
                     }
                 )
 
         return lift_list
 
+    def region_to_ref(
+            self,
+            region: Region,
+            same_align: bool = True,
+            single_align: bool = False,
+            multi: Optional[str] = 'best',
+    ) -> Optional[Region]:
+        """Lift region to reference.
+
+        :param region: Query region.
+        :param same_align: If True, maintain the alignment index of the original region.
+            Ignores matches on other alignment records.
+        :param single_align: If True, force the start and end positions to be on the same alignment
+            record.
+        :param multi: Multi-region policy. Valid values are any keys and values defined in
+            :const:`MULTI_REGION_POLICY` or `None` to fail if multiple matches are found (i.e.
+            would not allow ambiguity in the lift).
+
+        :returns: Reference region or `None` if it could not be lifted.
+        """
+        lift_pairs = get_lift_pairs(
+            a=self.to_ref(region.chrom, region.pos),
+            b=self.to_ref(region.chrom, region.end),
+            same_align=same_align,
+            single_align=single_align,
+            multi=multi,
+            align_index_a=region.pos_align_index,
+            align_index_b=region.end_align_index,
+            len_=len(region),
+        )
+
+        if len(lift_pairs) == 0:
+            return None
+
+        pos, end = sorted(lift_pairs[0], key=itemgetter('lift_pos'))
+
+        # Return
+        return Region(
+            chrom=pos['lift_id'],
+            pos=pos['lift_pos'],
+            end=end['lift_pos'],
+            is_rev=pos['is_rev'],
+            pos_align_index=pos['align_index'],
+            end_align_index=end['align_index'],
+        )
+
+    def region_to_qry(
+            self,
+            region: Region,
+            same_align: bool = True,
+            single_align: bool = False,
+            multi: Optional[str] = 'best',
+    ) -> Optional[Region]:
+        """Lift region to query.
+
+        :param region: Reference region.
+        :param same_align: If True, maintain the alignment index of the original region.
+            Ignores matches on other alignment records.
+        :param single_align: If True, force the start and end positions to be on the same alignment
+            record.
+        :param multi: Multi-region policy. Valid values are any keys and values defined in
+            :const:`MULTI_REGION_POLICY` or `None` to fail if multiple matches are found (i.e.
+            would not allow ambiguity in the lift).
+
+        :returns: Reference region or `None` if it could not be lifted.
+        """
+        lift_pairs = get_lift_pairs(
+            a=self.to_qry(region.chrom, region.pos),
+            b=self.to_qry(region.chrom, region.end),
+            same_align=same_align,
+            single_align=single_align,
+            multi=multi,
+            align_index_a=region.pos_align_index,
+            align_index_b=region.end_align_index,
+            len_=len(region),
+        )
+
+        if len(lift_pairs) == 0:
+            return None
+
+        pos, end = sorted(lift_pairs[0], key=itemgetter('lift_pos'))
+
+        # Return
+        return Region(
+            chrom=pos['lift_id'],
+            pos=pos['lift_pos'],
+            end=end['lift_pos'],
+            is_rev=pos['is_rev'],
+            pos_align_index=pos['align_index'],
+            end_align_index=end['align_index'],
+        )
+
     @property
     def fai_dict(self) -> dict[str, int]:
         """Get a dict mapping query IDs to query sequence lengths."""
         return self._fai_dict.copy()
-
-
-    # def region_to_ref(
-    #         self,
-    #         region_qry: Region,
-    #         same_index: bool = False
-    # ):
-    #     """Lift region to reference.
-    #
-    #     :param region_qry: Query region.
-    #     :param same_index: If True, the region must have the same alignment index as the reference region.
-    #
-    #     :returns: Reference region or `None` if the query region could not be lifted.
-    #     """
-    #     # Lift
-    #     ref_pos, end_ref = self.coord_to_ref(region_qry.chrom, (region_qry.pos, region_qry.end))
-    #
-    #     if same_index:
-    #         if region_qry.pos_align_index is not None:
-    #             ref_pos = [_ for _ in ref_pos if _['align_index'] == region_qry.pos_align_index]
-    #
-    #         if region_qry.end_align_index is not None:
-    #             end_ref = [_ for _ in end_ref if _['align_index'] == region_qry.end_align_index]
-    #
-    #     if len(ref_pos) != 1 or len(end_ref) != 1:
-    #         return None
-    #
-    #     ref_pos = ref_pos[0]
-    #     end_ref = end_ref[0]
-    #
-    #     if ref_pos['chrom'] != end_ref['chrom'] or ref_pos['is_rev'] != end_ref['is_rev']:
-    #         return None
-    #
-    #     # Return
-    #     return Region(
-    #         chrom=ref_pos['chrom'],
-    #         pos=min(ref_pos['pos'], end_ref['pos']),
-    #         end=max(ref_pos['pos'], end_ref['pos']),
-    #         is_rev=ref_pos['is_rev'],
-    #         pos_align_index=ref_pos['align_index'],
-    #         end_align_index=end_ref['align_index'],
-    #     )
-    #
-    # def region_to_qry(
-    #         self,
-    #         region_ref: Region,
-    #         same_index: bool = False
-    # ):
-    #     """Lift region to query.
-    #
-    #     :param region_ref: Reference region.
-    #     :param same_index: If True, the region must have the same alignment index as the reference region.
-    #
-    #     :returns: Query region or `None` if it could not be lifted.
-    #     """
-    #     # Lift
-    #     query_pos, query_end = self.coord_to_qry(region_ref.chrom, (region_ref.pos, region_ref.end))
-    #
-    #     if same_index:
-    #         if region_ref.pos_align_index is not None:
-    #             query_pos = [_ for _ in query_pos if _['align_index'] == region_ref.pos_align_index]
-    #
-    #         if region_ref.end_align_index is not None:
-    #             query_end = [_ for _ in query_end if _['align_index'] == region_ref.end_align_index]
-    #
-    #     if len(query_pos) != 1 or len(query_end) != 1:
-    #         return None
-    #
-    #     query_pos = query_pos[0]
-    #     query_end = query_end[0]
-    #
-    #     if query_pos['chrom'] != query_end['chrom'] or query_pos['is_rev'] != query_end['is_rev']:
-    #         return None
-    #
-    #     # Return
-    #     return Region(
-    #         chrom=query_pos['chrom'],
-    #         pos=min(query_pos['pos'], query_end['pos']),
-    #         end=max(query_pos['pos'], query_end['pos']),
-    #         is_rev=query_pos['is_rev'],
-    #         pos_align_index=query_pos['align_index'],
-    #         end_align_index=query_end['align_index'],
-    #     )
 
     def _get_lift_seg_nocache(
             self,
@@ -547,9 +623,183 @@ class AlignLift:
             self._fai_dict,
         )
 
-    def __repr__(self):
-        """Get a string representation."""
-        return 'AlignLift()'
+
+def get_lift_pairs(
+        a: Iterable[dict[str, Any]],
+        b: Iterable[dict[str, Any]],
+        same_align: bool = False,
+        single_align: bool = False,
+        multi: Optional[str] = 'best',
+        align_index_a: Optional[int] = None,
+        align_index_b: Optional[int] = None,
+        len_: Optional[int] = None,
+) -> Optional[
+    list[
+        tuple[
+            dict[str, Any],
+            dict[str, Any]
+        ]
+    ]
+]:
+    """Get the optimal lift pair.
+
+    When lifting a region with a start and end position (pos and end for reference, qry_pos
+    and qry_end for query), multiple lift options may exist. For example, multiple alignments
+    may be present at the breakpoints. This function returns all possible coordinate pairs with
+    optimal pairs sorted first.
+
+    :param a: List of lifts for the first coordinate.
+    :param b: List of lifts for the second coordinate.
+    :param same_align: If True, maintain the alignment index of the original region.
+        Ignores matches on other alignment records.
+    :param single_align: If True, force the start and end positions to be on the same alignment
+        record.
+    :param multi: Multi-region policy. Valid values are any keys and values defined in
+        :const:`MULTI_REGION_POLICY` or `None` to fail if multiple matches are found (i.e.
+        would not allow ambiguity in the lift).
+    :param align_index_a: Alignment index for the first coordinate.
+    :param align_index_b: Alignment index for the second coordinate.
+    :param len_: Length of the query sequence.
+
+    :returns: Tuple of the optimal lift pair.
+    """
+    lift_pairs = []
+
+    match_fields: tuple[str, ...] = ('chrom', 'align_index', 'is_rev',) if single_align else ('chrom', 'is_rev',)
+
+    for lift_a, lift_b in itertools.product(
+        (_ for _ in a if _['align_index'] == align_index_a)
+        if same_align and align_index_a is not None else tuple(a),
+        (_ for _ in b if _['align_index'] == align_index_b)
+        if same_align and align_index_b is not None else tuple(b),
+    ):
+        if not all(lift_a[field] == lift_b[field] for field in match_fields):
+            continue
+
+        lift_pairs.append((lift_a, lift_b))
+
+    if len(lift_pairs) < 2:
+        return lift_pairs
+
+    multi = MULTI_REGION_POLICY.get(multi, multi)
+
+    if multi is None:
+        return []
+
+    try:
+        multi = tuple(val.strip() for val in multi.split())
+    except AttributeError:
+        ...  # Ignore, already a tuple or contains non-string values that _pair_sort_expr will handle
+
+    df_pairs = (
+        (  # a
+            pl.LazyFrame(
+                [_[0] for _ in lift_pairs],
+                schema=_LIFT_SCHEMA,
+            )
+            .select(pl.all().name.prefix('a_'))
+            .with_row_index('_index')
+        )
+        .join(  # b
+            pl.LazyFrame(
+                [_[1] for _ in lift_pairs],
+                schema=_LIFT_SCHEMA,
+            )
+            .select(pl.all().name.prefix('b_'))
+            .with_row_index('_index'),
+            on='_index', how='inner'
+        )
+        .with_columns(
+            pl.lit(len_).cast(pl.Int64).alias('_len'),
+            pl.lit(align_index_a).cast(pl.Int32).alias('_align_index_a'),
+            pl.lit(align_index_b).cast(pl.Int32).alias('_align_index_b'),
+        )
+        .sort(
+            _pair_sort_expr(multi)
+        )
+        .collect()
+    )
+
+    return list(zip(
+        (
+            df_pairs
+            .select(cs.starts_with('a_').name.replace('^a_', ''))
+        ).iter_rows(named=True),
+        (
+            df_pairs
+            .select(cs.starts_with('b_').name.replace('^b_', ''))
+        ).iter_rows(named=True)
+    ))
+
+
+@lru_cache
+def _pair_sort_expr(
+        multi_policy: tuple[str] | str,
+) -> tuple[pl.Expr]:
+    """Get sort expressions for a multi-region policy.
+
+    Valid values are defined in :const:`MULTI_REGION_POLICY`. Note that this function does not look up
+    the values in :const:`MULTI_REGION_POLICY`, the provided tuples must already be translated.
+
+    :param multi_policy: Multi-region policy as a tuple of strings indicating each field to sort in
+        order of priority. If a string is provided, it is treated as a single field.
+
+    :returns: Tuple of sort expressions.
+    """
+    expr_list = []
+
+    if isinstance(multi_policy, str):
+        multi_policy = (multi_policy,)
+
+    for field in multi_policy:
+
+        if field == 'score':
+            expr_list.extend([
+                -pl.min_horizontal('a_score', 'b_score'),
+                -pl.max_horizontal('a_score', 'b_score'),
+            ])
+
+        elif field == 'filter':
+            expr_list.extend([
+                pl.max_horizontal(
+                    pl.col('a_filter').list.len(),
+                    pl.col('b_filter').list.len()
+                ),
+                pl.min_horizontal(
+                    pl.col('a_filter').list.len(),
+                    pl.col('b_filter').list.len()
+                ),
+            ])
+
+        elif field == 'len':
+            expr_list.append(
+                (
+                    (
+                        pl.max_horizontal('a_lift_pos', 'b_lift_pos')
+                        - pl.min_horizontal('a_lift_pos', 'b_lift_pos')
+                    ).cast(pl.Int64).abs()
+                    - pl.col('_len')
+                ).cast(pl.Int64).abs()
+            )
+
+        elif field == 'single_align':
+            expr_list.append(
+                (pl.col('a_align_index') != pl.col('b_align_index')).cast(pl.Int8)
+            )
+
+        elif field == 'same_align':
+            expr_list.append(
+                - pl.sum_horizontal(
+                    pl.col('a_align_index') == pl.col('_align_index_a'),
+                    pl.col('b_align_index') == pl.col('_align_index_b')
+                ).cast(pl.Int32)
+            )
+
+        else:
+            raise ValueError(f'Unknown field: {field}')
+
+    return tuple(expr_list)
+
 
 def _get_df_op(
         align_table_index: int,

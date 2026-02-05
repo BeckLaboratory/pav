@@ -50,6 +50,7 @@ rule call_vcf:
     output:
         vcf='{asm_name}.vcf.gz',
         csi='{asm_name}.vcf.gz.csi',
+    benchmark: 'log/benchmark/{asm_name}/call_vcf.tsv'
     threads: POLARS_MAX_THREADS
     run:
 
@@ -193,6 +194,7 @@ rule call_tables_callable:
     output:
         callable_ref='results/{asm_name}/call_hap/callable_ref_{hap}.parquet',
         callable_qry='results/{asm_name}/call_hap/callable_qry_{hap}.parquet',
+    benchmark: 'log/benchmark/{asm_name}/call_callable_{hap}.tsv'
     run:
 
         # Read tables
@@ -249,6 +251,7 @@ rule call_tables_all:
             vartype=('insdel', 'inv', 'snv', 'cpx', 'dup')
         )
 
+
 # Merge one sample and variant type
 rule call_tables:
     input:
@@ -261,6 +264,7 @@ rule call_tables:
         ref_fofn='data/ref/ref.fofn'
     output:
         pq='results/{asm_name}/call/call_{vartype}.parquet'
+    benchmark: 'log/benchmark/{asm_name}/call_merge_{vartype}.tsv'
     threads: POLARS_MAX_THREADS
     run:
         with open(input.ref_fofn) as in_file:
@@ -290,6 +294,17 @@ rule call_tables:
         )
 
 
+# Merge all samples and variant types
+localrules: call_tables_hap_all
+
+rule call_tables_hap_all:
+    input:
+        pq_merge=lambda wildcards: pav3.pipeline.expand_pattern(
+            'results/{asm_name}/call_hap/call_{vartype}_{hap}.parquet',
+            ASM_TABLE, PAV_CONFIG,
+            vartype=('insdel', 'inv', 'snv', 'cpx', 'dup')
+        )
+
 # Integrate variant sources
 rule call_integrate_sources:
     input:
@@ -312,9 +327,9 @@ rule call_integrate_sources:
         dup='results/{asm_name}/call_hap/call_dup_{hap}.parquet',
         inter_segment='results/{asm_name}/call_hap/inter/inter_segment_{hap}.parquet',
         inter_ref_trace='results/{asm_name}/call_hap/inter/inter_reftrace_cpx_{hap}.parquet',
+    benchmark: 'log/benchmark/{asm_name}/call_integrate_sources_{hap}.tsv'
     threads: POLARS_MAX_THREADS
     run:
-
         pav_params = pav3.params.PavParams(wildcards.asm_name, PAV_CONFIG, ASM_TABLE)
 
         inv_min = pav_params.inv_min
@@ -344,7 +359,7 @@ rule call_integrate_sources:
 
         # Save alignment records for INNER variants
         df_inner_schema = {
-            'align_index': pav3.schema.ALIGN['align_index'],
+            'align_source': pav3.schema.VARIANT['align_source'],
             'id': pav3.schema.VARIANT['id'],
         }
 
@@ -616,7 +631,8 @@ rule call_inter:
         pq_ref_trace=temp('temp/{asm_name}/call_hap/inter_reftrace_cpx_{hap}.parquet'),
         dot_tar='results/{asm_name}/call_hap/inter/inter_graph_{asm_name}_{hap}.tar',
     log:
-        log='log/{asm_name}/call_hap/inter_call_{hap}.log'
+        log='log/call/{asm_name}/call_hap/inter_call_{hap}.log'
+    benchmark: 'log/benchmark/{asm_name}/call_inter_{hap}.tsv'
     threads: POLARS_MAX_THREADS
     run:
 
@@ -662,13 +678,13 @@ rule call_inter:
             )
 
             # Call
-            temp_dir_parent = f'temp/{wildcards.asm_name}/call_hap/intra'
-
-            os.makedirs(temp_dir_parent, exist_ok=True)
+            temp_dir_parent = f'temp/{wildcards.asm_name}/call_hap/inter'
 
             with tempfile.TemporaryDirectory(
                     dir=temp_dir_parent, prefix=f'call_inter_{wildcards.hap}_dotfiles.'
             ) as dot_dirname:
+
+                pav3.lgsv.call.call_from_align
 
                 lgsv_list = pav3.lgsv.call.call_from_align(
                     caller_resources, min_anchor_score=min_anchor_score, dot_dirname=dot_dirname
@@ -825,6 +841,7 @@ rule call_intra_inv:
         qry_fofn='data/query/{asm_name}/query_{hap}.fofn',
     output:
         pq_inv=temp('temp/{asm_name}/call_hap/intra_inv_{hap}.parquet'),
+    benchmark: 'log/benchmark/{asm_name}/call_intra_inv_{hap}.tsv'
     threads: POLARS_MAX_THREADS
     run:
 
@@ -864,6 +881,7 @@ rule call_intra_inv_flag:
         qry_fofn='data/query/{asm_name}/query_{hap}.fofn',
     output:
         pq_flag=temp('temp/{asm_name}/call_hap/intra_inv_flagged_sites_{hap}.parquet'),
+    benchmark: 'log/benchmark/{asm_name}/call_intra_inv_flag_{hap}.tsv'
     run:
 
         # Get parameters
@@ -904,6 +922,7 @@ rule call_intra_snv_insdel:
     output:
         pq_snv=temp('temp/{asm_name}/call_hap/intra_snv_{hap}.parquet'),
         pq_insdel=temp('temp/{asm_name}/call_hap/intra_insdel_{hap}.parquet')
+    benchmark: 'log/benchmark/{asm_name}/call_intra_snv_insdel_{hap}.tsv'
     threads: POLARS_MAX_THREADS
     run:
 

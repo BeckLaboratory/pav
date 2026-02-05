@@ -48,6 +48,7 @@ rule tracks_var_invdupcpx:
         ref_fofn='data/ref/ref.fofn',
     output:
         bb='tracks/call_hap/tracks_call_hap_{asm_name}_{hap}_sv_invdupcpx.bb',
+    benchmark: 'log/benchmark/{asm_name}/tracks_var_invdupcpx_{hap}.tsv'
     run:
 
         ref_fai = pav3.pipeline.expand_fofn(input.ref_fofn)[1]
@@ -97,6 +98,7 @@ rule tracks_var_insdel_snv:
     wildcard_constraints:
         varclass='sv|indel|svindel|snv',
         vartype='insdel|snv',
+    benchmark: 'log/benchmark/{asm_name}/tracks_var_insdel_snv_{hap}_{varclass}_{vartype}.tsv'
     run:
         ref_fai = pav3.pipeline.expand_fofn(input.ref_fofn)[1]
         df_fai = agglovar.fa.read_fai(ref_fai)
@@ -167,6 +169,7 @@ rule tracks_align:
         bb_none='tracks/align/trim_none/tracks_align_{asm_name}_trim-none.bb',
         bb_qry='tracks/align/trim_qry/tracks_align_{asm_name}_trim-qry.bb',
         bb_qryref='tracks/align/trim_qryref/tracks_align_{asm_name}_trim-qryref.bb',
+    benchmark: 'log/benchmark/{asm_name}/tracks_align.tsv'
     run:
         ALIGN_PATTERN = 'results/{asm_name}/align/{hap}/align_trim-{trim}.parquet'
 

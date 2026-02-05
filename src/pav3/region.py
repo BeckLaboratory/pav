@@ -87,7 +87,7 @@ class Region(object):
             min_pos: int = 0,
             max_end: Optional[int | pl.DataFrame | pl.LazyFrame] = None,
             shift: bool = True,
-            balance: float = 0.5
+            balance: float = 0.5,
     ) -> Self:
         """Expand this region in place by `expand_bp`.
 

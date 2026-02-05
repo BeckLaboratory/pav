@@ -13,7 +13,7 @@ __all__ = [
     'cluster_table_sig'
 ]
 
-from typing import Any, Optional
+from typing import Any, Optional, Iterable
 
 import agglovar
 import numpy as np
@@ -281,7 +281,7 @@ def try_intra_region(
     return get_inv_row(
         region_ref_inner, region_ref_outer,
         region_qry_inner, region_qry_outer,
-        region_flag.pos_align_index
+        [region_flag.pos_align_index]
     )
 
 
@@ -290,7 +290,7 @@ def get_inv_row(
         region_ref_outer: Optional[Region] = None,
         region_qry_inner: Optional[Region] = None,
         region_qry_outer: Optional[Region] = None,
-        align_index: Optional[int] = None,
+        align_source: Optional[Iterable[int] | int] = None,
 ) -> dict[str, Any]:
     """Format an inversion into a dict.
 
@@ -301,10 +301,10 @@ def get_inv_row(
     :param region_ref_outer: Outer reference region.
     :param region_qry_inner: Inner query region.
     :param region_qry_outer: Outer query region.
-    :param align_index: Alignment index.
+    :param align_source: Index of the source alignment record.
     """
     none_vals = [region is None for region in [
-        region_ref_inner, region_ref_outer, region_qry_inner, region_qry_outer, align_index
+        region_ref_inner, region_ref_outer, region_qry_inner, region_qry_outer, align_source
     ]]
 
     if all(none_vals):
@@ -312,10 +312,14 @@ def get_inv_row(
         region_ref_outer = Region('NA', 0, 0)
         region_qry_inner = Region('NA', 0, 0)
         region_qry_outer = Region('NA', 0, 0)
-        align_index = -1
-
+        align_source = [-1]
     elif any(none_vals):
         raise ValueError('All arguments may be None, or all arguments must be non-None')
+
+    try:
+        align_source = list(align_source)
+    except TypeError:
+        align_source = [align_source]
 
     return {
         'chrom': region_ref_inner.chrom,
@@ -323,7 +327,7 @@ def get_inv_row(
         'end': region_ref_inner.end,
         'vartype': 'INV',
         'varlen': len(region_ref_inner),
-        'align_index': align_index,
+        'align_source': align_source,
         'qry_id': region_qry_inner.chrom,
         'qry_pos': region_qry_inner.pos,
         'qry_end': region_qry_inner.end,

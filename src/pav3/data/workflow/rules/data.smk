@@ -37,6 +37,7 @@ rule align_get_qry_fa:
         )
     output:
         fofn='data/query/{asm_name}/query_{hap}.fofn'
+    benchmark: 'log/benchmark/{asm_name}/align_get_qry_fa_{hap}.tsv'
     run:
 
         pav_params = pav3.params.PavParams(wildcards.asm_name, PAV_CONFIG, ASM_TABLE)
@@ -87,6 +88,7 @@ rule data_ref_info_table:
         fofn='data/ref/ref.fofn'
     output:
         pq='data/ref/ref_info.parquet'
+    benchmark: 'log/benchmark/data_ref_info_table.tsv'
     threads: POLARS_MAX_THREADS
     run:
 
@@ -108,6 +110,7 @@ rule data_ref_info_table:
 rule data_ref_fofn:
     output:
         fofn='data/ref/ref.fofn'
+    benchmark: 'log/benchmark/data_ref_fofn.tsv'
     run:
 
         # Check reference

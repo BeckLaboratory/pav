@@ -304,7 +304,7 @@ def call_hap_invdupcpx(
                 pl.when(pl.col('align_index').is_not_null())
                 .then(pl.concat_list('align_index'))
                 .otherwise(pl.lit([]))
-            ).alias('align_index'),
+            ).alias('align_source'),
             pl.concat_str(
                 pl.lit('Segment '), pl.col('seg_index') + 1, pl.lit('/'), '_n_seg',
                 pl.lit(', len_ref='), 'len_ref', pl.lit(', len_qry='), 'len_qry',
@@ -741,7 +741,7 @@ def _var_fields(
         pl.lit(asm_name).alias('asm_name'),
         pl.lit(hap).alias('hap'),
         expr.qry_region().alias('qry_region'),
-        pl.col('align_index').cast(pl.List(pl.String)).list.join(',').cast(pl.String).alias('align_index'),
+        pl.col('align_source').cast(pl.List(pl.String)).list.join(',').cast(pl.String).alias('align_source'),
         pl.lit(1000).alias('track_score'),
     ]
 

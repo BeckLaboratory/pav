@@ -277,10 +277,10 @@ class Variant(ABC):
         return self.interval.is_rev
 
     @property
-    def align_index(self) -> list[int]:
+    def align_source(self) -> list[int]:
         """List of aligned segment indices."""
         if self.interval is None:
-            raise ValueError('Property "align_index" is not set on a null variant')
+            raise ValueError('Property "align_source" is not set on a null variant')
 
         return (
             self.interval.df_segment
@@ -427,7 +427,7 @@ class Variant(ABC):
                 'chrom', 'pos', 'end',
                 'vartype', 'varlen', 'filter',
                 'qry_id', 'qry_pos', 'qry_end', 'qry_rev',
-                'call_source', 'var_score', 'align_index',
+                'call_source', 'var_score', 'align_source',
                 'hom_ref', 'hom_qry', 'seq',
             } |
             cls._row_set() |

@@ -25,7 +25,6 @@ from typing import Optional
 
 import Bio.Seq
 import Bio.SeqIO
-import numpy as np
 import polars as pl
 
 from .. import schema
@@ -41,6 +40,7 @@ from ..params import PavParams
 from ..seq import LRUSequenceCache
 
 from . import expr
+from .util import COMPL_TR_FROM, COMPL_TR_TO
 
 
 # Tag variants called with this source
@@ -93,6 +93,11 @@ def variant_tables_snv_insdel(
 
     score_model = get_score_model(pav_params.align_score_model)
 
+    expr_id_snv = expr.id_snv()
+    expr_id_insdel = expr.id_nonsnv()
+
+    varscore_snv = score_model.mismatch(1)
+
     # Alignment dataframe
     if not isinstance(df_align, pl.LazyFrame):
         df_align = df_align.lazy()
@@ -103,16 +108,17 @@ def variant_tables_snv_insdel(
     if temp_dir_name is not None and not os.path.isdir(temp_dir_name):
         raise ValueError(f'Temporary directory does not exist or is not a directory: {temp_dir_name}')
 
-    # Temporary schema - Leave align_index as an integer until the end (after align table join) -
-    # then it becomes a list of integers (as defined by the PAV variant table schema).
-    build_schema = schema.VARIANT | {'align_index': pl.Int32}
-
     # Create variant tables
+    df_align = (
+        df_align
+        .drop('_index', strict=False)
+        .with_row_index('_index')
+    )
+
     with (
         LRUSequenceCache(ref_fa_filename, 1) as ref_cache,
         LRUSequenceCache(qry_fa_filename, 10) as qry_cache,
     ):
-
         chrom_table_list = {'snv': [], 'insdel': []}
 
         for chrom in chrom_list:
@@ -128,249 +134,196 @@ def variant_tables_snv_insdel(
 
             df_chrom_list = {'snv': [], 'insdel': []}
 
-            for row in (
+            for index, qry_id, is_rev, pos in (
                     df_align
                     .filter(pl.col('chrom') == chrom)
                     .sort('qry_id')
+                    .select('_index', 'qry_id', 'is_rev', 'pos')
                     .collect()
-                    .iter_rows(named=True)
+                    .iter_rows()
             ):
+                if debug:
+                    print(f'* {chrom}: index={index}, qry_id={qry_id}, is_rev={is_rev}, pos={pos}')
 
                 # Query sequence
-                seq_qry = qry_cache[(row['qry_id'], row['is_rev'])]
-                seq_qry_org = qry_cache[row['qry_id']] if debug else None
+                seq_qry = qry_cache[qry_id]
 
-                # List for collecting variants for this row
-                row_list = {'snv': [], 'insdel': []}
+                qry_len = len(seq_qry)
 
-                # Augment operation array
-                op_arr = op.row_to_arr(row)
+                qry_shift = 1 if is_rev else 0
 
-                adv_ref_arr = op_arr[:, 1] * np.isin(op_arr[:, 0], op.ADV_REF_ARR)
-                adv_qry_arr = op_arr[:, 1] * np.isin(op_arr[:, 0], op.ADV_QRY_ARR)
+                if is_rev:
+                    get_ins_seq = lambda coords: str(Bio.Seq.Seq(seq_qry[coords['qry_pos']:coords['qry_end']]).reverse_complement())
+                else:
+                    get_ins_seq = lambda coords: seq_qry[coords['qry_pos']:coords['qry_end']]
 
-                ref_pos_arr = np.cumsum(adv_ref_arr) - adv_ref_arr + row['pos']
-                qry_pos_arr = np.cumsum(adv_qry_arr) - adv_qry_arr
+                # Get alignment indices
+                df = (
+                    df_align
+                    .filter(pl.col('_index') == index)
+                    .with_columns(
+                        pl.col('align_ops').struct.field('op_code'),
+                        pl.col('align_ops').struct.field('op_len'),
+                    )
+                    .drop('align_ops')
+                    .explode(['op_code', 'op_len'])
+                    .with_columns(
+                        pl.when(pl.col('op_code').is_in(op.ADV_QRY_ARR))
+                        .then(pl.col('op_len'))
+                        .otherwise(0)
+                        .alias('qry_len'),
+                        pl.when(pl.col('op_code').is_in(op.ADV_REF_ARR))
+                        .then(pl.col('op_len'))
+                        .otherwise(0)
+                        .alias('ref_len'),
+                    )
+                    .with_columns(
+                        (pl.col('ref_len').cum_sum() + pos).alias('end'),
+                        (pl.col('qry_len').cum_sum()).alias('qry_end'),
+                    )
+                    .with_columns(
+                        pl.col('end').shift(1, fill_value=pos).alias('pos'),
+                        pl.col('qry_end').shift(1, fill_value=0).alias('qry_pos'),
+                        pl.concat_list('align_index').alias('align_source'),
+                        pl.col('score').alias('_align_score')
+                    )
+                )
 
-                op_arr = np.concatenate([
-                    op_arr,
-                    np.expand_dims(ref_pos_arr, axis=1),
-                    np.expand_dims(qry_pos_arr, axis=1),
-                    np.expand_dims(np.arange(op_arr.shape[0]), axis=1)
-                ], axis=1)
-
-                # Save frequently-used fields
-                align_index = row['align_index']
-                is_rev = row['is_rev']
+                if is_rev:
+                    df = (
+                        df
+                        .with_columns(
+                            (qry_len - (pl.col('qry_end'))).alias('qry_pos'),
+                            (qry_len - pl.col('qry_pos')).alias('qry_end'),
+                        )
+                    )
 
                 # Call SNV
-                for index in np.where(op_arr[:, 0] == op.X)[0]:
-                    op_code, op_len, op_pos_ref, op_pos_qry, op_index = op_arr[index]
+                df_snv = (
+                    df
+                    .filter(pl.col('op_code') == op.X)
 
-                    for i in range(op_len):
+                    # Expand multi-base SNVs (MNVs) to individual SNV calls
+                    .with_columns(
+                        pl.int_ranges(0, pl.col('op_len')).alias('_offset_pos')
+                    )
+                    .explode('_offset_pos')
+                    .with_columns(
+                        (pl.col('pos') + pl.col('_offset_pos')).alias('pos'),
+                        (
+                            pl.col('qry_pos') + pl.col('_offset_pos')  # Shift within coordinates
+                            + (pl.col('op_len') - 2 * pl.col('_offset_pos') - 1) * qry_shift  # If on reverse coordinates, invert coordinates within multi-base mismatch alignments
+                        ).alias('qry_pos'),
+                    )
+                    .with_columns(
+                        (pl.col('pos') + 1).alias('end'),
+                        (pl.col('qry_pos') + 1).alias('qry_end'),
+                    )
 
-                        # Get position and bases
-                        pos_ref = op_pos_ref + i
-                        pos_qry = (len(seq_qry) - (op_pos_qry + i) - 1) if is_rev else (op_pos_qry + i)
+                    # Complete SNV variant table
+                    .with_columns(
+                        pl.lit('SNV').alias('vartype'),
+                        pl.col('pos').map_elements(lambda pos: seq_ref[pos]).alias('ref'),
+                        pl.col('qry_pos').map_elements(lambda pos: seq_qry[pos]).alias('alt'),
+                    )
+                )
 
-                        base_ref = seq_ref[pos_ref]
-                        base_qry = seq_qry[op_pos_qry + i]
+                if is_rev:
+                    df_snv = df_snv.with_columns(
+                        pl.col('alt').replace(COMPL_TR_FROM, COMPL_TR_TO).alias('alt'),
+                    )
 
-                        assert base_ref.upper() != base_qry.upper(), (
-                            'Bases match at alignment mismatch site: '
-                            'Operation (op_code="%s", op_len=%d, op_index=%d, is_rev=%s): '
-                            'ref=%s, qry=%s' % (
-                                str(op.OP_CHAR_FUNC(op_code)), op_len, op_index, is_rev, base_ref, base_qry
-                            )
-                        )
-
-                        # Query coordinates
-                        if debug:
-                            base_qry_exp = seq_qry_org[pos_qry].upper()
-
-                            if is_rev:
-                                base_qry_exp = str(Bio.Seq.Seq(base_qry_exp).reverse_complement())
-
-                            assert base_qry == base_qry_exp, (
-                                'Expected base does not match (reverse-complement logic error?): '
-                                'Operation (op_code="%s", op_len=%d, op_index=%d, is_rev=%s): '
-                                'base=%s, expected=%s' % (
-                                    str(op.OP_CHAR_FUNC(op_code)),
-                                    op_len, op_index, is_rev, base_qry, base_qry_exp
-                                )
-                            )
-
-                        # Add variant
-                        row_list['snv'].append((
-                            pos_ref,
-                            'SNV',
-                            align_index,
-                            pos_qry,
-                            base_ref,
-                            base_qry
-                        ))
+                df_snv = (
+                    df_snv
+                    .select(
+                        'chrom', 'pos', 'end',
+                        expr_id_snv,
+                        'vartype',
+                        'ref', 'alt',
+                        'filter',
+                        'qry_id', 'qry_pos', 'qry_end',
+                        pl.col('is_rev').alias('qry_rev'),
+                        pl.lit(CALL_SOURCE).alias('call_source'),
+                        pl.lit(varscore_snv).alias('var_score'),
+                        'align_source',
+                        '_align_score',
+                    )
+                    .with_row_index('_index')
+                )
 
                 # Call INS/DEL
-                for index in np.where((op_arr[:, 0] == op.I) | (op_arr[:, 0] == op.D))[0]:
-                    op_code, op_len, op_pos_ref, op_pos_qry, op_index = op_arr[index]
-
-                    assert op_code in {op.I, op.D}, (
-                        'Unexpected alignment operation at alignment index %d: %s' % (
-                            align_index, str(op.OP_CHAR_FUNC(op_code))
-                        )
-                    )
-
-                    pos_qry = (len(seq_qry) - op_pos_qry - op_len) if is_rev else op_pos_qry
-
-                    if op_code == op.I:
-                        seq = seq_qry[op_pos_qry:op_pos_qry + op_len]
-
-                        row_list['insdel'].append((
-                            op_pos_ref,
-                            op_pos_ref + 1,
-                            'INS',
-                            align_index,
-                            pos_qry,
-                            pos_qry + op_len,
-                            op_len,
-                            seq
-                        ))
-
-                    elif op_code == op.D:
-                        seq = seq_ref[op_pos_ref:op_pos_ref + op_len]
-
-                        row_list['insdel'].append((
-                            op_pos_ref,
-                            op_pos_ref + op_len,
-                            'DEL',
-                            align_index,
-                            pos_qry,
-                            pos_qry + 1,
-                            op_len,
-                            seq
-                        ))
-
-                    # Query coordinates
-                    if debug and op_code == op.I:
-                        seq_exp = seq_qry_org[pos_qry:pos_qry + op_len].upper()
-
-                        if is_rev:
-                            seq_exp = str(Bio.Seq.Seq(seq_exp).reverse_complement())
-
-                        assert seq.upper() == seq_exp, (
-                            'Expected sequence does not match (reverse-complement logic error?): '
-                            'Operation (op_code="%s", op_len=%d, op_index=%d, is_rev=%s): ' % (
-                                str(op.OP_CHAR_FUNC(op_code)),
-                                op_len, op_index, is_rev
-                            )
-                        )
-
-                # Collect SNV and INS/DEL tables for this alignment record (row)
-                # TODO: Defer chrom and id to chromosome-level variants
-                df_snv = (
-                    pl.DataFrame(
-                        row_list['snv'],
-                        orient='row',
-                        schema={
-                            key: build_schema[key]
-                            for key in ('pos', 'vartype', 'align_index', 'qry_pos', 'ref', 'alt')
-                        }
-                    )
-                    .lazy()
+                df_ins = (
+                    df
+                    .filter(pl.col('op_code') == op.I)
                     .with_columns(
-                        pl.lit(chrom).cast(build_schema['chrom']).alias('chrom'),
-                        (pl.col('pos') + 1).cast(build_schema['end']).alias('end'),
-                        pl.lit(row['qry_id']).cast(build_schema['qry_id']).alias('qry_id'),
-                        (pl.col('qry_pos') + 1).cast(build_schema['qry_end']).alias('qry_end'),
+                        (pl.col('pos') + 1).alias('end'),
+                        pl.lit('INS').alias('vartype'),
+                        pl.col('op_len').alias('varlen'),
+                        (
+                            pl.struct('qry_pos', 'qry_end')
+                            .map_elements(get_ins_seq, return_dtype=pl.String)
+                        ).alias('seq'),
+                        pl.col('op_len').map_elements(score_model.gap).alias('var_score'),
                     )
-                    .with_columns(
-                        expr.id_snv().alias('id')
-                    )
-                    .collect()
-                    .lazy()
                 )
 
-                df_chrom_list['snv'].append(df_snv)
+                df_del = (
+                    df
+                    .filter(pl.col('op_code') == op.D)
+                    .with_columns(
+                        (pl.col('qry_pos') + 1).alias('qry_end'),
+                        pl.lit('DEL').alias('vartype'),
+                        pl.col('op_len').alias('varlen'),
+                        (
+                            pl.struct('pos', 'end')
+                            .map_elements(lambda coords: seq_ref[coords['pos']:coords['end']], return_dtype=pl.String)
+                        ).alias('seq'),
+                        pl.col('op_len').map_elements(score_model.gap).alias('var_score'),
+                    )
+                )
 
                 df_insdel = (
-                    pl.DataFrame(
-                        row_list['insdel'],
-                        orient='row',
-                        schema={
-                            key: build_schema[key] for key in (
-                                'pos', 'end', 'vartype', 'align_index', 'qry_pos', 'qry_end', 'varlen', 'seq'
-                            )
-                        }
+                    pl.concat([df_ins, df_del])
+                    .sort(
+                        ['pos', 'end', '_align_score', 'qry_id', 'qry_pos'],
+                        descending=[False, False, True, False, False]
                     )
-                    .lazy()
-                    .with_columns(
-                        pl.lit(chrom).cast(build_schema['chrom']).alias('chrom'),
-                        pl.lit(row['qry_id']).cast(build_schema['qry_id']).alias('qry_id'),
+                    .select(
+                        'chrom', 'pos', 'end',
+                        expr_id_insdel,
+                        'vartype', 'varlen',
+                        'filter',
+                        'qry_id', 'qry_pos', 'qry_end',
+                        pl.col('is_rev').alias('qry_rev'),
+                        pl.lit(CALL_SOURCE).alias('call_source'),
+                        'var_score',
+                        'align_source',
+                        'seq',
+                        '_align_score',
                     )
-                    .with_columns(
-                        expr.id_nonsnv().alias('id')
-                    )
-                    .collect()
-                    .lazy()
                 )
 
-                df_chrom_list['insdel'].append(df_insdel)
+                df_snv = df_snv.collect().lazy()
+                df_insdel = df_insdel.collect().lazy()
 
-            # Save chromosome
-            score_snv = score_model.mismatch(1)
+                # Append to chromosome list
+                df_chrom_list['snv'].append(df_snv)
+                df_chrom_list['insdel'].append(df_insdel)
 
             df_snv = (
                 pl.concat(df_chrom_list['snv'])
-                .with_columns(
-                    pl.lit(chrom).cast(build_schema['chrom']).alias('chrom'),
-                )
-                .join(
-                    (
-                        df_align
-                        .select(
-                            'align_index', 'filter', 'is_rev',
-                            pl.col('score').alias('_align_score')
-                        )
-                    ),
-                    on='align_index',
-                    how='left'
-                )
-                .with_columns(  # align_index back to a list
-                    pl.concat_list(['align_index']).alias('align_index'),
-                    pl.col('is_rev').alias('qry_rev'),
-                    pl.lit(score_snv).cast(build_schema['var_score']).alias('var_score'),
-                )
                 .sort(
-                    ['pos', 'alt', '_align_score', 'qry_id', 'qry_pos'],
-                    descending=[False, False, True, False, False]
+                    ['pos', 'alt', 'var_score', '_align_score', 'qry_id', 'qry_pos'],
+                    descending=[False, False, True, True, False, False]
                 )
                 .drop('_align_score')
             )
 
             df_insdel = (
                 pl.concat(df_chrom_list['insdel'])
-                .with_columns(
-                    pl.lit(chrom).cast(build_schema['chrom']).alias('chrom'),
-                )
-                .join(
-                    (
-                        df_align
-                        .select(
-                            'align_index', 'filter', 'is_rev',
-                            pl.col('score').alias('_align_score')
-                        )
-                    ),
-                    on='align_index',
-                    how='left'
-                )
-                .with_columns(  # align_index back to a list
-                    pl.concat_list(['align_index']).alias('align_index'),
-                    pl.col('is_rev').alias('qry_rev'),
-                    pl.col('varlen').map_elements(score_model.gap).cast(build_schema['var_score']).alias('var_score'),
-                )
                 .sort(
-                    ['pos', 'end', '_align_score', 'qry_id', 'qry_pos'],
-                    descending=[False, False, True, False, False]
+                    ['pos', 'var_score', '_align_score', 'qry_id', 'qry_pos'],
+                    descending=[False, True, True, False, False]
                 )
                 .drop('_align_score')
             )
@@ -378,13 +331,18 @@ def variant_tables_snv_insdel(
             # Save chromosome-level tables
             if temp_file_name is not None:
                 # If using a temporary file, write file and scan it (add to list of LazyFrames to concat)
-                df_snv.sink_parquet(temp_file_name['snv'])
-                chrom_table_list['snv'].append(pl.scan_parquet(temp_file_name['snv']))
 
-                df_insdel.sink_parquet(temp_file_name['insdel'])
+                write_snv = df_snv.sink_parquet(temp_file_name['snv'], lazy=True)
+                write_insdel = df_insdel.sink_parquet(temp_file_name['insdel'], lazy=True)
+
+                pl.collect_all([write_snv, write_insdel])
+
+                chrom_table_list['snv'].append(pl.scan_parquet(temp_file_name['snv']))
                 chrom_table_list['insdel'].append(pl.scan_parquet(temp_file_name['insdel']))
 
             else:
+                df_snv, df_insdel = pl.collect_all([df_snv, df_insdel,])
+
                 # if not using a temporary file, save in-memory tables to be concatenated.
                 chrom_table_list['snv'].append(df_snv.lazy())
                 chrom_table_list['insdel'].append(df_insdel.lazy())

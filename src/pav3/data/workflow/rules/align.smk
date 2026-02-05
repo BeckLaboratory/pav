@@ -83,6 +83,7 @@ rule align_depth:
     wildcard_constraints:
         side=r'qry|ref',
         filt=r'retain|drop'
+    benchmark: 'log/benchmark/{asm_name}/align_depth_{side}_{hap}_trim-{trim}_filt-{filt}.tsv'
     threads: POLARS_MAX_THREADS
     run:
         pav3.align.tables.align_depth_table(
@@ -103,8 +104,7 @@ rule align_tables:
         pq_qry='results/{asm_name}/align/{hap}/align_trim-qry.parquet',
         pq_qryref='results/{asm_name}/align/{hap}/align_trim-qryref.parquet',
         align_head='results/{asm_name}/align/{hap}/align_headers.gz'
-    benchmark:
-        'data/benchmarks/align/align_tables/align_tables_{asm_name}_{hap}.txt'
+    benchmark: 'log/benchmark/{asm_name}/align_tables_{hap}.tsv'
     threads: 1
     run:
 
@@ -221,8 +221,7 @@ rule align_map:
         align_index=align_index_files
     output:
         sam=temp('temp/{asm_name}/align/trim-none/align_qry_{hap}.sam.gz')
-    benchmark:
-        'data/benchmarks/align/align_map/align_map_{asm_name}_{hap}.txt'
+    benchmark: 'log/benchmark/{asm_name}/align_map_{hap}.tsv'
     threads: 4
     run:
 

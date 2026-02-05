@@ -243,7 +243,7 @@ def apply_trim_filter(
     df_filter = (
         df
         .with_columns(
-            pl.col('align_index').explode().alias('align_index')
+            pl.col('align_source').explode().alias('align_index')
         )
         .join(
             df_trim.select(['align_index', 'qry_pos', 'qry_end', 'filter']),
@@ -319,7 +319,7 @@ def add_cpx_derived(
                 .then(pl.struct(pl.col('end').last().alias('pos'), pl.col('pos').first().alias('end')))
                 .otherwise(pl.struct(pl.col('end').first().alias('pos'), pl.col('pos').last().alias('end')))
                 .struct.unnest(),
-                pl.col('align_index').implode(),
+                pl.col('align_index').implode().alias('align_source'),
                 pl.col('is_rev').first()
             ),
             on='var_index',
@@ -362,7 +362,7 @@ def add_cpx_derived(
             (pl.col('end') - pl.col('pos')).alias('varlen'),
             pl.lit('DUP').alias('vartype'),
             (pl.col('is_rev') ^ pl.col('qry_rev')).alias('_inv_dup'),
-            pl.concat_list([pl.col('align_index')]).alias('align_index')
+            pl.concat_list([pl.col('align_index')]).alias('align_source')
         )
     )
 
@@ -485,13 +485,13 @@ def apply_discord_and_inner_filter(
         inner_col = (
             df
             .with_columns(
-                pl.col('align_index').explode()
+                pl.col('align_source').explode().alias('align_index')
             )
             .join(
                 (
                     df_inner
                     .select(
-                        pl.col('align_index'),
+                        'align_index',
                         pl.col('id').alias('inner')
                     )
                 ),

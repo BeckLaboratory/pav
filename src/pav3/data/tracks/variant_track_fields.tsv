@@ -33,5 +33,5 @@ derived	FALSE	lstring	derived	Derived from (var.)	Derived from this variant (e.g
 discord	FALSE	lstring	discord	Discord with	Variant(s) this record is discordant with	
 inner	FALSE	lstring	inner	Variant this record is embedded in		
 qry_region	FALSE	lstring	qryRegion	Query region	Query region	Location of this variant in the assembly
-align_index	FALSE	lstring	alignIndex	Comma-separated list of alignment indexes supporting this variant		
+align_source	FALSE	lstring	alignSource	Comma-separated list of alignment indexes supporting this variant		
 seq	FALSE	lstring	seq	Sequence	Variant sequence	

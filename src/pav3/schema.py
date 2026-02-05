@@ -40,10 +40,10 @@ VARIANT: dict[str, pl.DataType] = {
     'varlen': agglovar.schema.VARIANT['varlen'],
     'ref': agglovar.schema.VARIANT['ref'],
     'alt': agglovar.schema.VARIANT['alt'],
-    'filter': pl.List(pl.String),
-    'qry_id': pl.String,
-    'qry_pos': pl.Int64,
-    'qry_end': pl.Int64,
+    'filter': ALIGN['filter'],
+    'qry_id': ALIGN['qry_id'],
+    'qry_pos': ALIGN['qry_pos'],
+    'qry_end': ALIGN['qry_end'],
     'qry_rev': pl.Boolean,
     'call_source': pl.String,
     'var_score': pl.Float32,
@@ -58,8 +58,7 @@ VARIANT: dict[str, pl.DataType] = {
         'end': pl.Int64,
     }),
     'templ_res': pl.Boolean,
-    'align_index': pl.List(pl.Int32),
-    'align_index_anchor': pl.Struct({'left': pl.Int32, 'right': pl.Int32}),
+    'align_source': pl.List(ALIGN['align_index']),
     'seg': pl.List(
         pl.Struct({
             'chrom': pl.String,
@@ -138,12 +137,6 @@ Fields:
     * align_index: List of "align_index" values from the alignment table this variant was derived from. Intra-alignment
         variants will have a single value. Inter-alignment variants will have 0 or more values and will exlude anchors.
         Indexes will be in order of the alignment chain from left to right in reference orientation.
-    * align_index_anchor: For intra-alignment variants, this is a pair of "align_index" values from the alignment table
-        identifying the alignments anchoring this variant, but not part of the variant itself. Anchors are in reference
-        order with the first anchor left of the variant and second anchor right of the variant. A null value for either
-        anchor value indicates a missing anchor, such as a variant called anchoring on one side. Inter-alignment
-        variants should always have a  list, and intra-alignment variants should either exclude this field or have a
-        null value for the field (i.e. no list) if they appear in a table with inter-alignment variants.
     * ref_templ: List templated sites (see notes above - Coordinates). Each templated site is a reference coordinate
         that part of the variant was templated from. For insertions, this may be a single region that was duplicated
         (insertion call itself indicates where it was inserted). For complex variants, this may be a list of regions
