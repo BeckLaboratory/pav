@@ -2,12 +2,16 @@
 
 __all__ = [
     'ALIGN',
-    'VARIANT'
+    'VARIANT',
+    'cast',
 ]
+
+from typing import overload
+
+import polars as pl
 
 import agglovar
 
-import polars as pl
 
 ALIGN: dict[str, pl.DataType] = {
     'chrom': pl.String,
@@ -159,3 +163,34 @@ Fields:
         "INNER" must also be present in "filter".
     * seq: Variant sequence in reference orientation. Null if not defined (never "*" or other placeholders).
 """
+
+@overload
+def cast(
+    df: pl.DataFrame,
+    schema: dict[str, pl.DataType],
+) -> pl.DataFrame:
+    ...
+
+@overload
+def cast(
+    df: pl.LazyFrame,
+    schema: dict[str, pl.DataType],
+) -> pl.LazyFrame:
+    ...
+
+def cast(
+    df: pl.DataFrame | pl.LazyFrame,
+    schema: dict[str, pl.DataType],
+) -> pl.DataFrame | pl.LazyFrame:
+
+    if isinstance(df, pl.DataFrame):
+        existing_schema = df.schema
+    else:
+        existing_schema = df.collect_schema()
+
+    return df.cast(
+        {
+            col: schema.get(col, type_)
+            for col, type_ in existing_schema.items()
+        }
+    )

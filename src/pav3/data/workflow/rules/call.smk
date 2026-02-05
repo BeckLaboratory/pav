@@ -874,7 +874,6 @@ rule call_intra_inv:
 # Identify candidate loci for intra-alignment inversions
 rule call_intra_inv_flag:
     input:
-        align_none='results/{asm_name}/align/{hap}/align_trim-none.parquet',
         pq_snv='temp/{asm_name}/call_hap/intra_snv_{hap}.parquet',
         pq_insdel='temp/{asm_name}/call_hap/intra_insdel_{hap}.parquet',
         ref_fofn='data/ref/ref.fofn',
@@ -883,17 +882,16 @@ rule call_intra_inv_flag:
         pq_flag=temp('temp/{asm_name}/call_hap/intra_inv_flagged_sites_{hap}.parquet'),
     benchmark: 'log/benchmark/{asm_name}/call_intra_inv_flag_{hap}.tsv'
     run:
-
-        # Get parameters
         pav_params = pav3.params.PavParams(wildcards.asm_name, PAV_CONFIG, ASM_TABLE)
 
-        df_align = pl.scan_parquet(input.align_none)
-        ref_fai_filename = pav3.pipeline.expand_fofn(input.ref_fofn)[1]
-        qry_fai_filename = pav3.pipeline.expand_fofn(input.qry_fofn)[1]
+        df_ref_fai = agglovar.fa.read_fai(
+            pav3.pipeline.expand_fofn(input.ref_fofn)[1]
+        ).lazy()
 
-        # Read FAI files
-        df_ref_fai = agglovar.fa.read_fai(ref_fai_filename).lazy()
-        df_qry_fai = agglovar.fa.read_fai(qry_fai_filename, name='qry_id').lazy()
+        df_qry_fai = agglovar.fa.read_fai(
+            pav3.pipeline.expand_fofn(input.qry_fofn)[1],
+            name='qry_id'
+        ).lazy()
 
         # Read
         df_snv = pl.scan_parquet(input.pq_snv)
@@ -902,7 +900,6 @@ rule call_intra_inv_flag:
         # Call per query
         (
             pav3.call.intra.variant_flag_inv(
-                df_align=df_align,
                 df_snv=df_snv,
                 df_insdel=df_insdel,
                 df_ref_fai=df_ref_fai,

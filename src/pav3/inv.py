@@ -598,7 +598,6 @@ def cluster_table(
                 (
                     cluster_table_insdel(
                         df=df_insdel,
-                        df_ref_fai=df_ref_fai,
                         varlen_min=50,
                         offset_prop_max=pav_params.inv_sig_insdel_offset_prop,
                         size_ro_min=pav_params.inv_sig_insdel_varlen_ro,
@@ -675,7 +674,6 @@ def cluster_table(
 
 def cluster_table_insdel(
         df: pl.DataFrame | pl.LazyFrame,
-        df_ref_fai: pl.DataFrame | pl.LazyFrame,
         varlen_min: int = 50,
         offset_prop_max: float = 2.0,
         size_ro_min: float = 0.8,
@@ -694,7 +692,6 @@ def cluster_table_insdel(
         * depth_max (int): Maximum depth in the cluster.
 
     :param df: Variant table. Must include INS and DEL variants.
-    :param df_ref_fai: Reference sequence lengths.
     :param varlen_min: Minimum variant length (Ignore smaller variants).
     :param offset_prop_max: Maximum offset proportion between INS & DEL variants.
     :param size_ro_min: Minimum size overlap of INS & DEL variants.
@@ -704,8 +701,9 @@ def cluster_table_insdel(
     if not isinstance(df, pl.LazyFrame):
         df = df.lazy()
 
-    if not isinstance(df_ref_fai, pl.LazyFrame):
-        df_ref_fai = df_ref_fai.lazy()
+    df = df.with_columns(
+        pl.col('align_source').list.first().alias('align_index'),
+    )
 
     df_ins = df.filter((pl.col('vartype') == 'INS') & (pl.col('varlen') >= varlen_min))
     df_del = df.filter((pl.col('vartype') == 'DEL') & (pl.col('varlen') >= varlen_min))
@@ -717,7 +715,7 @@ def cluster_table_insdel(
                 offset_prop_max=offset_prop_max,
                 size_ro_min=size_ro_min,
                 join_predicates=(
-                    pl.col('align_index_a').list.first() == pl.col('align_index_b').list.first(),
+                    pl.col('align_index_a') == pl.col('align_index_b'),
                 )
             ),
         ),
@@ -727,7 +725,7 @@ def cluster_table_insdel(
             pl.col('pos_b'), pl.col('end_b'),
             pl.col('varlen_a'),
             pl.col('varlen_b'),
-            pl.col('align_index_a').list.first().alias('align_index'),
+            pl.col('align_index_a'),
             pl.col('qry_id_a').alias('qry_id'),
         ),
     )
@@ -738,7 +736,7 @@ def cluster_table_insdel(
             pl.col('chrom'),
             pl.min_horizontal(pl.col('pos_a'), pl.col('pos_b')).alias('pos'),
             pl.max_horizontal(pl.col('end_a'), pl.col('end_b')).alias('end'),
-            pl.col('align_index'),
+            pl.col('align_index_a').alias('align_index'),
             pl.concat_list('varlen_a', 'varlen_b').alias('varlen'),
             pl.col('index_a'),
             pl.col('qry_id'),
@@ -833,7 +831,6 @@ def cluster_table_sig(
         * depth_max (int): Maximum depth in the cluster.
 
     :param df: Variant table.
-    :param df_ref_fai: Reference sequence lengths.
     :param df_qry_fai: Query sequence lengths.
     :param cluster_flank: Flank size for clustering. Added upstream and downstream of each variant midpoint before
         clustering.
@@ -864,7 +861,7 @@ def cluster_table_sig(
                     .select(
                         pl.col('chrom'),
                         (pl.col('pos') - cluster_flank).alias('loc'),
-                        pl.col('align_index').list.first(),
+                        pl.col('align_source').list.first().alias('align_index'),
                         pl.col('qry_id'),
                         pl.lit(1).alias('depth')
                     )
@@ -874,7 +871,7 @@ def cluster_table_sig(
                     .select(
                         pl.col('chrom'),
                         (pl.col('pos') - cluster_flank).alias('loc'),
-                        pl.col('align_index').list.first(),
+                        pl.col('align_source').list.first().alias('align_index'),
                         pl.col('qry_id'),
                         pl.lit(1).alias('depth')
                     )
@@ -884,7 +881,7 @@ def cluster_table_sig(
                     .select(
                         pl.col('chrom'),
                         (pl.col('end') + cluster_flank).alias('loc'),
-                        pl.col('align_index').list.first(),
+                        pl.col('align_source').list.first().alias('align_index'),
                         pl.col('qry_id'),
                         pl.lit(-1).alias('depth')
                     )
@@ -918,8 +915,8 @@ def cluster_table_sig(
         .filter(
             (pl.col('end') - pl.col('pos')) >= min_window_size
         )
-        .select(['chrom', 'pos', 'end', 'depth_max', 'align_index'])
-        .sort(['chrom', 'pos', 'end', 'align_index'])
+        .select('chrom', 'pos', 'end', 'depth_max', 'align_index')
+        .sort('chrom', 'pos', 'end', 'align_index')
         .collect()
     )
 

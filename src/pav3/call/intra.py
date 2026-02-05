@@ -310,22 +310,28 @@ def variant_tables_snv_insdel(
                 df_chrom_list['snv'].append(df_snv)
                 df_chrom_list['insdel'].append(df_insdel)
 
-            df_snv = (
-                pl.concat(df_chrom_list['snv'])
-                .sort(
-                    ['pos', 'alt', 'var_score', '_align_score', 'qry_id', 'qry_pos'],
-                    descending=[False, False, True, True, False, False]
-                )
-                .drop('_align_score')
+            df_snv = schema.cast(
+                (
+                    pl.concat(df_chrom_list['snv'])
+                    .sort(
+                        ['pos', 'alt', 'var_score', '_align_score', 'qry_id', 'qry_pos'],
+                        descending=[False, False, True, True, False, False]
+                    )
+                    .drop('_align_score')
+                ),
+                schema.VARIANT
             )
 
-            df_insdel = (
-                pl.concat(df_chrom_list['insdel'])
-                .sort(
-                    ['pos', 'var_score', '_align_score', 'qry_id', 'qry_pos'],
-                    descending=[False, True, True, False, False]
-                )
-                .drop('_align_score')
+            df_insdel = schema.cast(
+                (
+                    pl.concat(df_chrom_list['insdel'])
+                    .sort(
+                        ['pos', 'var_score', '_align_score', 'qry_id', 'qry_pos'],
+                        descending=[False, True, True, False, False]
+                    )
+                    .drop('_align_score')
+                ),
+                schema.VARIANT
             )
 
             # Save chromosome-level tables
@@ -362,7 +368,6 @@ def variant_tables_inv(
         df_ref_fai: pl.DataFrame,
         df_qry_fai: pl.DataFrame,
         pav_params: Optional[PavParams] = None,
-        score_model: Optional[ScoreModel | str] = None,
 ) -> pl.DataFrame:
     """Call intra-alignment inversions.
 
@@ -454,7 +459,6 @@ def variant_tables_inv(
 
 
 def variant_flag_inv(
-        df_align: pl.DataFrame | pl.LazyFrame,
         df_snv: pl.DataFrame | pl.LazyFrame,
         df_insdel: pl.DataFrame | pl.LazyFrame,
         df_ref_fai: pl.DataFrame | pl.LazyFrame,
@@ -481,9 +485,6 @@ def variant_flag_inv(
         pav_params = PavParams()
 
     # Tables
-    if isinstance(df_align, pl.DataFrame):
-        df_align = df_align.lazy()
-
     if isinstance(df_snv, pl.DataFrame):
         df_snv = df_snv.lazy()
 
@@ -495,6 +496,9 @@ def variant_flag_inv(
 
     if isinstance(df_qry_fai, pl.DataFrame):
         df_qry_fai = df_qry_fai.lazy()
+
+    df_snv = schema.cast(df_snv, schema.VARIANT)
+    df_insdel = schema.cast(df_insdel, schema.VARIANT)
 
     return (
         cluster_table(
