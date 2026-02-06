@@ -763,12 +763,12 @@ class InversionVariant(Variant):
                 qry_end_inner = df_align_none[0, 'qry_pos']
 
             if (
-                (ref_pos_outer <= ref_pos_inner) and
-                (ref_end_outer >= ref_end_inner) and
-                (ref_pos_inner <= ref_end_inner) and
-                (qry_pos_outer <= qry_pos_inner) and
-                (qry_end_outer >= qry_end_inner) and
-                (qry_pos_inner <= qry_end_inner)
+                (ref_pos_outer <= ref_pos_inner)
+                and (ref_end_outer >= ref_end_inner)
+                and (ref_pos_inner <= ref_end_inner)
+                and (qry_pos_outer <= qry_pos_inner)
+                and (qry_end_outer >= qry_end_inner)
+                and (qry_pos_inner <= qry_end_inner)
             ):
 
                 self.region_ref_outer = Region(interval.chrom, ref_pos_outer, ref_end_outer)
@@ -777,16 +777,28 @@ class InversionVariant(Variant):
                 self.region_qry_outer = Region(interval.qry_id, qry_pos_outer, qry_end_outer)
                 self.region_qry = Region(interval.qry_id, qry_pos_inner, qry_end_inner)
 
-                self.align_gap = 0
+                self.align_gap = abs(interval.len_qry - interval.len_ref)
                 self.resolved_templ = True
 
                 self.res_type = 'ALIGN'
 
                 self.var_score = (
                     # Penalize reference gap and inverted alignment diff
-                    caller_resources.score_model.gap(self.align_gap) +
+                    caller_resources.score_model.gap(self.align_gap)
+
+                    # Penalized unaligned query sequences
+                    + (
+                            self.df_segment
+                            .filter(~pl.col('is_aligned'))
+                            .select(
+                                pl.col('len_qry')
+                                .map_elements(caller_resources.score_model.gap)
+                                .sum()
+                            ).item()
+                    )
+
                     # Penalize template switches
-                    caller_resources.score_model.template_switch() * 2
+                    + caller_resources.score_model.template_switch() * 2
                 )
 
 

@@ -50,6 +50,7 @@ def try_intra_region(
         pav_params: Optional[PavParams] = None,
         k_util: agglovar.kmer.util.KmerUtil = None,
         kde_model: Kde = None,
+        same_align: bool = True,
         stop_on_lift_fail: bool = True,
         log_file=None,
 ) -> Optional[dict[str, Any]]:
@@ -69,6 +70,8 @@ def try_intra_region(
         (`pav3.const.K_SIZE`).
     :param kde_model: Kernel density estimator function. Expected to be a `pav3.kde.KdeTruncNorm` object, but can
         be any object with a similar signature. If `None`, a default `kde` estimator is used.
+    :param same_align: If `True`, translations between reference and query regions are performed over the same
+        alignment records. If `False`, then reference and query coordinates are allowed to switch alignment records.
     :param stop_on_lift_fail: If `True`, stop if the reference-to-query lift fails for any reason (i.e. breakpoints
         missing alignment records). If `False`, keep expanding until expansion is exhausted (reaches maximum number
         of expansions or covers a whole reference region).
@@ -122,8 +125,10 @@ def try_intra_region(
     # Scan and expand
     df_inv = None
     region_qry = None
+    region_qry_inner = None
+    region_qry_outer = None
 
-    while df_inv is None and inv_iterations <= min_expand and inv_iterations <= max_expand:
+    while region_qry_inner is None and inv_iterations <= min_expand and inv_iterations <= max_expand:
 
         # Expand from last search
         if inv_iterations > 0:
@@ -144,7 +149,7 @@ def try_intra_region(
             break
 
         # Get query region
-        region_qry = align_lift.region_to_qry(region_ref, same_align=True)
+        region_qry = align_lift.region_to_qry(region_ref, same_align=same_align)
 
         # Check for expansion through a break in the query sequence
         if region_qry is None:
@@ -208,6 +213,12 @@ def try_intra_region(
 
         df_inv = kde_to_inv(df_kde)
 
+        if df_inv is not None:
+            region_qry_inner, region_qry_outer = inv_table_to_regions(df_inv, region_qry)
+
+            if region_qry_inner is not None:
+                break
+
         # # Get run-length encoded states (list of (state, count) tuples).
         # df_rl = rl_encoder(df_kde)
         #
@@ -217,16 +228,14 @@ def try_intra_region(
 
     # Stop if no inverted sequence was found
     #if df_rl is None or not df_rl.select((pl.col('state') == 2).any()).item():
-    if df_inv is None:
+    if region_qry_inner is None:
         log_file.write(f'Intra-align inversion region {region_flag}: No inverted states found: {region_ref}\n')
         log_file.flush()
 
         return None
 
-    region_qry_inner, region_qry_outer = inv_table_to_regions(df_inv, region_qry)
-
     # Lift to reference
-    region_ref_inner = align_lift.region_to_ref(region_qry_inner)
+    region_ref_inner = align_lift.region_to_ref(region_qry_inner, same_align=same_align)
 
     if region_ref_inner is None:
         log_file.write(
@@ -237,7 +246,7 @@ def try_intra_region(
 
         return None
 
-    region_ref_outer = align_lift.region_to_ref(region_qry_outer)
+    region_ref_outer = align_lift.region_to_ref(region_qry_outer, same_align=same_align)
 
     if region_ref_outer is None or not region_ref_outer.contains(region_ref_inner):
         region_ref_outer = region_ref_inner
@@ -954,7 +963,7 @@ def  kde_to_inv(
 
     :param df_kde: KDE table.
 
-    :returns: Inversion table.
+    :returns: Table of inversion states.
     """
     import numpy as np
     import hmmlearn.hmm as hmm
@@ -1024,12 +1033,13 @@ def  kde_to_inv(
             ).alias('states_kde'),
         )
         .filter(
-            ~pl.col('inv_state').is_in([0, 4]),
-            pl.col('len') > 0,
+            pl.col('len') > 0
         )
         .select(
             'inv_state',
-            pl.col('inv_state').replace_strict({1: 'fwdrev', 2: 'rev', 3: 'fwdrev', 5: 'rev'}).alias('inv_state_label'),
+            pl.col('inv_state').replace_strict(
+                {0: 'fwd', 1: 'fwdrev', 2: 'rev', 3: 'fwdrev', 4: 'fwd', 5: 'rev'}
+            ).alias('inv_state_label'),
             'index_start', 'index_end', 'len', 'states_mer', 'states_kde',
         )
     )
@@ -1040,46 +1050,41 @@ def  kde_to_inv(
 def inv_table_to_regions(
         df_inv: pl.DataFrame,
         region_qry: Region,
-) -> tuple[Region, Region]:
+) -> tuple[Optional[Region], Optional[Region]]:
     """Convert an inversion table to a tuple of regions (inner, outer).
 
     :param df_inv: Inversion table.
     :param region_qry: Query region.
 
-    :returns: Tuple of regions (inner, outer).
+    :returns: Tuple of regions (inner, outer) or (None, None) if the inversion table does not
+        progress through inversion states as expected.
 
     :raises ValueError: If the inversion table does not progress through inversion states as
         expected. Suggests an error in `kde_to_inv()`.
     """
 
-    df_inv = (
-        df_inv
-        .filter(
-            pl.col('inv_state').is_in([1, 2, 3, 5])
-        )
-    )
-
-    if tuple(df_inv['inv_state']) == (1, 2, 3):
+    if tuple(df_inv['inv_state']) == (0, 1, 2, 3, 4):  # Inverted duplications on both sides
         coord_outer = (
-            df_inv['index_start'][0] + region_qry.pos,
-            df_inv['index_end'][2] + region_qry.pos + 1
+            df_inv['index_start'][1] + region_qry.pos,
+            df_inv['index_end'][3] + region_qry.pos + 1
         )
 
         coord_inner = (
-          df_inv['index_start'][1] + region_qry.pos,
-          df_inv['index_end'][1] + region_qry.pos + 1
+          df_inv['index_start'][2] + region_qry.pos,
+          df_inv['index_end'][2] + region_qry.pos + 1
         )
 
-    elif tuple(df_inv['inv_state']) == (5,):
+    elif tuple(df_inv['inv_state']) == (0, 5, 4,):  # No inverted duplications
         coord_outer = (
-            df_inv['index_start'][0] + region_qry.pos,
-            df_inv['index_end'][0] + region_qry.pos + 1
+            df_inv['index_start'][1] + region_qry.pos,
+            df_inv['index_end'][1] + region_qry.pos + 1
         )
 
         coord_inner = coord_outer
 
     else:
-        raise ValueError(f'Unexpected inv_state progression: {" > ".join(df_inv["inv_state"].cast(pl.String))}')
+        # raise ValueError(f'Unexpected inv_state progression: {" > ".join(df_inv["inv_state"].cast(pl.String))}')
+        return None, None
 
     return (
         Region(
@@ -1087,12 +1092,16 @@ def inv_table_to_regions(
             coord_inner[0],
             coord_outer[1],
             region_qry.is_rev,
+            region_qry.pos_align_index,
+            region_qry.end_align_index,
         ),
         Region(
             region_qry.chrom,
             coord_outer[0],
             coord_outer[1],
             region_qry.is_rev,
+            region_qry.pos_align_index,
+            region_qry.end_align_index,
         ),
     )
 

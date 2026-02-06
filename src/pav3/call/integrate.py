@@ -475,9 +475,9 @@ def apply_discord_and_inner_filter(
         df
         .drop(['_index', 'discord', 'inner'], strict=False)
         .with_row_index('_index')
-        # .with_columns(
-        #     pl.col('align_index').list.first()
-        # )
+        .with_columns(
+            pl.col('align_source').list.first().alias('align_index')
+        )
     )
 
     # Create inner columns

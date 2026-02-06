@@ -359,7 +359,7 @@ rule call_integrate_sources:
 
         # Save alignment records for INNER variants
         df_inner_schema = {
-            'align_source': pav3.schema.VARIANT['align_source'],
+            'align_index': pav3.schema.ALIGN['align_index'],
             'id': pav3.schema.VARIANT['id'],
         }
 
@@ -517,7 +517,9 @@ rule call_integrate_sources:
                         on='var_index',
                         how='inner'
                     )
-                    .select(['align_index', 'id'])
+                    .select(
+                        'align_index', 'id'
+                    )
                 )
                 collect_index_inner = len(write_list) - 1
             else:
@@ -680,12 +682,11 @@ rule call_inter:
             # Call
             temp_dir_parent = f'temp/{wildcards.asm_name}/call_hap/inter'
 
+            os.makedirs(temp_dir_parent, exist_ok=True)
+
             with tempfile.TemporaryDirectory(
                     dir=temp_dir_parent, prefix=f'call_inter_{wildcards.hap}_dotfiles.'
             ) as dot_dirname:
-
-                pav3.lgsv.call.call_from_align
-
                 lgsv_list = pav3.lgsv.call.call_from_align(
                     caller_resources, min_anchor_score=min_anchor_score, dot_dirname=dot_dirname
                 )
