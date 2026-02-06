@@ -929,8 +929,15 @@ def get_pav_config_path(
     :raises FileNotFoundError: If the specified configuration (`config_filename`) or default
         configuration file is not found.
     """
-    default_config_filename = Path('pav.json')
-    deprecated_config_filename = Path('config.json')
+    default_paths = (
+        Path('pav.json'),
+        Path('pav.json.txt'),
+    )
+
+    deprecated_paths = (
+        Path('config.json'),
+        Path('config.json.txt'),
+    )
 
     if config_filename is not None:
         config_filename = Path(config_filename)
@@ -940,23 +947,40 @@ def get_pav_config_path(
 
         return config_filename
 
-    if default_config_filename.is_file():
-        return default_config_filename
+    found_paths = []
 
-    if deprecated_config_filename.is_file():
-        config_filename = deprecated_config_filename
+    for config_path in default_paths:
+        if config_path.is_file():
+            found_paths.append(config_path)
+
+    deprecated_count = 0
+
+    for config_path in deprecated_paths:
+        if config_path.is_file():
+
+            if not found_paths:
+                print(
+                    f'\nWARNING: Using deprecated config "{config_path}", rename to "pav.json".\n'
+                    f'A future PAV version will ignore "config.json"\n'
+                )
+
+                import time
+                time.sleep(5)
+
+            deprecated_count += 1
+            found_paths.append(config_path)
+
+    if not found_paths:
+        raise FileNotFoundError('No config file found (expected "pav.json" or deprecated "config.json")')
+
+    if len(found_paths) - deprecated_count > 1:
+        file_names = ', '.join(f'"{p}"' for p in found_paths[1:])
 
         print(
-            f'\nWARNING: Using deprecated config "{deprecated_config_filename}", rename to "pav.json".\n'
-            f'A future PAV version will ignore "config.json"\n'
+            f'\nWARNING: Found multiple configuration files: Using "{found_paths[0]}", Ignoring {file_names}'
         )
 
-        import time
-        time.sleep(5)
-
-        return deprecated_config_filename
-
-    raise FileNotFoundError('No config file found (expected "pav.json" or deprecated "config.json")')
+    return found_paths[0]
 
 def get_pav_asm_table_path(
         asm_table_path: Optional[str | Path] = None,
