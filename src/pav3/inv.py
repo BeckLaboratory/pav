@@ -54,6 +54,107 @@ def try_intra_region(
         stop_on_lift_fail: bool = True,
         log_file=None,
 ) -> Optional[dict[str, Any]]:
+
+    if log_file is None:
+        log_file = NullWriter()
+
+    region_qry_inner, region_qry_outer = get_inv_qry_regions(
+        region_flag=region_flag,
+        ref_fa_filename=ref_fa_filename,
+        qry_fa_filename=qry_fa_filename,
+        df_ref_fai=df_ref_fai,
+        df_qry_fai=df_qry_fai,
+        align_lift=align_lift,
+        pav_params=pav_params,
+        k_util=k_util,
+        kde_model=kde_model,
+        same_align=same_align,
+        stop_on_lift_fail=stop_on_lift_fail,
+        log_file=log_file,
+    )
+
+    min_qry_ref_prop = pav_params.inv_min_qry_ref_prop
+
+    # Stop if no inverted sequence was found
+    #if df_rl is None or not df_rl.select((pl.col('state') == 2).any()).item():
+    if region_qry_inner is None or region_qry_outer is None:
+        log_file.write(f'Intra-align inversion region {region_flag}: No inverted states found\n')
+        log_file.flush()
+
+        return None
+
+    # Lift to reference
+    region_ref_inner = align_lift.region_to_ref(region_qry_inner, same_align=same_align)
+
+    if region_ref_inner is None:
+        log_file.write(
+            f'Intra-align inversion region {region_flag}: Failed lifting inner INV region to reference: '
+            f'{region_qry_inner}\n'
+        )
+        log_file.flush()
+
+        return None
+
+    region_ref_outer = align_lift.region_to_ref(region_qry_outer, same_align=same_align)
+
+    if region_ref_outer is None or not region_ref_outer.contains(region_ref_inner):
+        region_ref_outer = region_ref_inner
+        log_file.write(
+            f'Intra-align inversion region {region_flag}: Failed lifting outer INV region to reference: '
+            f'{region_qry_outer}: Using inner coordinates\n'
+        )
+        log_file.flush()
+
+    # Check size proportions
+    if len(region_ref_inner) < len(region_qry_inner) * min_qry_ref_prop:
+        log_file.write(
+            f'Intra-align inversion region {region_flag}: Reference region too short: '
+            f'Reference region length ({len(region_ref_inner):,d}) is not within {min_qry_ref_prop * 100:.2f}% '
+            f'of the query region length ({len(region_qry_inner):,d})\n'
+        )
+        log_file.flush()
+
+        return None
+
+    if len(region_qry_outer) < len(region_ref_outer) * min_qry_ref_prop:
+        log_file.write(
+            f'Intra-align inversion region {region_flag}: Query region too short: '
+            f'Query region length ({len(region_qry_outer):,d}) is not within {min_qry_ref_prop * 100:.2f}% '
+            f'of the reference region length ({len(region_ref_outer):,d})'
+        )
+        log_file.flush()
+
+        return None
+
+    # Return inversion call
+    log_file.write(
+        f'Intra-align inversion region {region_flag}: INV Found: '
+        f'inner={region_ref_inner}, outer={region_ref_outer} '
+        f'(qry inner={region_qry_inner}, qry_outer={region_qry_outer})'
+    )
+    log_file.flush()
+
+    return get_inv_row(
+        region_ref_inner, region_ref_outer,
+        region_qry_inner, region_qry_outer,
+        [region_flag.pos_align_index]
+    )
+
+
+def get_inv_qry_regions(
+        region_flag: Region,
+        ref_fa_filename: str,
+        qry_fa_filename: str,
+        df_ref_fai: pl.DataFrame,
+        df_qry_fai: pl.DataFrame,
+        align_lift: lift.AlignLift,
+        pav_params: Optional[PavParams] = None,
+        k_util: agglovar.kmer.util.KmerUtil = None,
+        kde_model: Kde = None,
+        same_align: bool = True,
+        stop_on_lift_fail: bool = True,
+        log_file=None,
+) -> tuple[Optional[Region], Optional[Region]]:
     """Scan region for inversions.
 
     Start with a flagged region (`region_flag`) where variants indicated that an inversion might be. Scan that region
@@ -89,18 +190,10 @@ def try_intra_region(
     if region_flag.pos_align_index is None or region_flag.end_align_index is None:
         raise ValueError('region_flag must have both pos_align_index and end_align_index')
 
-    # if region_flag.pos_align_index != region_flag.end_align_index:
-    #     raise ValueError(
-    #         f'region_flag must have the same pos_align_index ({region_flag.pos_align_index}) and end_align_index ({region_flag.end_align_index})'
-    #     )
-
     # Get parameters
     if pav_params is None:
         pav_params = PavParams()
 
-    repeat_match_prop = pav_params.inv_repeat_match_prop
-    min_inv_kmer_run = pav_params.inv_min_kmer_run
-    min_qry_ref_prop = pav_params.inv_min_qry_ref_prop
     region_limit = pav_params.inv_region_limit
     min_expand = pav_params.inv_min_expand
     max_expand = np.inf
@@ -123,12 +216,7 @@ def try_intra_region(
         max_expand = np.inf
 
     # Scan and expand
-    df_inv = None
-    region_qry = None
-    region_qry_inner = None
-    region_qry_outer = None
-
-    while region_qry_inner is None and inv_iterations <= min_expand and inv_iterations <= max_expand:
+    while inv_iterations <= min_expand and inv_iterations <= max_expand:
 
         # Expand from last search
         if inv_iterations > 0:
@@ -217,79 +305,10 @@ def try_intra_region(
             region_qry_inner, region_qry_outer = inv_table_to_regions(df_inv, region_qry)
 
             if region_qry_inner is not None:
-                break
+                return region_qry_inner, region_qry_outer
 
-        # # Get run-length encoded states (list of (state, count) tuples).
-        # df_rl = rl_encoder(df_kde)
-        #
-        # # Done if reference oriented k-mers (state == 0) found on both sides
-        # if df_rl.height > 2 and df_rl[0, 'state'] == 0 and df_rl[-1, 'state'] == 0:
-        #     break  # Stop searching and expanding
+    return None, None
 
-    # Stop if no inverted sequence was found
-    #if df_rl is None or not df_rl.select((pl.col('state') == 2).any()).item():
-    if region_qry_inner is None:
-        log_file.write(f'Intra-align inversion region {region_flag}: No inverted states found: {region_ref}\n')
-        log_file.flush()
-
-        return None
-
-    # Lift to reference
-    region_ref_inner = align_lift.region_to_ref(region_qry_inner, same_align=same_align)
-
-    if region_ref_inner is None:
-        log_file.write(
-            f'Intra-align inversion region {region_flag}: Failed lifting inner INV region to reference: '
-            f'{region_qry_inner}\n'
-        )
-        log_file.flush()
-
-        return None
-
-    region_ref_outer = align_lift.region_to_ref(region_qry_outer, same_align=same_align)
-
-    if region_ref_outer is None or not region_ref_outer.contains(region_ref_inner):
-        region_ref_outer = region_ref_inner
-        log_file.write(
-            f'Intra-align inversion region {region_flag}: Failed lifting outer INV region to reference: '
-            f'{region_qry_outer}: Using inner coordinates\n'
-        )
-        log_file.flush()
-
-    # Check size proportions
-    if len(region_ref_inner) < len(region_qry_inner) * min_qry_ref_prop:
-        log_file.write(
-            f'Intra-align inversion region {region_flag}: Reference region too short: '
-            f'Reference region length ({len(region_ref_inner):,d}) is not within {min_qry_ref_prop * 100:.2f}% '
-            f'of the query region length ({len(region_qry_inner):,d})\n'
-        )
-        log_file.flush()
-
-        return None
-
-    if len(region_qry_outer) < len(region_ref_outer) * min_qry_ref_prop:
-        log_file.write(
-            f'Intra-align inversion region {region_flag}: Query region too short: '
-            f'Query region length ({len(region_qry_outer):,d}) is not within {min_qry_ref_prop * 100:.2f}% '
-            f'of the reference region length ({len(region_ref_outer):,d})'
-        )
-        log_file.flush()
-
-        return None
-
-    # Return inversion call
-    log_file.write(
-        f'Intra-align inversion region {region_flag}: INV Found: '
-        f'inner={region_ref_inner}, outer={region_ref_outer} '
-        f'(qry inner={region_qry_inner}, qry_outer={region_qry_outer})'
-    )
-    log_file.flush()
-
-    return get_inv_row(
-        region_ref_inner, region_ref_outer,
-        region_qry_inner, region_qry_outer,
-        [region_flag.pos_align_index]
-    )
 
 
 def get_inv_row(

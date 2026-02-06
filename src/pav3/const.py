@@ -78,7 +78,7 @@ INV_INIT_EXPAND: int = 4000
 INV_EXPAND_FACTOR: float = 1.5
 """Expand by this factor while searching"""
 
-INV_REGION_LIMIT: int = 1000000
+INV_REGION_LIMIT: int = 1_000_000
 """Maximum region size"""
 
 INV_MIN_KMERS: int = 1000

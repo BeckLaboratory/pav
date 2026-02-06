@@ -15,18 +15,14 @@ __all__ = [
 ]
 
 from abc import ABC
-import numpy as np
 import polars as pl
 from typing import Any, Optional
 
 import Bio.Seq
 
 from ..anno import perfect_homology
-from ..region import (
-    Region,
-    region_from_dict,
-)
-from ..inv import try_intra_region
+from ..region import Region
+from ..inv import get_inv_qry_regions
 
 from .interval import AnchoredInterval
 from .resources import CallerResources
@@ -740,6 +736,7 @@ class InversionVariant(Variant):
                     how='inner',
                     maintain_order='right'
                 )
+                .sort('pos', 'end')
                 .collect()
             )
 
@@ -824,7 +821,7 @@ class InversionVariant(Variant):
                 return
 
             # Call variant by KDE
-            inv_dict = try_intra_region(
+            self.region_qry, self.region_qry_outer = get_inv_qry_regions(
                 region_flag=self.interval.region_ref,
                 ref_fa_filename=self.caller_resources.ref_fa_filename,
                 qry_fa_filename=self.caller_resources.qry_fa_filename,
@@ -838,25 +835,27 @@ class InversionVariant(Variant):
                 log_file=None,
             )
 
-            if inv_dict is not None:
-                self.region_ref = Region(
-                    inv_dict['chrom'], inv_dict['pos'], inv_dict['end']
-                )
+            if self.region_qry is not None and self.region_qry_outer is not None:
+                # Found inversion by KDE
 
-                self.region_qry = Region(
-                    inv_dict['qry_id'], inv_dict['qry_pos'], inv_dict['qry_end'],
-                    is_rev=self.interval.is_rev
-                )
+                # Lift to reference
+                self.region_ref = caller_resources.align_lift.region_to_ref(self.region_qry, same_align=True)
+                self.region_ref_outer = caller_resources.align_lift.region_to_ref(self.region_qry_outer, same_align=True)
 
-                self.region_ref_outer = Region(**inv_dict['outer_ref'])
-                self.region_qry_outer = Region(**inv_dict['outer_qry'], is_rev=self.interval.is_rev)
+                if self.region_ref is None:
+                    # Lift failed on inner coordinates - breakpoints at the edge of an alignment record
+                    self.region_ref = self.interval.region_ref
+
+                if self.region_ref_outer is None or not self.region_ref_outer.contains(self.region_ref):
+                    # Lift failed on inner coordinates - may be a short alignment record at the flanks
+                    self.region_ref_outer = self.region_ref
 
                 self.align_gap = 0
                 self.resolved_templ = False
 
                 self.res_type = 'KDE'
 
-                self.var_score = 0.0
+                self.var_score = self.caller_resources.score_model.template_switch() * 2
 
         # Call variant
         if self.region_ref_outer is None:

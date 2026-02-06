@@ -165,13 +165,14 @@ class VarRegionKde:
                     self.try_var = kmer_n < 1000
                     return
 
-                self.try_var = (
-                    # Too many missing k-mers to be sure, try a variant
-                    kmer_n_kde / kmer_n < 0.85
-                ) or (
-                    # Weed out misalignments around inv repeats (human chrX)
-                    prop_fwdrev < 0.5 or prop_rev > 0.5
-                )
+                # No longer needed, early heuristic
+                # self.try_var = (
+                #     # Too many missing k-mers to be sure, try a variant
+                #     kmer_n_kde / kmer_n < 0.85
+                # ) or (
+                #     # Weed out misalignments around inv repeats (human chrX)
+                #     prop_fwdrev < 0.5 or prop_rev > 0.5
+                # )
 
                 # Test states for inverted or reference states
                 if self.df_rl.select((pl.col('state') == KDE_STATE_REV).any()).item():

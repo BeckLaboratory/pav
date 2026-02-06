@@ -11,6 +11,7 @@ __all__ = [
 
 import collections
 import os
+from pathlib import Path
 from typing import Iterable, Iterator, Optional, Self
 
 import agglovar
@@ -48,7 +49,7 @@ def ref_kmers(
 
 def region_seq_fasta(
         seq_region: Region,
-        fa_file_name: str,
+        fa_file_name: str | Path,
         rev_compl: Optional[bool] = None
 ) -> str:
     """Get sequence from an indexed FASTA file. FASTA must have ".fai" index.
