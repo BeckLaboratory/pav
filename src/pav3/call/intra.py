@@ -21,6 +21,7 @@ __all__ = [
 
 import agglovar
 import os
+from pathlib import Path
 from typing import Optional
 
 import Bio.Seq
@@ -363,8 +364,8 @@ def variant_tables_snv_insdel(
 def variant_tables_inv(
         df_align: pl.DataFrame | pl.LazyFrame,
         df_flag: pl.DataFrame | pl.LazyFrame,
-        ref_fa_filename: str,
-        qry_fa_filename: str,
+        ref_fa_filename: str | Path,
+        qry_fa_filename: str | Path,
         df_ref_fai: pl.DataFrame,
         df_qry_fai: pl.DataFrame,
         pav_params: Optional[PavParams] = None,
@@ -410,6 +411,8 @@ def variant_tables_inv(
     # Create variant tables
     variant_table_list = []
 
+    log_file = None
+
     for row in df_flag.iter_rows(named=True):
         region_flag = Region(
             chrom=row['chrom'], pos=row['pos'], end=row['end'],
@@ -427,23 +430,16 @@ def variant_tables_inv(
             k_util=k_util,
             kde_model=kde_model,
             stop_on_lift_fail=True,
-            log_file=None,
+            log_file=log_file,
         )
 
         if inv_row is not None:
-            inv_row['align_index'] = [row['align_index']]
-
-            variant_table_list.append(pl.DataFrame(inv_row))
-
-    col_set = set(get_inv_row().keys())
-
-    col_set.add('filter')
-    col_set.add('align_source')
-
-    table_schema = {col: type_ for col, type_ in schema.VARIANT.items() if col in col_set}
+            variant_table_list.append(inv_row)
 
     df_inv = (
-        pl.from_dicts(variant_table_list, schema=table_schema)
+        pl.from_dicts(
+            variant_table_list,
+        )
         .with_columns(
             expr.id_nonsnv().alias('id'),
             pl.lit(CALL_SOURCE).alias('call_source')
@@ -454,7 +450,6 @@ def variant_tables_inv(
             right_on='align_index',
             how='left'
         )
-        .select(list(table_schema.keys()))
     )
 
     return schema.cast(df_inv, schema.VARIANT)
