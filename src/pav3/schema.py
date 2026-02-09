@@ -168,6 +168,7 @@ Fields:
 def cast(
     df: pl.DataFrame,
     schema: dict[str, pl.DataType],
+    do_sort: bool = True,
 ) -> pl.DataFrame:
     ...
 
@@ -175,22 +176,48 @@ def cast(
 def cast(
     df: pl.LazyFrame,
     schema: dict[str, pl.DataType],
+    do_sort: bool = True,
 ) -> pl.LazyFrame:
     ...
 
 def cast(
     df: pl.DataFrame | pl.LazyFrame,
     schema: dict[str, pl.DataType],
+    do_sort: bool = True,
 ) -> pl.DataFrame | pl.LazyFrame:
+    """
+    Cast a DataFrame or LazyFrame to a schema.
+
+    :param df: DataFrame or LazyFrame to cast.
+    :param schema: Schema to cast to.
+    :param do_sort: Whether to sort the DataFrame or LazyFrame by the order defined in the schema.
+        If the table contains columns not defined by the schema, they are retained in order after
+        columns defined by the schema.
+    """
 
     if isinstance(df, pl.DataFrame):
         existing_schema = df.schema
     else:
         existing_schema = df.collect_schema()
 
-    return df.cast(
+    df = df.cast(
         {
             col: schema.get(col, type_)
             for col, type_ in existing_schema.items()
         }
     )
+
+    if do_sort:
+        df = (
+            df
+            .select(
+                *[  # Known columns first
+                    col for col in schema.keys() if col in existing_schema.keys()
+                ],
+                *[  # Unknown columns last
+                    col for col in existing_schema.keys() if col not in schema.keys()
+                ]
+            )
+        )
+
+    return df
