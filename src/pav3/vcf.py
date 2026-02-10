@@ -1,7 +1,30 @@
 """Transform variant calls from Parquet files to VCF files."""
 
+__all__ = [
+    'InfoField',
+    'FilterField',
+    'FormatField',
+    'AltField',
+    'VCF_VERSION',
+    'INFO_FIELDS',
+    'FILTER_FIELDS',
+    'FORMAT_FIELDS',
+    'ALT_FIELDS',
+    'VARTYPES',
+    'VARTYPE_COMPAT',
+    'get_headers',
+    'init_vcf_fields',
+    'vcf_fields_seq_insdel',
+    'vcf_fields_sym',
+    'vcf_fields_snv',
+    'gt_column',
+    'standard_info_fields',
+    'reformat_vcf_table',
+    'get_hap_source',
+]
+
+
 from collections.abc import Iterable, Mapping
-from dataclasses import dataclass
 import datetime
 from pathlib import Path
 import threading
@@ -170,6 +193,18 @@ ALT_FIELDS = [
     AltField('CPX', 'Complex variant'),
 ]
 
+VARTYPES = ('insdel', 'inv', 'snv', 'cpx', 'dup')
+
+VARTYPE_COMPAT = {
+    'insdel': {'INS', 'DEL'},
+    'ins': {'INS'},
+    'del': {'DEL'},
+    'inv': {'INV'},
+    'snv': {'SNV'},
+    'cpx': {'CPX'},
+    'dup': {'DUP'},
+}
+
 
 def get_headers(
         ref_filename: Optional[str | Path] = None,
@@ -221,7 +256,7 @@ def get_headers(
 
 def init_vcf_fields(
         df: pl.LazyFrame,
-        ref_fa: Optional[str] = None,
+        ref_fa: Optional[str | Path] = None,
         use_sym: Optional[bool] = None,
         vartype: Optional[str] = None,
 ) -> pl.LazyFrame:
@@ -234,10 +269,29 @@ def init_vcf_fields(
     :param ref_fa: Reference FASTA filename. Required for non-SNV variants.
     :param use_sym: Whether to use symbolic alternate records. If None, INS, DEL, and SNV ore not
         symbolic, and all other variant types are.
+    :param vartype: Expected variant type or types (i.e. "insdel" allows "INS" and "DEL"). Setting
+        this field ensures the variant types is handled consisntently if all variant types
+        are not in table `df` or `df` is empty.
     """
+    df_schema = df.collect_schema()
+
     vartype_set = set(
         df.select(pl.col('vartype').unique()).collect().to_series()
     )
+
+    if vartype is not None:
+        vartype_compat = VARTYPE_COMPAT.get(vartype, None)
+
+        if vartype_compat is None:
+            raise ValueError(f'Unknown variant type: {vartype}')
+
+        if no_compat_set := vartype_set - vartype_compat:
+            raise ValueError(
+                f'Declared variant type "{vartype}" is not compatible with types found '
+                f'in the variant table: {", ".join(sorted([str(_).upper() for _ in no_compat_set]))}'
+            )
+
+        vartype_set = vartype_compat
 
     if 'SNV' in vartype_set and len(vartype_set) > 1:
         raise ValueError(
@@ -335,7 +389,7 @@ def init_vcf_fields(
 
 def vcf_fields_seq_insdel(
         df: pl.LazyFrame,
-        ref_fa: str,
+        ref_fa: Path | str,
 ) -> pl.LazyFrame:
     """Set POS, REF, and ALT VCF fields for insertions and deletions (non-symbolic).
 
@@ -464,7 +518,7 @@ def vcf_fields_seq_insdel(
 
 def vcf_fields_sym(
     df: pl.LazyFrame,
-    ref_fa: str,
+    ref_fa: Path | str,
 ) -> pl.LazyFrame:
     """Get POS, REF, and ALT fields for symbolic alternate records.
 
@@ -955,17 +1009,17 @@ class _LockingPysam():
 
     Pysam is not thread-safe, and will fail when called through Polars. This class explicitly locks it.
     """
-    filename: str
+    filename: Path
 
     def __init__(
             self,
-            filename,
+            filename: Path | str,
     ):
         """Create a new locking object.
 
         :param filename: FASTA file name.
         """
-        self.filename = filename
+        self.filename = Path(filename)
         self.ref_file = None
         self.lock = threading.Lock()
 
@@ -973,7 +1027,7 @@ class _LockingPysam():
         if self.ref_file is not None:
             raise RuntimeError('Ref file already open')
 
-        self.ref_file = pysam.FastaFile(self.filename)
+        self.ref_file = pysam.FastaFile(str(self.filename))
 
         return self
 
@@ -995,124 +1049,3 @@ class _LockingPysam():
 
         with self.lock:
             return self.ref_file.fetch(chrom, start, end)
-
-
-#
-# Refactor
-#
-
-
-# def _init_vcf_fields(
-#         df: pl.LazyFrame | pl.DataFrame,
-# ) -> pl.LazyFrame:
-#     """Initialize VCF fields common across all variant types (does not set REF, ALT, or POS).
-#
-#     :param df: Variant table.
-#     """
-#
-#     if isinstance(df, pl.DataFrame):
-#         df = df.lazy()
-#
-#     return (
-#         df.with_columns(
-#             pl.col('chrom').alias('#CHROM'),
-#             pl.col('id').alias('ID'),
-#             pl.lit('.').alias('QUAL'),
-#             (
-#                 pl.when(pl.col('filter').is_not_null())
-#                 .then(pl.col('filter').list.join(';'))
-#                 .otherwise(pl.lit('PASS'))
-#             ).alias('FILTER'),
-#             pl.lit([]).cast(pl.List(pl.String)).alias('_info'),
-#             pl.lit([]).cast(pl.List(pl.Struct({'fmt': pl.String, 'sample': pl.String}))).alias('_sample')
-#         )
-#         .with_columns(
-#             pl.col('_info').list.concat([
-#                 pl.concat_str(pl.lit('ID='), 'id'),
-#                 pl.concat_str(pl.lit('QRY_REGION='), pl.col('chrom'), pl.lit(':'), pl.col('qry_pos') + 1, pl.lit('-'), pl.col('qry_end')),
-#                 # pl.concat_str(pl.lit('QRY_STRAND='), pl.when(pl.col('is_rev')).then('-').otherwise('+')),
-#                 pl.concat_str(pl.lit('ALIGN_INDEX='), pl.col('align_index').cast(pl.List(pl.String)).list.join(','))
-#             ])
-#         )
-#     )
-
-# def _init_table():
-#     df = (
-#         df.with_columns(
-#             pl.col('chrom').alias('#CHROM'),
-#             # POS
-#             pl.col('id').alias('ID'),
-#             # REF
-#             # ALT
-#             pl.lit('.').alias('QUAL'),
-#             (
-#                 pl.when(pl.col('filter').is_not_null())
-#                 .then(pl.col('filter').list.join(';'))
-#                 .otherwise(pl.lit('PASS'))
-#             ).alias('FILTER'),
-#             # INFO
-#             # FORMAT
-#             # Sample
-#         )
-#     )
-
-# def _init_table_other(
-#
-# ):
-#     df = (
-#         df.with_columns(
-#             (pl.col('vartype').is_in(['INV', 'CPX', 'DUP'])).alias('_is_sym'),
-#             (pl.col('vartype') == 'SNV').alias('_is_snv'),
-#             (pl.col('pos') > 0).alias('_ref_left')  # Append reference base to left if True (most variants), move to end if not (variant at position 0)
-#         )
-#     )
-
-#
-# def _ref_base(df, ref_fa):
-#     """
-#     Get reference base preceding a variant (SV, indel) or at the point change (SNV).
-#
-#     :param df: Variant dataframe as BED.
-#     :param ref_fa: Reference file.
-#     """
-#
-#     # Get the reference base location
-#     with pysam.FastaFile(ref_fa) as ref_file:
-#
-#         df = (
-#             df.with_columns(
-#                 (
-#                     pl.when(pl.col('_ref_left'))
-#                     .then(pl.col('pos') - 1)
-#                     .otherwise(pl.col('end'))
-#                 ).alias('_ref_base_loc')
-#             )
-#             .with_columns(
-#                 pl.when(pl.col('_is_snv'))
-#                 .then(pl.col('_ref_base_loc') + 1)
-#                 .otherwise(pl.col('_ref_base_loc'))
-#             ).alias('_ref_base_loc')
-#             .with_columns(
-#                 pl.struct(['chrom', '_ref_base_loc'])
-#                 .apply(
-#                     lambda vals: ref_file.fetch(vals['chrom'], vals['_ref_base_loc'], vals['_ref_base_loc'] + 1)
-#                 ).alias('_ref_base')
-#             )
-#             .drop('_ref_base_Loc')
-#         )
-#
-#     # Open and update records
-#     with pysam.FastaFile(ref_fa) as ref_file:
-#         for index, row in df.iterrows():
-#
-#             if row['SVTYPE'] in {'INS', 'DEL', 'INSDEL', 'DUP', 'INV'}:
-#                 yield ref_file.fetch(row['#CHROM'], row['POS'] + (-1 if row['POS'] > 0 else 0), row['POS']).upper()
-#
-#             elif row['SVTYPE'] == 'SNV':
-#                 if 'REF' in row:
-#                     yield row['REF']
-#                 else:
-#                     yield ref_file.fetch(row['#CHROM'], row['POS'], row['POS'] + 1).upper()
-#
-#             else:
-#                 raise RuntimeError('Unknown variant type: "{}" at index {}'.format(row['VARTYPE'], index))
