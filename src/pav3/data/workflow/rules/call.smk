@@ -862,8 +862,8 @@ rule call_intra_inv:
         df_inv = pav3.call.intra.variant_tables_inv(
             df_align=df_align,
             df_flag=df_flag,
-            ref_fa_filename=str(ref_fa_filename),
-            qry_fa_filename=str(qry_fa_filename),
+            ref_fa_filename=ref_fa_filename,
+            qry_fa_filename=qry_fa_filename,
             df_ref_fai=df_ref_fai,
             df_qry_fai=df_qry_fai,
             pav_params=pav_params,

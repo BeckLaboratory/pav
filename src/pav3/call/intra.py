@@ -409,6 +409,8 @@ def variant_tables_inv(
     )
 
     # Create variant tables
+    inv_schema = {col: type_ for col, type_ in schema.VARIANT.items() if col in set(get_inv_row().keys())}
+
     variant_table_list = []
 
     log_file = None
@@ -439,6 +441,7 @@ def variant_tables_inv(
     df_inv = (
         pl.from_dicts(
             variant_table_list,
+            schema=inv_schema,
         )
         .with_columns(
             expr.id_nonsnv().alias('id'),
