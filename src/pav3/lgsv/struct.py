@@ -143,6 +143,9 @@ def get_ref_trace(
                     on='_index_aligned',
                     how='left'
                 )
+                .with_columns(
+                    pl.col('is_rev') ^ interval.is_rev
+                )
                 .group_by('_index_trace')
                 .agg(
                     (

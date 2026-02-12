@@ -83,7 +83,7 @@ TRIM_DESC = {
 }
 """Trim mode description."""
 
-DEFAULT_MIN_TRIM_QRY_LEN = 500
+DEFAULT_MIN_TRIM_QRY_LEN = 1
 """Default minimum query length. Alignments with fewer query bases are removed."""
 
 
@@ -111,7 +111,7 @@ def trim_alignments_qry(
         raise ValueError('Query FAI dataframe is None.')
 
     if min_trim_qry_len < 1:
-        raise ValueError('min_trim_qry_len must be at least 1.')
+        min_trim_qry_len = 1
 
     score_model = get_score_model(score_model)
 
