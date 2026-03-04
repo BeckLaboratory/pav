@@ -59,7 +59,9 @@ Columns:
     * qry_pos: Query start position.
     * qry_end: Query end position.
     * is_rev: True if the sequence was reverse-complemented during alignment.
-    * len_ref: Length of the segment on the reference.
+    * anchor_gap: Length of the reference 
+    * len_ref: Length of the segment on the reference. Negative if anchors overlap (tandem duplication), positive
+        if there is a gap between anchors (deletion), and 0 if anchors meet (insertion).
     * len_qry: Length of the segment on the query.
     * gap_ref: Gap length on the reference. Distance between the end of the last aligned segment and this segment. May
         be negative if the alignment went backwards. If the chromosome name of the last aligned segment is different,
@@ -153,6 +155,8 @@ class AnchoredInterval:
             ref_end = self.df_segment[-1, 'pos']
             end_align_index = self.df_segment[-1, 'align_index']
 
+        self.len_ref = ref_end - ref_pos
+
         if ref_pos > ref_end:
             ref_pos, ref_end = ref_end, ref_pos
             pos_align_index, end_align_index = end_align_index, pos_align_index
@@ -172,7 +176,6 @@ class AnchoredInterval:
 
         self.region_qry = Region(qry_id, qry_pos, qry_end, self.is_rev)
 
-        self.len_ref = ref_end - ref_pos
         self.len_qry = len(self.region_qry)
 
         # Test invariants

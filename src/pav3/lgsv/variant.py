@@ -560,7 +560,7 @@ class TandemDuplicationVariant(InsertionVariant):
         InsertionVariant.__init__(self, interval, caller_resources, var_region_kde, _try_td=True)
 
         if (
-            self.interval.seg_n != 0 or self.interval.len_ref >= 0 or
+            self.interval.len_ref >= 0 or
             not self.interval.df_segment[0, 'align_index'] in self.caller_resources.qryref_index_set or
             not self.interval.df_segment[-1, 'align_index'] in self.caller_resources.qryref_index_set
         ):
@@ -902,7 +902,7 @@ class ComplexVariant(Variant):
         # Get reference trace
         self.df_ref_trace = get_ref_trace(
             interval=self.interval,
-            df_ref_fai=self.caller_resources.df_ref_fai
+            df_ref_fai=self.caller_resources.df_ref_fai,
         )
 
         # Compute variant score
