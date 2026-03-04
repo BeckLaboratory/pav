@@ -332,7 +332,7 @@ def try_variant(
     # Try variant call
     variant = var_type(interval, caller_resources, var_region_kde)
 
-    if not variant.is_null and variant.var_score <= best_variant.var_score:
+    if variant.is_null or variant.var_score <= best_variant.var_score:
         return best_variant
 
     return variant

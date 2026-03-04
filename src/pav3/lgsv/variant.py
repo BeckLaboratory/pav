@@ -560,51 +560,30 @@ class TandemDuplicationVariant(InsertionVariant):
         InsertionVariant.__init__(self, interval, caller_resources, var_region_kde, _try_td=True)
 
         if (
-            self.interval.len_ref >= 0 or
-            not self.interval.df_segment[0, 'align_index'] in self.caller_resources.qryref_index_set or
-            not self.interval.df_segment[-1, 'align_index'] in self.caller_resources.qryref_index_set
+            self.interval.len_ref >= 0
+            or self.region_ref is None
+            or self.region_qry is None
+            or not self.interval.df_segment[0, 'align_index'] in self.caller_resources.qryref_index_set
+            or not self.interval.df_segment[-1, 'align_index'] in self.caller_resources.qryref_index_set
         ):
             return
 
-        df_qryref = (
-            self.caller_resources.df_align_qryref
-            .join(
-                (
-                    self.interval.df_segment
-                    .filter('is_aligned')
-                    .select('align_index')
-                    .lazy()
-                ),
-                on='align_index',
-                how='inner',
-                maintain_order='right'
-            )
-            .select(['align_index', 'pos', 'end', 'qry_pos', 'qry_end'])
-            .collect()
+        self.varlen = len(self.region_ref) + interval.len_qry
+
+        seg_n_aligned = self.interval.seg_n_aligned
+
+        if seg_n_aligned > 0:
+            seg_n_aligned += 1  # Template switch into the first segment, then one to exit each segment
+
+        self.var_score = (
+            caller_resources.score_model.gap(self.varlen)
+            + caller_resources.score_model.gap(self.len_qry)
+            + caller_resources.score_model.segment_transition_score * seg_n_aligned
         )
-
-        # Determine left-most breakpoint using alignment trimming for homology
-        if self.interval.is_rev:
-            qry_pos = df_qryref[-1, 'qry_end']
-            qry_end = df_qryref[0, 'qry_pos']
-        else:
-            qry_pos = df_qryref[0, 'qry_end']
-            qry_end = df_qryref[-1, 'qry_pos']
-
-        self.varlen = qry_end - qry_pos
-
-        if self.varlen <= 0:
-            return
-
-        self.region_ref = Region(self.interval.chrom, df_qryref[0, 'end'] - 1, df_qryref[0, 'end'])
-
-        self.var_score = caller_resources.score_model.gap(self.varlen)
 
         self.varsubtype = 'TD'
 
-        self.region_qry = Region(interval.region_qry.chrom, qry_pos, qry_end)
-
-        self._dup_list.append(self.interval.region_ref.as_dict())
+        self._dup_list.append(self.region_ref.as_dict())
 
         self.resolved_templ = interval.qry_aligned_pass_prop >= caller_resources.pav_params.lg_cpx_min_aligned_prop
 
@@ -917,10 +896,6 @@ class ComplexVariant(Variant):
                 .item()
             )
         )
-
-        # Set in complete_anno
-        self.struct_qry = None
-        self.struct_ref = None
 
         self.resolved_templ = interval.qry_aligned_pass_prop >= caller_resources.pav_params.lg_cpx_min_aligned_prop
 

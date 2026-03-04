@@ -495,10 +495,7 @@ def score_segment_transitions(
     """
     # Template switches between segments (n + 2 alignment records (n segments + 2 anchors),
     # n - 1 template switches (between each segment including each anchor)
-    score_variant = (
-            caller_resources.score_model.template_switch() *
-            (df_segment.height - 1)
-    )
+    score_variant = caller_resources.score_model.template_switch(df_segment.height - 1)
 
     return score_variant + (
         df_segment
