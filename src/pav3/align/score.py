@@ -77,7 +77,7 @@ class ScoreModel(ABC):
         pass
 
     @abstractmethod
-    def template_switch(self) -> float:
+    def template_switch(self, n: int = 1) -> float:
         """Score a template switch.
 
         :returns: Template switch score.
@@ -247,12 +247,14 @@ class AffineScoreModel(ScoreModel):
             for gap_open, gap_extend in self.score_affine_gap
         ])
 
-    def template_switch(self) -> float:
+    def template_switch(self, n: int = 1) -> float:
         """Score a template switch.
+
+        :param n: Number of template switches.
 
         :returns: Template switch score.
         """
-        return self.score_template_switch
+        return self.score_template_switch * n
 
     def mismatch_model(self) -> 'ScoreModel':
         """Create a version of this model that scores only mismatches (ignores gaps).
