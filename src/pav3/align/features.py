@@ -59,7 +59,7 @@ def feature(dtype: type[pl.DataType], name: str = None) -> Callable:
                 self,
                 df: pl.DataFrame,
                 df_qry_fai: Optional[pl.DataFrame] = None,
-                temp_features: Optional[set[str]] = None
+                temp_features: Optional[set[str]] = None,
         ) -> pl.DataFrame:
             """Wrap feature functions with a consistent signature.
 

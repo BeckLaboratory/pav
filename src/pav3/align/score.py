@@ -138,7 +138,7 @@ class ScoreModel(ABC):
             .select(pl.col('align_ops'))
             .to_series()
             .map_elements(op.row_to_arr, return_dtype=pl.Object)
-            .map_elements(self.score_op_arr, return_dtype=pl.Float32)
+            .map_elements(lambda op_arr: np.float32(self.score_op_arr(op_arr)), return_dtype=pl.Float32)
         )
 
         # A pure polars implementation is slower:
