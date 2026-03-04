@@ -2,24 +2,39 @@
 
 set -euo pipefail
 
-# Build binary dependencies for PAV:
-# htslib
-# samtools
-# tabix
-# minimap2
-# LRA
-# ucsc (command-line tools)
+# Build binary dependencies for PAV
 
 
 PREFIX=/opt/pav
 
-HTSLIB_VERSION=1.19
+HTSLIB_VERSION=1.23
 
 SAMTOOLS_VERSION=${HTSLIB_VERSION}
 
-MINIMAP_VERSION=2.26
+MINIMAP_VERSION=2.30
 
-LRA_VERSION=1.3.7.2
+
+### Init ###
+
+apt-get update
+
+### Libraries ###
+
+apt-get install -y \
+  libbz2-dev \
+  libncurses-dev \
+  libssh-dev \
+  libssl-dev \
+  libcurl4-openssl-dev \
+  libdeflate-dev \
+  liblzma-dev \
+  wget \
+  bzip2 \
+  gcc \
+  make \
+  build-essential \
+  gnupg \
+  curl
 
 
 ### htslib ###
@@ -32,7 +47,7 @@ pushd htslib-${HTSLIB_VERSION}
 
 ./configure --prefix=${PREFIX} CPPFLAGS="-I${PREFIX}/include" LDFLAGS="-L${PREFIX}/lib -Wl,-rpath,${PREFIX}/lib"
 
-make -j 4 && make install
+make -j $(nproc) && make install
 
 popd
 
@@ -51,7 +66,7 @@ pushd samtools-${SAMTOOLS_VERSION}
 
 ./configure --prefix=${PREFIX} CPPFLAGS="-I${PREFIX}/include" LDFLAGS="-L${PREFIX}/lib -Wl,-rpath,${PREFIX}/lib"
 
-make -j 4 && make install
+make -j $(nproc) && make install
 
 popd
 
@@ -66,26 +81,11 @@ wget https://github.com/lh3/minimap2/releases/download/v${MINIMAP_VERSION}/minim
 
 tar -xjf minimap2-${MINIMAP_VERSION}.tar.bz2
 
-make -j 4 -C minimap2-${MINIMAP_VERSION}
+make -j $(nproc) -C minimap2-${MINIMAP_VERSION}
 
 install minimap2-${MINIMAP_VERSION}/minimap2 ${PREFIX}/bin/
 
 rm -r minimap2-${MINIMAP_VERSION} minimap2-${MINIMAP_VERSION}.tar.bz2
-
-
-### LRA ###
-
-git clone --recursive https://github.com/ChaissonLab/LRA.git -b ${LRA_VERSION}
-
-pushd LRA
-
-make -j 4 CFLAGS="-I${PREFIX}/include -L${PREFIX}/lib -Wl,-rpath,${PREFIX}/lib -g"
-
-install lra ${PREFIX}/bin/
-
-popd
-
-rm -r LRA
 
 
 ### UCSC ###

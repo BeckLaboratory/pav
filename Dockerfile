@@ -2,7 +2,7 @@
 # Stage: build
 #
 
-FROM python:3.11.0-bullseye AS build_deps
+FROM python:3.12-slim AS build_deps
 LABEL pav_stage=build_deps
 
 ENV PAV_BASE=/opt/pav
@@ -20,7 +20,7 @@ RUN rm -rf files
 # Stage: stage pav files
 #
 
-FROM python:3.11.0-bullseye AS stage_pav
+FROM python:3.12-slim AS stage_pav
 LABEL pav_stage=stage_pav
 
 ENV PAV_BASE=/opt/pav
@@ -41,7 +41,7 @@ COPY Snakefile Dockerfile *.md ${PAV_BASE}/
 # Stage: pav
 #
 
-FROM python:3.11.0-bullseye AS pav
+FROM python:3.12-slim AS pav
 LABEL pav_stage=pav
 
 ENV PAV_VERSION="2.4.6"
