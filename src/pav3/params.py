@@ -419,14 +419,6 @@ _CONFIG_PARAM_LIST: list[_ConfigParamElement] = [
                     'alignment-truncating variants.'
     ),
     _ConfigParamElement(
-        'lg_off_gap_mult', 'float', const.DEFAULT_LG_OFF_GAP_MULT,
-        min=(1.0, False),
-        description='Large variants are penalized for gaps inconsistent with their variant type, e.g. a '
-                    'reference gap (del) at an insertion site. For these off-gaps, multiply the gap score'
-                    'by this factor (see parameter "align_score_model" for gap scores).',
-        advanced=True
-    ),
-    _ConfigParamElement(
         'lg_gap_scale', 'float', const.DEFAULT_LG_GAP_SCALE,
         min=(0.0, False),
         description='Alignment anchoring candidate SVs are ignored if the penalty of the gap between two '

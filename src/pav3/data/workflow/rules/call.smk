@@ -341,7 +341,7 @@ rule call_integrate_sources:
     benchmark: 'log/benchmark/{asm_name}/call_integrate_sources_{hap}.tsv'
     threads: POLARS_MAX_THREADS
     run:
-        pav3.call.integrate.integrate_sources(
+        pav3.workflow.call.integrate_sources(
             pav_params=pav3.params.PavParams(wildcards.asm_name, PAV_CONFIG, ASM_TABLE),
             input=dict(input),
             output=dict(output),

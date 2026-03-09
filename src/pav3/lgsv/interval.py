@@ -6,14 +6,18 @@ An anchored interval spans between two anchors and covers segmentns of aligned a
 __all__ = [
     'AnchoredInterval',
     'get_segment_table',
-    'score_segment_transitions'
+    'gap_sum_score',
+    'unaligned_switch_sum_score',
 ]
+
+from typing import Optional
 
 import polars as pl
 
 from .. import schema
 
 from ..align.features import FeatureGenerator
+from ..align.score import ScoreModel
 from ..region import Region
 
 from .resources import CallerResources
@@ -86,6 +90,10 @@ class AnchoredInterval:
     :ivar region_qry: Query region between the anchors.
     :ivar len_ref: Distance between the anchors on the reference. May be a negative number (i.e. Tandem Duplications).
     :ivar len_qry: Distance between the anchors on the query.
+    :ivar score_gap_sum_aligned: Gap sum score for aligned segments.
+    :ivar score_gap_sum_unaligned: Gap sum score for unaligned segments.
+    :ivar score_gap_sum: Gap sum score for all segments.
+    :ivar score_unaligned_switch_sum: Unaligned switch sum score.
     """
 
     start_index: int
@@ -102,6 +110,7 @@ class AnchoredInterval:
             start_index: int,
             end_index: int,
             df_align: pl.DataFrame,
+            df_align_qryref: pl.DataFrame,
             caller_resources: CallerResources
     ) -> None:
         """Initialize interval.
@@ -140,7 +149,7 @@ class AnchoredInterval:
         # Get segment table
         self.df_segment = get_segment_table(start_index, end_index, df_align, caller_resources)
 
-        # Get query and reference regions
+        # Get reference region (qry trimmed)
         qry_pos = self.df_segment[0, 'qry_end']
         qry_end = self.df_segment[-1, 'qry_pos']
 
@@ -177,6 +186,90 @@ class AnchoredInterval:
         self.region_qry = Region(qry_id, qry_pos, qry_end, self.is_rev)
 
         self.len_qry = len(self.region_qry)
+
+        # Get query region (ref trimmed)
+        qry_ref_index_list =(
+            df_align_qryref
+            .with_row_index('_index')
+            .filter(
+                pl.col('align_index').is_in(
+                    self.df_segment
+                    .filter('is_anchor')
+                    .select('align_index')
+                    .to_series()
+                    .to_list()
+                )
+            )
+            .select('_index')
+            .to_series()
+            .sort()
+            .to_list()
+        )
+
+        assert len(qry_ref_index_list) == 2, f'Expected 2 elements in qry_ref_index_list: n={qry_ref_index_list}'
+
+        self.df_segment_qryref = get_segment_table(
+            qry_ref_index_list[0], qry_ref_index_list[1], df_align_qryref, caller_resources
+        )
+
+        if self.is_rev:
+            ref_pos_qryref = self.df_segment_qryref[-1, 'end']
+            pos_align_index_qryref = self.df_segment_qryref[-1, 'align_index']
+            ref_end_qryref = self.df_segment_qryref[0, 'pos']
+            end_align_index_qryref = self.df_segment_qryref[0, 'align_index']
+        else:
+            ref_pos_qryref = self.df_segment_qryref[0, 'end']
+            pos_align_index_qryref = self.df_segment_qryref[0, 'align_index']
+            ref_end_qryref = self.df_segment_qryref[-1, 'pos']
+            end_align_index_qryref = self.df_segment_qryref[-1, 'align_index']
+
+        if ref_pos_qryref > ref_end_qryref:
+            ref_pos_qryref, ref_end_qryref = ref_end_qryref, ref_pos_qryref
+            pos_align_index_qryref, end_align_index_qryref = end_align_index_qryref, pos_align_index_qryref
+
+        if ref_end_qryref == ref_pos_qryref:  # If Insertion site (ref_end == ref_pos)
+           ref_end_qryref += 1
+
+        self.region_ref_qryref = Region(
+            chrom=chrom,
+            pos=ref_pos_qryref,
+            end=ref_end_qryref,
+            is_rev=self.is_rev,
+            pos_align_index=pos_align_index_qryref,
+            end_align_index=end_align_index_qryref,
+        )
+
+        assert (
+            self.region_ref_qryref.chrom == self.region_ref.chrom
+            or self.region_ref_qryref.is_rev == self.region_ref.is_rev
+            or self.region_ref_qryref.pos_align_index == self.region_ref.pos_align_index
+            or self.region_ref_qryref.end_align_index == self.region_ref.end_align_index
+        ), (
+            f'Interval(start={self.start_index}, end={self.end_index}: '
+            f'Chrom, index, or orientation mismatch between reference regions: '
+            f'qry-trimmed={self.region_ref}, qry-ref-trimmed={self.region_ref_qryref}'
+        )
+
+
+        # Scores
+        self.score_gap_sum_aligned = gap_sum_score(
+            df_segment=self.df_segment,
+            score_model=self.caller_resources.score_model,
+            mapped=True,
+        )
+
+        self.score_gap_sum_unaligned = gap_sum_score(
+            df_segment=self.df_segment,
+            score_model=self.caller_resources.score_model,
+            mapped=False,
+        )
+
+        self.score_gap_sum = self.score_gap_sum_aligned + self.score_gap_sum_unaligned
+
+        self.score_unaligned_switch_sum = unaligned_switch_sum_score(
+            df_segment=self.df_segment,
+            score_model=self.caller_resources.score_model,
+        )
 
         # Test invariants
         if self.len_qry < 0:
@@ -305,11 +398,6 @@ class AnchoredInterval:
             .select(pl.col('score').min())
             .item()
         )
-
-    @property
-    def segment_transition_score(self) -> float:
-        """Get a score for segment transitions."""
-        return score_segment_transitions(self.df_segment, self.caller_resources)
 
     def __repr__(self) -> str:
         """Return a string representation of the object."""
@@ -482,24 +570,56 @@ def get_segment_table(
     )
 
 
-def score_segment_transitions(
+def gap_sum_score(
         df_segment: pl.DataFrame,
-        caller_resources: CallerResources,
+        score_model: ScoreModel,
+        mapped: Optional[bool] = None,
 ) -> float:
-    """Scores a complex variant on template switches and gaps for each segment.
+    """Sum gap scores across a segment table.
 
     :param df_segment: Segment table.
-    :param caller_resources: Caller resources.
+    :param score_model: Score model.
+    :param mapped: Restrict to only aligned segments (True) or only unaligned segments (False). If
+        None, include all segments.
 
-    :returns: Variant score.
+    :returns: Sum of gap scores across a segment table.
     """
-    # Template switches between segments (n + 2 alignment records (n segments + 2 anchors),
-    # n - 1 template switches (between each segment including each anchor)
-    score_variant = caller_resources.score_model.template_switch(df_segment.height - 1)
+    df_segment = df_segment.filter(~ pl.col('is_anchor'))
 
-    return score_variant + (
+    if mapped:
+        df_segment = df_segment.filter(pl.col('is_aligned'))
+    elif mapped == False:
+        df_segment = df_segment.filter(~ pl.col('is_aligned'))
+
+    return (
         df_segment
-        .filter(pl.col('is_aligned') & ~ pl.col('is_anchor'))
-        .select(pl.col('len_qry').map_elements(caller_resources.score_model.gap, return_dtype=pl.Float32).sum())
+        .select(pl.col('len_qry').map_elements(score_model.gap, return_dtype=pl.Float32).sum())
+        .item()
+    )
+
+
+def unaligned_switch_sum_score(
+        df_segment: pl.DataFrame,
+        score_model: ScoreModel,
+) -> float:
+    """Sum the minimum of gap or template switch scores across unaligned segments.
+
+    :param df_segment: Segment table.
+    :param score_model: Score model.
+
+    :returns: Sum of the minimum of gap or template switch scores across unaligned segments.
+    """
+    return (
+        df_segment
+        .filter(
+            ~ pl.col('is_anchor'),
+            ~ pl.col('is_aligned'),
+        )
+        .select(
+            pl.max_horizontal(
+                pl.col('len_qry').map_elements(score_model.gap, return_dtype=pl.Float32),
+                pl.lit(score_model.template_switch(1))
+            ).sum()
+        )
         .item()
     )

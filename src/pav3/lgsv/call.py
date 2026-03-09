@@ -19,13 +19,18 @@ import numpy as np
 from ..const import DEFAULT_MIN_ANCHOR_SCORE
 from ..io import PlainOrGzFile
 
-from .interval import AnchoredInterval, score_segment_transitions, get_segment_table
+from .interval import AnchoredInterval, gap_sum_score, get_segment_table
 from .chain import get_chain_set, get_min_anchor_score
 from .io import dot_graph_writer
 from .region_kde import VarRegionKde
 from .resources import CallerResources
 from .variant import Variant, NullVariant, PatchVariant
-from .variant import ComplexVariant, DeletionVariant, InsertionVariant, InversionVariant, TandemDuplicationVariant
+from .variant import (
+    ComplexVariant,
+    DeletionVariant,
+    InsertionVariant,
+    InversionVariant,
+)
 
 
 def call_from_align(
@@ -63,6 +68,14 @@ def call_from_align(
             .collect()
         )
 
+        df_align_qryref = (
+            caller_resources.df_align_qryref
+            .filter(pl.col('qry_id') == qry_id)
+            .sort(['qry_order'])
+            .drop(['align_ops'], strict=False)
+            .collect()
+        )
+
         # Chain alignment records
         chain_set = get_chain_set(df_align, caller_resources, min_anchor_score)
 
@@ -81,7 +94,7 @@ def call_from_align(
 
         for start_index, end_index in chain_set:
             sv_dict[(start_index, end_index)] = call_from_interval(
-                start_index, end_index, df_align, caller_resources
+                start_index, end_index, df_align, df_align_qryref, caller_resources
             )
 
         # Choose variants along the optimal path
@@ -113,6 +126,7 @@ def call_from_interval(
         start_index: int,
         end_index: int,
         df_align: pl.DataFrame,
+        df_align_qryref: pl.DataFrame,
         caller_resources: CallerResources,
         min_sum: float = 0.0,
 ) -> Variant:
@@ -120,14 +134,17 @@ def call_from_interval(
 
     :param start_index: Start index in df_align.
     :param end_index: End index in df_align.
-    :param df_align: Query alignment records for one query sequence sorted and indexed in query order.
+    :param df_align: Query alignment records for one query sequence sorted and indexed in query
+        order, query trimmed.
+    :param df_align_qryref: Query alignment records for one query sequence sorted and indexed in
+        query order, query and reference trimmed.
     :param caller_resources: Caller resources.
     :param min_sum: The sum of the variant score and least anchor score (lesser score of the two anchors) must be
         greater than this value.
 
     :returns Variant call. If no variant is called, returns a `NullVariant` object.
     """
-    interval = AnchoredInterval(start_index, end_index, df_align, caller_resources)
+    interval = AnchoredInterval(start_index, end_index, df_align, df_align_qryref, caller_resources)
 
     if caller_resources.verbose:
         print(
@@ -152,9 +169,9 @@ def call_from_interval(
             DeletionVariant, interval, caller_resources, variant_call, var_region_kde
         )
 
-        variant_call = try_variant(
-            TandemDuplicationVariant, interval, caller_resources, variant_call, var_region_kde
-        )
+        # variant_call = try_variant(
+        #     TandemDuplicationVariant, interval, caller_resources, variant_call, var_region_kde
+        # )
 
         variant_call = try_variant(
             InversionVariant, interval, caller_resources, variant_call, var_region_kde
@@ -253,11 +270,13 @@ def find_optimal_svs(
                 # Edge weight: Score by complex structure (template switches and gap penalties for each segment).
 
                 # Initial score: Template switches and gap penalties
+                df_seg = get_segment_table(start_index, end_index, df_align, caller_resources)
                 score += (
-                    score_segment_transitions(
-                        get_segment_table(start_index, end_index, df_align, caller_resources),
-                        caller_resources
+                    gap_sum_score(
+                        df_seg,
+                        caller_resources.score_model,
                     )
+                    + caller_resources.score_model.template_switch(df_seg.height - 1)  # Per segment transition (segments + 1, - 2 anchors)
                 )
 
                 if (start_index, end_index) in chain_set:

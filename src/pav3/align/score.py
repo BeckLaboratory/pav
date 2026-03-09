@@ -12,13 +12,14 @@ __all__ = [
     'get_affine_by_params',
 ]
 
-from dataclasses import dataclass, field
 from abc import ABC, abstractmethod
 import re
 from typing import Any, Optional
 
 import numpy as np
 import polars as pl
+
+from agglovar.meta.decorators import immutable
 
 from . import op
 
@@ -29,16 +30,29 @@ AFFINE_SCORE_MISMATCH: float = 4.0
 """Mismatch score (minimap2 default)"""
 
 AFFINE_SCORE_GAP: tuple[tuple[float, float], ...] = ((4.0, 2.0), (24.0, 1.0))
-"""Multi-affine gap scores as a sequence of gap-open and gap-extend penalties (minimap2 defaults)."""
+"""Multi-affine scores as a sequence of gap-open and gap-extend penalties (minimap2 defaults)."""
 
-AFFINE_SCORE_TS = None
-"""Template switch score. If None, defaults to 2x the penalty of a 50 bp gap."""
+AFFINE_SCORE_TS = (1.0, 50)
+"""Template switch score.
+
+May be a single float (penalty of a template switch) or a tuple of a multiplier and a gap size
+(e.g. "(1.0, 50)" sets the template switch score to the cost of a 50 bp gap).
+"""
+
+AFFINE_OFF_VARIANT_PENALTY = 2.0
+"""Multiplier for off-variant penalties when scoring.
+
+For example, the gap score of query (inserted) bases for a deletion would be multiplied by this
+factor. Used for picking the right variant call type for a set of alignment features.
+"""
 
 DEFAULT_ALIGN_SCORE_MODEL = (
     f'affine::'
     f'match={AFFINE_SCORE_MATCH},'
     f'mismatch={AFFINE_SCORE_MISMATCH},'
-    f'gap={";".join([f"{gap_open}:{gap_extend}" for gap_open, gap_extend in AFFINE_SCORE_GAP])}'
+    f'gap={";".join([f"{gap_open}:{gap_extend}" for gap_open, gap_extend in AFFINE_SCORE_GAP])},'
+    f'ts={str(AFFINE_SCORE_TS).replace(',', ':')},'
+    f'off_var={AFFINE_OFF_VARIANT_PENALTY}'
 )
 """Default alignment score model specification."""
 
@@ -54,7 +68,7 @@ class ScoreModel(ABC):
 
         :returns: Match score.
         """
-        pass
+        ...
 
     @abstractmethod
     def mismatch(self, n: int = 1) -> float:
@@ -64,7 +78,7 @@ class ScoreModel(ABC):
 
         :returns: Mismatch score.
         """
-        pass
+        ...
 
     @abstractmethod
     def gap(self, n: int = 1) -> float:
@@ -74,7 +88,7 @@ class ScoreModel(ABC):
 
         :returns: Gap score for one operation.
         """
-        pass
+        ...
 
     @abstractmethod
     def template_switch(self, n: int = 1) -> float:
@@ -82,7 +96,18 @@ class ScoreModel(ABC):
 
         :returns: Template switch score.
         """
-        pass
+        ...
+
+    @abstractmethod
+    def off_variant(self) -> float:
+        """Multiplier for off-variant features.
+
+        For scored features that are incompatible with a variant type, for example reference gaps
+        at an insertion site, multiply the gap score by this factor.
+
+        :returns: Multiplier for off-variant features.
+        """
+        ...
 
     def score_op(self, op_code: int | str, op_len: int) -> float:
         """Score one alignment operation.
@@ -163,7 +188,7 @@ class ScoreModel(ABC):
 
         :returns A copy of this score model that does not penalize gaps.
         """
-        pass
+        ...
 
     @abstractmethod
     def model_param_string(self) -> str:
@@ -171,19 +196,19 @@ class ScoreModel(ABC):
 
         :returns: A parameter string for this score model.
         """
-        pass
+        ...
 
     @abstractmethod
     def __eq__(self, other: 'ScoreModel') -> bool:
         """Check equality with another :class:`ScoreModel`."""
-        pass
+        ...
 
     def __repr__(self) -> str:
         """Get a string representation of the model."""
         return 'ScoreModel(Interface)'
 
 
-@dataclass(frozen=True)
+@immutable
 class AffineScoreModel(ScoreModel):
     """Affine score model with default values modeled on minimap2 (2.26) default parameters.
 
@@ -193,24 +218,42 @@ class AffineScoreModel(ScoreModel):
     :param score_template_switch: Template switch penalty. If none, defaults to 2x the penalty of a 50 bp gap.
     """
 
-    score_match: float = field(default=AFFINE_SCORE_MATCH)
-    score_mismatch: float = field(default=AFFINE_SCORE_MISMATCH)
-    score_affine_gap: tuple[tuple[float, float], ...] = field(default=AFFINE_SCORE_GAP)
-    score_template_switch: float | None = field(default=AFFINE_SCORE_TS)
+    score_match: float
+    score_mismatch: float
+    score_affine_gap: tuple[tuple[float, float], ...]
+    score_template_switch: float
+    mul_off_variant: float
 
-    def __post_init__(self):
-        """Ensure penalties are set correctly."""
-        object.__setattr__(self, 'score_match', float(abs(self.score_match)))
-        object.__setattr__(self, 'score_mismatch', float(-abs(self.score_mismatch)))
-        object.__setattr__(self, 'score_affine_gap', tuple((
-            (float(-abs(gap_open)), float(-abs(gap_extend)))
-            for gap_open, gap_extend in self.score_affine_gap
-        )))
+    def __init__(
+            self,
+            score_match: float = AFFINE_SCORE_MATCH,
+            score_mismatch: float = AFFINE_SCORE_MISMATCH,
+            score_affine_gap: tuple[tuple[float, float], ...] = AFFINE_SCORE_GAP,
+            score_template_switch: float | tuple[float, int] = AFFINE_SCORE_TS,
+            mul_off_variant: float = AFFINE_OFF_VARIANT_PENALTY,
+    ):
+        self.score_match = abs(float(score_match))
+        self.score_mismatch = -abs(float(score_mismatch))
+        self.score_affine_gap = tuple(
+            (-abs(float(gap_open)), -abs(float(gap_extend)))
+            for gap_open, gap_extend in score_affine_gap
+        )
 
-        if self.score_template_switch is None:
-            object.__setattr__(self, 'score_template_switch', 2 * self.gap(50))
+        if isinstance(score_template_switch, tuple):
+            if len(score_template_switch) != 2:
+                raise ValueError(f'Template switch score tuple must be 2 elements (multiplier, gap size): {score_template_switch}')
+
+            self.score_template_switch = (
+                abs(float(score_template_switch[0]))
+                * self.gap(abs(int(score_template_switch[1])))
+            )
         else:
-            object.__setattr__(self, 'score_template_switch', float(-abs(self.score_template_switch)))
+            self.score_template_switch = -abs(float(score_template_switch))
+
+        self.mul_off_variant = abs(float(mul_off_variant))
+
+        if self.mul_off_variant <= 1.0:
+            raise ValueError(f'Off-target variant multiplier must be > 1.0: {self.mul_off_variant}')
 
     def match(self, n: int = 1) -> float:
         """Score match.
@@ -256,6 +299,16 @@ class AffineScoreModel(ScoreModel):
         """
         return self.score_template_switch * n
 
+    def off_variant(self) -> float:
+        """Multiplier for off-variant features.
+
+        For scored features that are incompatible with a variant type, for example reference gaps
+        at an insertion site, multiply the gap score by this factor.
+
+        :returns: Multiplier for off-variant features.
+        """
+        return self.mul_off_variant
+
     def mismatch_model(self) -> 'ScoreModel':
         """Create a version of this model that scores only mismatches (ignores gaps).
 
@@ -268,7 +321,8 @@ class AffineScoreModel(ScoreModel):
             score_match=self.score_match,
             score_mismatch=self.score_mismatch,
             score_affine_gap=((0.0, 0.0),),
-            score_template_switch=0.0
+            score_template_switch=self.score_template_switch,
+            mul_off_variant=self.mul_off_variant,
         )
 
     def score_operations(
@@ -294,10 +348,9 @@ class AffineScoreModel(ScoreModel):
             gap_score[:, 0] = np.max(gap_score, axis=1)
 
         return (
-            np.sum(op_arr[:, 1] * (op_arr[:, 0] == op.EQ) * self.score_match) +
-            np.sum(op_arr[:, 1] * (op_arr[:, 0] == op.X) * self.score_mismatch) +
-            # If no gap penalties (i.e. mismatch model), then gap_score is -inf (set to 0.0)
-            np.nan_to_num(gap_score[:, 0], neginf=0.0).sum()
+            np.sum(op_arr[:, 1] * (op_arr[:, 0] == op.EQ) * self.score_match)
+            + np.sum(op_arr[:, 1] * (op_arr[:, 0] == op.X) * self.score_mismatch)
+            + np.nan_to_num(gap_score[:, 0], neginf=0.0).sum()  # If no gap penalties (i.e. mismatch model), then gap_score is -inf (set to 0.0)
         )
 
     def model_param_string(self) -> str:
@@ -307,7 +360,14 @@ class AffineScoreModel(ScoreModel):
         """
         gap_str = ";".join([f"{gap_open}:{gap_extend}" for gap_open, gap_extend in self.score_affine_gap])
 
-        return f'affine::match={self.score_match},mismatch={self.score_mismatch},gap={gap_str}'
+        return (
+            f'affine::'
+            f'match={self.score_match},'
+            f'mismatch={self.score_mismatch},'
+            f'gap={gap_str},'
+            f'ts={self.score_template_switch},'
+            f'off_var={self.mul_off_variant}'
+        )
 
     def __eq__(self, other: 'ScoreModel') -> bool:
         """Check equality with another :class:`ScoreModel`."""
@@ -372,14 +432,23 @@ def get_affine_by_params(param_string: str) -> AffineScoreModel:
     :raises ValueError: If the string cannot be parsed.
     """
     # Set defaults
-    params: list[Any] = [
-        AFFINE_SCORE_MATCH,
-        AFFINE_SCORE_MISMATCH,
-        AFFINE_SCORE_GAP,
-        AFFINE_SCORE_TS
-    ]
+    params: dict[str, Any] = {
+        'score_match': AFFINE_SCORE_MATCH,
+        'score_mismatch': AFFINE_SCORE_MISMATCH,
+        'score_affine_gap': AFFINE_SCORE_GAP,
+        'score_template_switch': AFFINE_SCORE_TS,
+        'mul_off_variant': AFFINE_OFF_VARIANT_PENALTY,
+    }
 
-    keys = ['match', 'mismatch', 'gap', 'ts']
+    key_to_param = {
+        'match': 'score_match',
+        'mismatch': 'score_mismatch',
+        'gap': 'score_affine_gap',
+        'ts': 'score_template_switch',
+        'off_var': 'mul_off_variant',
+    }
+
+    keys = list(key_to_param.keys())
 
     # Sanitize parameter string
     if param_string is not None:
@@ -424,19 +493,15 @@ def get_affine_by_params(param_string: str) -> AffineScoreModel:
 
             param_pos += 1
 
-        if key in {'match', 'mismatch', 'ts'}:
-            try:
-                val = abs(float(val))
-            except ValueError as e:
-                raise ValueError(f'Invalid numeric value for parameter "{key}": {val}') from e
+        if not val:
+            continue
 
-        if key == 'match':
-            params[0] = val
+        try:
+            param_name = key_to_param[key]
+        except KeyError:
+            raise ValueError(f'Unrecognized parameter key: {key}')
 
-        elif key == 'mismatch':
-            params[1] = val
-
-        elif key == 'gap':
+        if key == 'gap':
             gap_list = []
 
             for gap_pair in val.split(';'):
@@ -456,18 +521,30 @@ def get_affine_by_params(param_string: str) -> AffineScoreModel:
 
                 gap_list.append((gap_open, gap_extend))
 
-            params[2] = tuple(gap_list)
+            val = tuple(gap_list)
 
-        elif key == 'ts':
-            params[3] = val
+        elif key == 'ts' and val[0] == '(' and val[-1] == ')':
+            ts_tuple = val[1:-1].split(':')
+
+            if len(ts_tuple) != 2:
+                raise ValueError(f'Key "ts" requires a set value or a tuple[float, int]: Found {val}')
+
+            val = (
+                float(ts_tuple[0]),
+                int(ts_tuple[1]),
+            )
 
         else:
-            raise ValueError(f'Unrecognized alignment parameter: {key} (allowed: match, mismatch, gap, ts)')
+            try:
+                val = abs(float(val))
+            except ValueError as e:
+                raise ValueError(f'Invalid numeric value for parameter "{key}": {val}') from e
+
+
+        params[param_name] = val
+
 
     # Return alignment object
     return AffineScoreModel(
-        score_match=params[0],
-        score_mismatch=params[1],
-        score_affine_gap=params[2],
-        score_template_switch=params[3]
+        **params
     )
