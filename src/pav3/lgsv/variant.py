@@ -522,20 +522,6 @@ class Variant(ABC):
         return set()
 
 
-# TODO: correct untemplated insertion breakpoints for homology at breakpoints
-#
-# Find untemplated insertion
-#
-# Trim reference if ends overlap around an untemplated insertion. This is likely homology at the breakpoint
-# where the homologous sequence at each end of the insertion was aligned to the reference.
-#
-#                             [    HOM REGION    ]
-#     Ref: --------->--------->--------->--------->--------->--------->--------->
-# Align 1: --------->--------->--------->--------->
-# Align 2:                     --------->--------->--------->--------->--------->
-#
-# Alignments 1 & 2 skip query sequence between them (untemplated insertion). This does not occur for strict templated
-# insertions because query trimming will remove redundancy.
 class InsertionVariant(Variant):
     """Insertion variant call."""
 
@@ -544,6 +530,12 @@ class InsertionVariant(Variant):
     #                                        ||
     # Qry: --->--------->---------->---------> --------->-------->--------->--------->-----
     # Ref: --------------------------------------------------------------------------------
+    #
+    # Tandem duplication
+    # Qry: --->--------->---------->--------->--------->
+    #    :                                    --------->-------->--------->--------->-----
+    # Ref: --------------------------------------------------------------------------------
+
 
     def __init__(
             self,
@@ -556,17 +548,16 @@ class InsertionVariant(Variant):
         Variant.__init__(self, interval, caller_resources, var_region_kde)
         self.vartype = 'INS'
 
-        if _try_td:  # Called by TandemDuplicationVariant constructor, do not try to resolve INS variant
-            return
+        # if _try_td:  # Called by TandemDuplicationVariant constructor, do not try to resolve INS variant
+        #     return
 
         # Variant lengths
-        aligned_seg_len = self.interval.qry_aligned_bp_pass
-        unaligned_seg_len = interval.len_qry - self.interval.qry_aligned_bp_pass
-        dup_len = -self.interval.len_ref
+        len_aligned = sum(interval.seg_len_aligned)
+        len_unaligned = sum(interval.seg_len_unaligned)
+        len_dup = interval.len_outer_dup
+        len_del = interval.len_outer_del
 
-        assert unaligned_seg_len >= 0, f'Negative unaligned bp: {unaligned_seg_len}'
-
-        self.varlen = aligned_seg_len + unaligned_seg_len + dup_len
+        self.varlen = len_aligned + len_unaligned + len_dup - len_del
 
         if self.varlen <= 0:
             # If deleted segment is larger than inserted/duplicated segments, never call INS
@@ -576,16 +567,17 @@ class InsertionVariant(Variant):
         score_model = self.caller_resources.score_model
 
         self.var_score = (
-            # Segment gap
-            score_model.gap(self.varlen)
+            # Gap: Longest of aligned, unaligned, or duplicated segments
+            score_model.gap(interval.seg_len_or_dup[0]) if len(interval.seg_len_or_dup) > 0 else 0
 
-            # Off-variant reference gap
-            + score_model.gap(abs(interval.len_ref)) * score_model.off_variant()
+            # Gap: All other segments and/or outer duplication
+            + sum(
+                score_model.gap(_)
+                for _ in interval.seg_len_or_dup[1:]
+            ) * score_model.off_variant()
 
-            # Penalize mix of aligned and unaligned bases (modulate by off-variant penalty, similar to penalizing the segment gap in aligned/unaligned pieces)
-            + score_model.gap(
-                self.varlen - max(aligned_seg_len, unaligned_seg_len, abs(dup_len))
-            ) * (score_model.off_variant() - 1)
+            # Gap: Outer deletion
+            + score_model.gap(len_del) * score_model.off_variant()
         )
 
         # Set breakpoints on reference-trimmed coordinates
@@ -594,10 +586,17 @@ class InsertionVariant(Variant):
         # Finalize
         self.seg_aligned_to_dup()
 
-        if dup_len > 0 and (dup_len / self.varlen) >= 0.5:
+        if len_dup > 0 and (len_dup / self.varlen) >= 0.5:
             self.varsubtype = 'TD'
 
-        self.region_ref = Region(interval.region_ref.chrom, interval.region_ref.pos, interval.region_ref.pos + 1)
+        self.region_ref = Region(
+            chrom=interval.region_ref_qryref.chrom,
+            pos=interval.region_ref_qryref.pos,
+            end=interval.region_ref_qryref.pos + 1,
+            is_rev=interval.region_ref_qryref.is_rev,
+            pos_align_index=interval.region_ref_qryref.pos_align_index,
+            end_align_index=interval.region_ref_qryref.end_align_index,
+        )
 
         self.resolved_templ = interval.qry_aligned_pass_prop >= caller_resources.pav_params.lg_cpx_min_aligned_prop
 
@@ -611,63 +610,6 @@ class InsertionVariant(Variant):
     def _row_set(cls) -> set[str]:
         """Get a set of row names for this variant call."""
         return {'varsubtype', 'dup'}
-
-#
-# class TandemDuplicationVariant(InsertionVariant):
-#     """Tandem duplication variant call."""
-#
-#     # Tandem duplication (TD)
-#     # Repeats:                                [> REP >]            [> REP >]
-#     # Qry 1:    --------->--------->--------->--------->--------->--------->
-#     # Qry 2:                                  --------->--------->--------->--------->--------->--------->
-#     #
-#     # Directly-oriented repeats may mediated by tandem repeats. Look at alignment-trimming in three ways:
-#     # * Qry trimming: Identifies TD if redundant query bases are removed, but queries still overlap
-#     # * Qry & Ref trimming: Find a breakpoint for an insertion call.
-#     # * No trimming: Identify the repeats at the ends of the TD.
-#     #
-#     # The resulting call is an INS call with a breakpoint placed in a similar location if the TD was called as an
-#     # insertion event in the CIGAR string. The variant is annotated with the DUP locus, and the sequence of both copies
-#     # is
-#
-#     def __init__(
-#             self,
-#             interval: AnchoredInterval,
-#             caller_resources: CallerResources,
-#             var_region_kde: VarRegionKde,
-#     ) -> None:
-#         """Create variant call."""
-#         InsertionVariant.__init__(self, interval, caller_resources, var_region_kde, _try_td=True)
-#
-#         if (
-#             self.interval.len_ref >= 0
-#             or self.region_ref is None
-#             or self.region_qry is None
-#             or not self.interval.df_segment[0, 'align_index'] in self.caller_resources.qryref_index_set
-#             or not self.interval.df_segment[-1, 'align_index'] in self.caller_resources.qryref_index_set
-#         ):
-#             return
-#
-#         self.varlen = len(self.region_ref) + interval.len_qry
-#
-#         seg_n_aligned = self.interval.seg_n_aligned
-#
-#         if seg_n_aligned > 0:
-#             seg_n_aligned += 1  # Template switch into the first segment, then one to exit each segment
-#
-#         self.var_score = (
-#             caller_resources.score_model.gap(self.varlen)
-#             + caller_resources.score_model.gap(self.len_qry)
-#             + caller_resources.score_model.segment_transition_score * seg_n_aligned
-#         )
-#
-#         self.varsubtype = 'TD'
-#
-#         self._dup_list.append(self.region_ref.as_dict())
-#
-#         self.resolved_templ = interval.qry_aligned_pass_prop >= caller_resources.pav_params.lg_cpx_min_aligned_prop
-#
-#         self._found_variant = True
 
 
 class DeletionVariant(Variant):
@@ -688,32 +630,23 @@ class DeletionVariant(Variant):
         self.vartype = 'DEL'
 
         # Stop for incoempatible signatures
-        if interval.len_ref <= 0:
+        if interval.len_outer_del - interval.len_qry <= 0:
             return
+
+        self.varlen = interval.len_outer_del
 
         self.region_ref = interval.region_ref
         self.region_qry = interval.region_qry
-
-        self.varlen = len(self.interval.region_ref)
-
-        self.var_score = (
-            caller_resources.score_model.gap(self.varlen) +
-            caller_resources.score_model.gap(abs(self.interval.len_qry)) *
-            caller_resources.score_model.off_variant()
-        )
 
         # Score
         score_model = self.caller_resources.score_model
 
         self.var_score = (
-            # Reference gap
-            score_model.gap(interval.len_ref)
+            # Deletion gap
+            score_model.gap(self.varlen)
 
-            # Segment gap (off-variant)
-            + score_model.gap(interval.len_qry) * score_model.off_variant()
-
-            # Non-DEL template switches (off-variant)
-            + score_model.template_switch(interval.seg_n) * score_model.off_variant()
+            # Query segements (off-variant)
+            + sum([score_model.gap(_) for _ in interval.seg_len]) * score_model.off_variant()
         )
 
         self.resolved_templ = True
@@ -962,75 +895,63 @@ class ComplexVariant(Variant):
         """Create variant call."""
         Variant.__init__(self, interval, caller_resources, var_region_kde)
 
-        # Null variant (for creating table headers when no variants are found)
+        # Check pre-conditions
         if interval.len_qry <= 0:
             return
 
         # Set base properties
-        dup_len = -self.interval.len_ref
+        len_dup = interval.len_outer_dup
+        len_del = interval.len_outer_del
 
         self.vartype = 'CPX'
         self.region_ref = interval.region_ref
         self.region_qry = interval.region_qry
-        self.varlen = interval.len_qry + max(-dup_len, 0)
+        self.varlen = interval.len_qry + len_dup
 
-        if self.varlen <= 0:
+        # Pre-score and check
+        score_model = self.caller_resources.score_model
+        ts = score_model.template_switch()
+
+        ts_score = sum([
+            min([score_model.gap(_), ts])
+            for _ in interval.seg_len_unaligned_or_outer
+        ])
+
+        n_features = (
+            # Aligned segments
+            len(interval.seg_len_aligned)
+
+            # Outer DEL or DUP
+            + (interval.len_ref != 0)
+
+            # Unaligned segments add up to more than template switches
+            + sum([score_model.gap(_) > ts for _ in interval.seg_len_unaligned])
+        )
+
+        if n_features < 2:
             return
 
-        # Get reference trace
+        # Compute variant score
+        self.var_score = (
+            # Aligned segments
+            sum([score_model.gap(_) for _ in interval.seg_len_aligned])
+
+            # Gap or template switch
+            + sum([
+                min([score_model.gap(_), ts])
+                for _ in interval.seg_len_unaligned_or_outer
+            ])
+
+            # Template switch for aligned segments
+            + score_model.template_switch(interval.seg_n_aligned + 1)
+        )
+
+        # Finalize
         self.df_ref_trace = get_ref_trace(
             interval=self.interval,
             df_ref_fai=self.caller_resources.df_ref_fai,
         )
 
-        # Compute variant score
-        score_model = self.caller_resources.score_model
-
-        self.var_score = sum([
-            # Reference overlap
-            score_model.gap(abs(dup_len)),
-
-            # Template switch from reference overlap
-            min(
-                score_model.template_switch(),
-                score_model.gap(abs(dup_len))
-            ),
-
-            # Gap for aligned segments
-            gap_sum_score(
-                df_segment=interval.df_segment,
-                score_model=caller_resources.score_model,
-                mapped=True,
-            ),
-
-            # Template switches for aligned segments
-            score_model.template_switch(
-                self.interval.seg_n_aligned + 1
-            ),
-
-            # Balanced gap/template-switch scores for unaligned segments
-            unaligned_switch_sum_score(
-                df_segment=interval.df_segment,
-                score_model=caller_resources.score_model,
-            ),
-        ])
-
-        if self.var_score > score_model.template_switch(2):
-            return
-
-        # self.var_score = (
-        #     interval.segment_transition_score +
-        #     (
-        #         self.df_ref_trace
-        #         .filter(pl.col('type') == 'DEL')
-        #         .select((pl.col('end') - pl.col('pos')).map_elements(
-        #             caller_resources.score_model.gap, return_dtype=pl.Float32
-        #         ).sum())
-        #         .item()
-        #     )
-        # )
-
-        # Finalize
         self.resolved_templ = interval.qry_aligned_pass_prop >= caller_resources.pav_params.lg_cpx_min_aligned_prop
 
         self.seg_aligned_to_dup()

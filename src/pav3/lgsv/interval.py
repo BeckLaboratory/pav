@@ -250,26 +250,65 @@ class AnchoredInterval:
             f'qry-trimmed={self.region_ref}, qry-ref-trimmed={self.region_ref_qryref}'
         )
 
+        # Outer DEL/DUP
+        self.len_outer_del = max(self.len_ref, 0)
+        self.len_outer_dup = max(-self.len_ref, 0)
+
+        # Length of segments
+        self.seg_len_aligned = sorted(
+            self.df_segment
+            .filter(
+                ~ pl.col('is_anchor'),
+                pl.col('is_aligned')
+            )['len_qry']
+            .to_list(),
+            reverse=True
+        )
+
+        self.seg_len_unaligned = sorted(
+            self.df_segment
+            .filter(
+                ~ pl.col('is_anchor'),
+                ~ pl.col('is_aligned')
+            )['len_qry']
+            .to_list(),
+            reverse=True
+        )
+
+        self.seg_len = sorted(self.seg_len_aligned + self.seg_len_unaligned, reverse=True)
+
+        self.seg_len_or_dup = sorted(
+            self.seg_len_aligned
+            + ([self.len_outer_dup] if self.len_outer_dup > 0 else []),
+            reverse=True
+        )
+
+        self.seg_len_unaligned_or_outer = sorted(
+            self.seg_len_unaligned
+            + ([abs(self.len_ref)] if abs(self.len_ref) > 0 else []),
+            reverse=True
+        )
+
 
         # Scores
-        self.score_gap_sum_aligned = gap_sum_score(
-            df_segment=self.df_segment,
-            score_model=self.caller_resources.score_model,
-            mapped=True,
-        )
-
-        self.score_gap_sum_unaligned = gap_sum_score(
-            df_segment=self.df_segment,
-            score_model=self.caller_resources.score_model,
-            mapped=False,
-        )
-
-        self.score_gap_sum = self.score_gap_sum_aligned + self.score_gap_sum_unaligned
-
-        self.score_unaligned_switch_sum = unaligned_switch_sum_score(
-            df_segment=self.df_segment,
-            score_model=self.caller_resources.score_model,
-        )
+        # self.score_gap_sum_aligned = gap_sum_score(
+        #     df_segment=self.df_segment,
+        #     score_model=self.caller_resources.score_model,
+        #     mapped=True,
+        # )
+        #
+        # self.score_gap_sum_unaligned = gap_sum_score(
+        #     df_segment=self.df_segment,
+        #     score_model=self.caller_resources.score_model,
+        #     mapped=False,
+        # )
+        #
+        # self.score_gap_sum = self.score_gap_sum_aligned + self.score_gap_sum_unaligned
+        #
+        # self.score_unaligned_switch_sum = unaligned_switch_sum_score(
+        #     df_segment=self.df_segment,
+        #     score_model=self.caller_resources.score_model,
+        # )
 
         # Test invariants
         if self.len_qry < 0:
