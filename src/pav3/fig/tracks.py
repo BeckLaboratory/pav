@@ -265,7 +265,8 @@ def call_hap_invdupcpx(
             ),
             on='var_index', how='left'
         )
-        .filter(pl.col('_cpx_is_rev').is_not_null())  # Onlly CPX segments, drop INV segments
+        .filter(pl.col('_cpx_is_rev').is_not_null())  # Only CPX segments, drop INV segments
+        .sort(['var_index', 'seg_index'])
         .with_columns(
             pl.col('pos').fill_null(strategy='forward').alias('_pos_fwd'),
             pl.col('pos').fill_null(strategy='backward').alias('_pos_bak'),

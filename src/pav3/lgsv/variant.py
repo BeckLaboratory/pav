@@ -552,6 +552,11 @@ class InsertionVariant(Variant):
         #     return
 
         # Variant lengths
+        seg_lens = sorted(interval.seg_len_or_dup + interval.seg_len_unaligned, reverse=True)
+
+        if len(seg_lens) == 0:
+            return
+
         len_aligned = sum(interval.seg_len_aligned)
         len_unaligned = sum(interval.seg_len_unaligned)
         len_dup = interval.len_outer_dup
@@ -568,12 +573,12 @@ class InsertionVariant(Variant):
 
         self.var_score = (
             # Gap: Longest of aligned, unaligned, or duplicated segments
-            score_model.gap(interval.seg_len_or_dup[0]) if len(interval.seg_len_or_dup) > 0 else 0
+            score_model.gap(seg_lens[0])
 
             # Gap: All other segments and/or outer duplication
             + sum(
                 score_model.gap(_)
-                for _ in interval.seg_len_or_dup[1:]
+                for _ in seg_lens[1:]
             ) * score_model.off_variant()
 
             # Gap: Outer deletion
@@ -925,7 +930,7 @@ class ComplexVariant(Variant):
             + (interval.len_ref != 0)
 
             # Unaligned segments add up to more than template switches
-            + sum([score_model.gap(_) > ts for _ in interval.seg_len_unaligned])
+            + sum([score_model.gap(_) < ts for _ in interval.seg_len_unaligned])
         )
 
         if n_features < 2:
