@@ -14,7 +14,6 @@ import os
 
 import agglovar
 import pav3
-import snakemake.io
 import polars as pl
 
 global PAV_CONFIG
@@ -35,7 +34,7 @@ global REF_FAI
 #
 
 def align_index_files(
-        wildcards: snakemake.io.Namedlist | dict[str, str]
+        wildcards: dict[str, str]
 ):
     """
     Get a list of reference index files needed by an aligner.
