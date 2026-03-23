@@ -17,13 +17,14 @@ __all__ = [
     'vcf_fields_seq_insdel',
     'vcf_fields_sym',
     'vcf_fields_snv',
-    'gt_column',
+    'gt_column_iterator',
+    'gt_column_hap',
     'standard_info_fields',
     'reformat_vcf_table',
-    'get_hap_source',
 ]
 
 
+import collections
 from collections.abc import Iterable, Mapping
 import datetime
 from pathlib import Path
@@ -116,10 +117,10 @@ class AltField:
 VCF_VERSION = '4.5'
 
 INFO_FIELDS = [
-    InfoField(
-        'ID', '1', 'String',
-        'Unique variant ID',
-    ),
+    # InfoField(
+    #     'ID', '1', 'String',
+    #     'Unique variant ID',
+    # ),
     InfoField(
         'SVLEN', '.', 'Integer',
         'Variant length',
@@ -207,8 +208,8 @@ VARTYPE_COMPAT = {
 
 
 def get_headers(
-        ref_filename: Optional[str | Path] = None,
-        df_ref_info: Optional[pl.DataFrame] = None,
+    ref_filename: Optional[str | Path] = None,
+    df_ref_info: Optional[pl.DataFrame] = None,
 ) -> list[str]:
 
     # Lead headers
@@ -255,15 +256,12 @@ def get_headers(
     return headers
 
 def init_vcf_fields(
-        df: pl.LazyFrame,
-        ref_fa: Optional[str | Path] = None,
-        use_sym: Optional[bool] = None,
-        vartype: Optional[str] = None,
+    df: pl.LazyFrame,
+    ref_fa: Optional[str | Path] = None,
+    use_sym: Optional[bool] = None,
+    vartype: Optional[str] = None,
 ) -> pl.LazyFrame:
     """Initialize VCF fields.
-
-    If `hap_source` and `hap_callable` are provided, genotypes will be added to the table. If one is provided and
-    the other is None, an error is raised.
 
     :param df: Variant table with an "_index" column.
     :param ref_fa: Reference FASTA filename. Required for non-SNV variants.
@@ -273,7 +271,8 @@ def init_vcf_fields(
         this field ensures the variant types is handled consisntently if all variant types
         are not in table `df` or `df` is empty.
     """
-    df_schema = df.collect_schema()
+    if df.collect_schema().get('_index') is None:
+        df = df.with_row_index('_index')
 
     vartype_set = set(
         df.select(pl.col('vartype').unique()).collect().to_series()
@@ -388,8 +387,8 @@ def init_vcf_fields(
 
 
 def vcf_fields_seq_insdel(
-        df: pl.LazyFrame,
-        ref_fa: Path | str,
+    df: pl.LazyFrame,
+    ref_fa: Path | str,
 ) -> pl.LazyFrame:
     """Set POS, REF, and ALT VCF fields for insertions and deletions (non-symbolic).
 
@@ -606,43 +605,122 @@ def vcf_fields_snv(
     )
 
 
-def gt_column(
-        df: pl.LazyFrame,
-        hap_source: dict[str, int],
-        hap_callable: dict[str, pl.LazyFrame],
-        col_name: str = 'gt',
-        separator: str = '|',
-):
-    """Get a table with formatted genotypes.
+def gt_column_iterator(
+    df: pl.LazyFrame | pl.DataFrame,
+    hap_order: Iterable[tuple[str, str]],
+    callable_dict: dict[tuple[str, str], pl.LazyFrame | pl.DataFrame],
+    gt_col_name: str = 'gt',
+) -> Iterable[tuple[str, pl.LazyFrame]]:
+    """Get genotype columns for all assemblies/samples.
+
+    Argument `hap_order` is a list of assembly/haplotype pairs, and it determines the order of
+    assemblies (or "samples") and the order of haplotypes for each sample. Generally, it should
+    list all the haplotypes for a sample sequentially (e.g.
+    `[("a", "h1"), ("a", "h2"), ("b", "h1"), ("b", "h2")]`). If assemblies are not listed
+    sequentially, then the first accurance of each assembly name determines the order, but
+    haplotype order for each assembly is still preserved.
+
+    Returns an iterator of assembly name and genotype table. The genotype table contains two
+    columns: Column "_index" is the index of `df`, and the second column is string genotypes for
+    each record with a column name defined by argument `gt_col_name`.
+
+    :param df: Table of merged variants.
+    :param hap_order: An iterable of assembly/haplotype tuples in the order they will appear.
+    :param callable_dict: A dict keyed by assembly name and haplotype (tuple) pointing to tables
+        of callable reference regions.
+    :param gt_col_name: Name of the genotype column in the returned genotype tables. May not be
+        "_index".
+
+    :returns: An iterator of tuples (assembly name, and genotype table).
+    """
+    if gt_col_name is None or not (gt_col_name := gt_col_name.strip()):
+        gt_col_name = 'gt'
+
+    if gt_col_name == '_index':
+        raise ValueError(
+            'Genotype column argument "gt_col_name" cannot use reserved '
+            'column name for row indexes, "_index"'
+        )
+
+    # Set and check assembly and haplotype orders
+    hap_order = list(hap_order)
+
+    if dup_asm_hap := [
+        asm_hap for asm_hap, count in collections.Counter(f'{asm_name}-{hap}' for asm_name, hap in hap_order).items()
+        if count > 1
+    ]:
+        n = len(dup_asm_hap)
+        dup_asm_hap = ', '.join(dup_asm_hap[:3]) + ('...' if n > 3 else '')
+        raise ValueError(
+            f'Assembly/haplotype pairs must be unique when separated by a dash: '
+            f'Found {n} duplicate pairs: {dup_asm_hap}'
+        )
+
+    asm_order = list(dict.fromkeys((asm_name for asm_name, hap in hap_order)).keys())
+
+    # List of ordered haplotypes per assembly
+    hap_dict = {
+        asm_name_ordered: list(dict.fromkeys((
+            hap for asm_name, hap in hap_order if asm_name == asm_name_ordered
+        )).keys())
+        for asm_name_ordered in asm_order
+    }
+
+    # Callable dict should have LazyFrame
+    callable_dict = dict(callable_dict)
+
+    for (asm_name, hap), df_callable in callable_dict.values():
+        if isinstance(df_callable, pl.DataFrame):
+            df_callable[(asm_name, hap)] = df_callable.lazy()
+
+    for asm_name, hap_list in hap_dict.items():
+        yield asm_name, gt_column_asm(
+            df,
+            asm_name=asm_name,
+            callable_dict=callable_dict,
+            col_name='gt',
+            separator='|',
+        )
+
+
+def gt_column_asm(
+    df: pl.LazyFrame,
+    asm_name: str,
+    callable_dict: dict[tuple[str, str], pl.LazyFrame],
+    col_name: str = 'gt',
+    separator: str = '|',
+) -> pl.LazyFrame:
+    """Get a table of genotypes for a single assembly.
+
+    The genotype string contains "1" (alternate allele), "0" (reference allele), and "." (no call).
+    The order of alleles is defined by keys in `callable_dict` for all records matching the
+    assembly name.
 
     :param df: Variant table with an "_index" column.
-    :param hap_source: A dictionary mapping haplotype names (keuys) to the index of the haplotype in merged order
-        (0 is the first merged haplotype, 1 is the second, etc).
-    :param hap_callable: A dictionary mapping haplotype names to a polars LazyFrame of callable regions for that
-        haplotype.
+    :param asm_name: Assembly name.
+    :param callable_dict: A dictionary keys tuple(assembly name, haplotype name) and values
+        containing a polars LazyFrame of callable regions.
     :param col_name: Name of the genotype column in the output table.
     :param separator: Genotype separator character ("|" for phased, "/" for unphased).
 
-    :return: A polars LazyFrame with two columns, "_index" and the genoytpe string (column name is set by `col_name`).
+    :return: A polars LazyFrame with two columns, "_index" and the genotype string (column name is
+        set by `col_name`).
     """
-
-    if len(hap_source) == 0:
-        raise ValueError(f'No haplotypes to get genotypes for')
-
-    if '_index' not in df.collect_schema():
+    if df.collect_schema().get('_index') is None:
         df = df.with_row_index('_index')
 
     # Start with an index, add genotype columns
     df_gt = df.select('_index')
 
-    for hap in hap_source.keys():
-        hap_index = hap_source[hap]
+    for (callable_asm_name, hap), df_callable in callable_dict.items():
+        if callable_asm_name != asm_name:
+            continue
 
         # Determine if each value matches this haplotype.
         callable_hap = (
             agglovar.bed.intersect.as_proportion(
                 df,
-                hap_callable[hap],
+                df_callable,
                 'callable_hap'
             )
             .with_columns(
@@ -655,12 +733,10 @@ def gt_column(
                 '_index', 'chrom', 'pos', 'end',
                 (
                     pl.col('mg_src')
-                    .list.eval(
-                        pl.element().struct.field('index')
-                    )
-                    .list.contains(hap_index)
-                    .alias('in_hap')
-                ),
+                    .list.filter(
+                        pl.element().struct.field('id') == f'{asm_name}-{hap}'
+                    ).list.len() > 0
+                ).alias('in_hap'),
             )
             .join(
                 callable_hap, on='_index', how='left'
@@ -693,7 +769,7 @@ def gt_column(
 
 
 def standard_info_fields(
-        df: pl.LazyFrame,
+    df: pl.LazyFrame,
 ) -> pl.LazyFrame:
     """Set standard INFO columns.
 
@@ -713,12 +789,12 @@ def standard_info_fields(
             .alias('_vcf_info')
         )
 
-    if 'id' in cols:
-        df = df.with_columns(
-            pl.col('_vcf_info').list.concat(
-                pl.concat_str(pl.lit('ID='), 'id')
-            )
-        )
+    # if 'id' in cols:
+    #     df = df.with_columns(
+    #         pl.col('_vcf_info').list.concat(
+    #             pl.concat_str(pl.lit('ID='), 'id')
+    #         )
+    #     )
 
     if 'varlen' in cols:
         df = df.with_columns(
@@ -865,7 +941,7 @@ def standard_info_fields(
             .then(
                 pl.col('_vcf_info').list.concat(
                     pl.concat_str(
-                        pl.lit('HOMREF='),
+                        pl.lit('HOMQRY='),
                         pl.col('hom_ref').struct.field('up'),
                         pl.lit(','),
                         pl.col('hom_ref').struct.field('dn'),
@@ -930,8 +1006,8 @@ def standard_info_fields(
 
 
 def reformat_vcf_table(
-        df: pl.LazyFrame,
-        sample_columns: Optional[Mapping[int, str]] = None,
+    df: pl.LazyFrame,
+    sample_columns: Optional[Mapping[int, str]] = None,
 ) -> pl.LazyFrame:
     """Reformat VCF table to VCF format."""
 
@@ -967,41 +1043,38 @@ def reformat_vcf_table(
     )
 
 
-def get_hap_source(
-        hap_list: Iterable[str],
-        vcf_haplotypes: Optional[str],
-) -> dict[str, int]:
-    """Get a dict of haplotypes with keys in the order they should appear in the VCF genotype field.
+def resolve_hap_list(
+    hap_list: Iterable[str],
+    vcf_haplotypes: Optional[str],
+) -> list[str]:
+    """Get a list of haplotypes in the order they should appear for a sample.
 
     :param hap_list: List of haplotypes defined for this assembly.
-    :param vcf_haplotypes: Optional, a string of haplotypes separated by commas to include in the VCF haplotypes. If
-        defined, all haplotypes must appear in `hap_list` and the retured dictionary is subset and ordered by this list.
+    :param vcf_haplotypes: Optional, a string of haplotypes separated by commas to include in the
+        VCF haplotypes. If defined, all haplotypes must appear in `hap_list` and the returned list
+        is subset and ordered by this list.
 
-    :param: A dictionary of haplotype name (keys) and haplotype indices (values) that will match
+    :returns: List of haplotypes.
     """
-    hap_source = {hap: i for i, hap in enumerate(hap_list)}
+    hap_list = list(hap_list)
 
     if vcf_haplotypes is not None:
-        vcf_haps = [hap.strip() for hap in vcf_haplotypes.split(',') if hap.strip()]
+        vcf_hap_list = [hap.strip() for hap in vcf_haplotypes.split(',') if hap.strip()]
 
-        if (missing_hap := set(vcf_haps) - set(hap_list)):
-            missing_hap = [
-                f'"{hap}"' for hap in sorted(missing_hap)
-            ]
-
+        if missing_hap := [hap for hap in vcf_hap_list if hap not in set(hap_list)]:
             missing_n = len(missing_hap)
 
-            missing_hap = ', '.join(missing_hap[:3]) + ('...' if missing_n > 3 else '')
+            missing_hap = ', '.join([
+                f'"{hap}"' for hap in missing_hap
+            ]) + ('...' if missing_n > 3 else '')
 
             raise ValueError(
-                f'Configuration item "vcf_haplotypes" defines {missing_n} haplotypes that are not in the assembly '
-                f'table for "{wildcards.asm_name}": {missing_hap}'
+                f'Configuration item "vcf_haplotypes" defines {missing_n} haplotypes: '
+                f'{missing_hap}'
             )
 
-        # Filter and order hap_source to VCF order
-        hap_source = {hap: hap_source[hap] for hap in vcf_haps}
-
-    return hap_source
+        return vcf_hap_list
+    return hap_list
 
 
 class _LockingPysam():
