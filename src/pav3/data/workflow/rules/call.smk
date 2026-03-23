@@ -51,7 +51,6 @@ rule call_vcf:
     benchmark: 'log/benchmark/{asm_name}/call_vcf.tsv'
     threads: POLARS_MAX_THREADS
     run:
-
         pattern_var = 'results/{asm_name}/call/call_{vartype}.parquet'
         pattern_callable = 'results/{asm_name}/call_hap/callable_ref_{hap}.parquet'
 
@@ -62,22 +61,26 @@ rule call_vcf:
         df_ref_info = pl.read_parquet(input.ref_info)
 
         # Get haplotypes
-        hap_source = pav3.vcf.get_hap_source(
+        hap_list = pav3.vcf.resolve_hap_list(
             pav3.pipeline.get_hap_list(wildcards.asm_name, ASM_TABLE),
             pav_params.vcf_haplotypes,
         )
 
-        if not hap_source:
+        if not hap_list:
             raise ValueError(
                 f'No haplotypes defined for assembly "{wildcards.asm_name}"'
             )
 
+        hap_order = [
+            (wildcards.asm_name, hap) for hap in hap_list
+        ]
+
         # Add callable table for each genotype
-        hap_callable = {
-            hap: pl.scan_parquet(
+        callable_dict = {
+            (wildcards.asm_name, hap): pl.scan_parquet(
                 pattern_callable.format(asm_name=wildcards.asm_name, hap=hap)
             )
-            for hap in hap_source.keys()
+            for hap in hap_list
         }
 
         # Get genotype tables
@@ -97,7 +100,7 @@ rule call_vcf:
                     .with_row_index('_index')
                 )
 
-                if vartype == 'snv':
+                if vartype == 'snv' and df.collect_schema().get('vartype') is None:
                     df = df.with_columns(pl.lit('SNV').alias('vartype'))
 
                 # Initialize VCF fields (all but FORMAT and sample columns)
@@ -122,10 +125,10 @@ rule call_vcf:
                 try:
                     df = (
                         df.join(
-                            pav3.vcf.gt_column(
+                            pav3.vcf.gt_column_asm(
                                 df,
-                                hap_source,
-                                hap_callable,
+                                wildcards.asm_name,
+                                callable_dict,
                                 col_name='_vcf_field_gt',
                                 separator='|',
                             ),
