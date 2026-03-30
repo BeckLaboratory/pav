@@ -126,7 +126,7 @@ rule align_tables:
             df_qry_fai=df_qry_fai,
             score_model=score_model,
             lc_model=lc_model,
-            ref_fa_filename=ref_fa_filename
+            ref_fa_filename=ref_fa_filename,
         )
 
         if pav_params.debug:

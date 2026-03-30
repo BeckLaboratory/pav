@@ -9,7 +9,10 @@ __all__ = [
 import re
 from typing import Optional, Iterable
 
-from snakemake.io import Namedlist
+try:
+    from snakemake.io import Namedlist
+except ImportError:
+    from snakemake.iocontainers import Namedlist
 
 
 def strip_and_format(

@@ -532,7 +532,7 @@ class AlignLift:
         """
         lift_pairs = get_lift_pairs(
             a=self.to_ref(region.chrom, region.pos),
-            b=self.to_ref(region.chrom, region.end),
+            b=self.to_ref(region.chrom, region.end - 1),
             same_align=same_align,
             single_align=single_align,
             multi=multi,
@@ -550,7 +550,7 @@ class AlignLift:
         return Region(
             chrom=pos['lift_id'],
             pos=pos['lift_pos'],
-            end=end['lift_pos'],
+            end=end['lift_pos'] + 1,
             is_rev=pos['is_rev'],
             pos_align_index=pos['align_index'],
             end_align_index=end['align_index'],
@@ -578,7 +578,7 @@ class AlignLift:
         """
         lift_pairs = get_lift_pairs(
             a=self.to_qry(region.chrom, region.pos),
-            b=self.to_qry(region.chrom, region.end),
+            b=self.to_qry(region.chrom, region.end - 1),
             same_align=same_align,
             single_align=single_align,
             multi=multi,
@@ -596,7 +596,7 @@ class AlignLift:
         return Region(
             chrom=pos['lift_id'],
             pos=pos['lift_pos'],
-            end=end['lift_pos'],
+            end=end['lift_pos'] + 1,
             is_rev=pos['is_rev'],
             pos_align_index=pos['align_index'],
             end_align_index=end['align_index'],
