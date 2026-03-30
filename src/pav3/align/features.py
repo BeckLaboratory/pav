@@ -335,13 +335,16 @@ class FeatureGenerator:
         return df.with_columns(
             df
             .select(
-                pl.col('score') / (
-                    (
-                        pl.col('qry_end') - pl.col('qry_pos')
+                (
+                    pl.col('score')
+                    / (
+                        (
+                            pl.col('qry_end') - pl.col('qry_pos')
+                        )
+                        .fill_null(0.0)
+                        .map_elements(self.score_model.match, return_dtype=pl.Float64)
                     )
-                    .fill_null(0.0)
-                    .map_elements(self.score_model.match, return_dtype=pl.Float32)
-                )
+                ).cast(pl.Float32)
             )
             .to_series()
             .alias('score_prop')
@@ -377,15 +380,18 @@ class FeatureGenerator:
             )
             .with_columns(
                 (
-                    pl.col('score_mm') / (
-                        (
-                            pl.col("_op_len") * (
-                                pl.col("_op_code").list.eval(pl.element().is_in([op.EQ, op.X]))
+                    (
+                        pl.col('score_mm')
+                        / (
+                            (
+                                pl.col("_op_len") * (
+                                    pl.col("_op_code").list.eval(pl.element().is_in([op.EQ, op.X]))
+                                )
                             )
+                            .list.sum()
+                            .map_elements(self.score_model.match, return_dtype=pl.Float64)
                         )
-                        .list.sum()
-                        .map_elements(self.score_model.match, return_dtype=pl.Float32)
-                    )
+                    ).cast(pl.Float32)
                 )
                 .alias('score_mm_prop')
             )
