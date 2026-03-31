@@ -118,7 +118,7 @@ rule call_vcf:
                 df = df.with_columns(
                     pl.lit([])
                     .cast(pl.List(pl.String))
-                    .alias('_vcf_sample_0')
+                    .alias(f'_vcf_sample_{wildcards.asm_name}')
                 )
 
                 # Append genotypes
@@ -129,20 +129,24 @@ rule call_vcf:
                                 df,
                                 wildcards.asm_name,
                                 callable_dict,
-                                col_name='_vcf_field_gt',
+                                col_name=f'__vcf_field_gt_{wildcards.asm_name}',
                                 separator='|',
                             ),
                             on='_index',
                             how='left'
                         )
                         .with_columns(
-                            pl.col('_vcf_sample_0').list.concat('_vcf_field_gt'),
-                            pl.col('_vcf_format').list.concat(pl.lit('GT'))
+                            pl.col(f'_vcf_sample_{wildcards.asm_name}').list.concat(f'__vcf_field_gt_{wildcards.asm_name}'),
                         )
-                        .drop('_vcf_field_gt')
+                        .drop(f'__vcf_field_gt_{wildcards.asm_name}')
                     )
                 except Exception as e:
                     raise RuntimeError(f'Failed to append genotypes for {vartype}: {e}') from e
+
+                df = df.with_columns(
+                    pl.col('_vcf_format').list.concat(pl.lit('GT'))
+                )
+
 
                 # Add INFO fields
                 try:
@@ -150,15 +154,12 @@ rule call_vcf:
                 except Exception as e:
                     raise RuntimeError(f'Failed to add INFO fields for {vartype}: {e}') from e
 
-                # Finalize VCF fields
+                # Final reformat and write
                 try:
-                    df = pav3.vcf.reformat_vcf_table(
-                        df,
-                        sample_columns={0: wildcards.asm_name}
+                    (
+                        pav3.vcf.reformat_vcf_table(df)
+                        .sink_parquet(temp_file_container.next())
                     )
-
-                    # Write VCF
-                    df.sink_parquet(temp_file_container.next())
                 except Exception as e:
                     raise RuntimeError(f'Failed to finalize VCF fields for {vartype}: {e}') from e
 

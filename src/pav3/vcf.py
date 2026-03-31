@@ -18,7 +18,6 @@ __all__ = [
     'vcf_fields_sym',
     'vcf_fields_snv',
     'gt_column_iterator',
-    'gt_column_hap',
     'standard_info_fields',
     'reformat_vcf_table',
 ]
@@ -1007,19 +1006,22 @@ def standard_info_fields(
 
 def reformat_vcf_table(
     df: pl.LazyFrame,
-    sample_columns: Optional[Mapping[int, str]] = None,
+    sample_col_prefix: str = '_vcf_sample_'
 ) -> pl.LazyFrame:
     """Reformat VCF table to VCF format."""
+    schema = df.collect_schema()
+
+    strip_len = len(sample_col_prefix)
 
     sample_col_exprs = [
         (
-            pl.col(f'_vcf_sample_{i}')
+            pl.col(sample_col)
             .list.eval(  # Replacing semicolons should not be needed, but don't break VCFs if they are present
                 pl.element().str.replace_all(';', ':')
             )
-        ).list.join(';').alias(sample)
-        for i, sample in sample_columns.items()
-    ] if sample_columns is not None else []
+        ).list.join(';').alias(sample_col[strip_len:])
+        for sample_col in schema.keys() if sample_col.startswith(sample_col_prefix)
+    ]
 
     return (
         df
