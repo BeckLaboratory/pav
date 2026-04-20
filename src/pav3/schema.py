@@ -6,14 +6,19 @@ __all__ = [
     'cast',
 ]
 
-from typing import overload
+from typing import (
+    overload,
+    Union,
+)
 
 import polars as pl
+
+PolarsDataType = Union[pl.DataType, type[pl.DataType]]
 
 import agglovar
 
 
-ALIGN: dict[str, pl.DataType] = {
+ALIGN: dict[str, PolarsDataType] = {
     'chrom': pl.String,
     'pos': pl.Int64,
     'end': pl.Int64,
@@ -34,7 +39,7 @@ ALIGN: dict[str, pl.DataType] = {
 }
 """Schema of alignment tables excluding features (added by ailgn.feature)."""
 
-VARIANT: dict[str, pl.DataType] = {
+VARIANT: dict[str, PolarsDataType] = {
     'chrom': agglovar.schema.VARIANT['chrom'],
     'pos': agglovar.schema.VARIANT['pos'],
     'end': agglovar.schema.VARIANT['end'],
@@ -167,7 +172,7 @@ Fields:
 @overload
 def cast(
     df: pl.DataFrame,
-    schema: dict[str, pl.DataType],
+    schema: dict[str, PolarsDataType],
     do_sort: bool = True,
 ) -> pl.DataFrame:
     ...
@@ -175,14 +180,14 @@ def cast(
 @overload
 def cast(
     df: pl.LazyFrame,
-    schema: dict[str, pl.DataType],
+    schema: dict[str, PolarsDataType],
     do_sort: bool = True,
 ) -> pl.LazyFrame:
     ...
 
 def cast(
     df: pl.DataFrame | pl.LazyFrame,
-    schema: dict[str, pl.DataType],
+    schema: dict[str, PolarsDataType],
     do_sort: bool = True,
 ) -> pl.DataFrame | pl.LazyFrame:
     """
