@@ -1,8 +1,13 @@
 """Polars expressions used by variant calling routines."""
 
+# TODO: Switch to agglovar expressions
+
 __all__ = [
     'id_snv',
     'id_nonsnv',
+    'sort_expr',
+    'qry_region_expr',
+    'id_expr',
 ]
 
 import polars as pl
@@ -59,7 +64,7 @@ def sort_expr(has_id: bool = True) -> list[pl.Expr]:
         [pl.col('id')] if has_id else []
     )
 
-def qry_region() -> pl.Expr:
+def qry_region_expr() -> pl.Expr:
     """Get query region string from `qry_id`, `qry_pos`, and `qry_end` columns.
 
     :return: Query region expression.
@@ -68,14 +73,17 @@ def qry_region() -> pl.Expr:
         'qry_id', pl.lit(':'), pl.col('qry_pos') + 1, pl.lit('-'), pl.col('qry_end')
     ).alias('qry_region')
 
-# def id() -> pl.Expr:
-#     """Generate variant IDs for any variant type.
-#
-#     :return: ID expression.
-#     """
-#     return (
-#         pl.when(pl.col('vartype').str.to_uppercase() == 'SNV')
-#         .then(id_snv())
-#         .otherwise(id_nonsnv())
-#         .alias('id')
-#     )
+def id_expr() -> pl.Expr:
+    """Generate variant IDs for any variant type.
+
+    :return: ID expression.
+    """
+    id_snv_expr = id_snv()
+    id_nonsnv_expr = id_nonsnv()
+
+    return (
+        pl.when(pl.col('vartype').str.to_uppercase() == 'SNV')
+        .then(id_snv_expr)
+        .otherwise(id_nonsnv_expr)
+        .alias('id')
+    )
