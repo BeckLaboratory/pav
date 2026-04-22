@@ -19,11 +19,11 @@ import agglovar
 
 
 ALIGN: dict[str, PolarsDataType] = {
-    'chrom': pl.String,
-    'pos': pl.Int64,
-    'end': pl.Int64,
+    'chrom': agglovar.schema.VARIANT['chrom'],
+    'pos': agglovar.schema.VARIANT['pos'],
+    'end': agglovar.schema.VARIANT['end'],
     'align_index': pl.Int32,
-    'filter': pl.List(pl.String),
+    'filter': agglovar.schema.VARIANT['filter'],
     'qry_id': pl.String,
     'qry_pos': pl.Int64,
     'qry_end': pl.Int64,
