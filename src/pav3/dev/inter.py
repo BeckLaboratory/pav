@@ -5,6 +5,7 @@ from typing import Any
 
 from .path import get_pav_dir
 
+
 def init(
         path_pav: Path | str,
         path_init: Path | str,

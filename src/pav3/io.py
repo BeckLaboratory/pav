@@ -15,7 +15,6 @@ import codecs
 from collections.abc import Mapping
 import gzip
 import importlib.resources
-import io
 import os
 from pathlib import Path
 import pysam
@@ -34,6 +33,7 @@ from typing import (
 )
 
 import Bio.bgzf
+
 
 class PlainOrGzFile:
     """Read a plain or a gzipped file using context guard.
@@ -359,7 +359,10 @@ class ResourceReader(object):
     def __enter__(self) -> TextIO | BinaryIO:
         """Enter context."""
         if self.file_handle is not None:
-            raise RuntimeError(f'Enter called: File is already open by this context guard: anchor={self.anchor}, name={self.name}')
+            raise RuntimeError(
+                f'Enter called: File is already open by this context guard: '
+                f'anchor={self.anchor}, name={self.name}'
+            )
 
         if self.resource_type == 'package':
             if self.text_mode:
@@ -547,7 +550,6 @@ class TempDirContainer(Mapping[int, Path]):
         except KeyError:
             raise KeyError(f'TempDirContainer: Index out of bounds: {key}')
 
-
     def __enter__(self) -> Self:
         if self._dir_path is not None:
             raise RuntimeError(f'TempDirContainer: Entered context twice: Existing directory="{str(self._dir_path)}"')
@@ -585,6 +587,16 @@ class TempDirContainer(Mapping[int, Path]):
         self._depth -= 1
 
 
+class NullContext:
+    """A context manager that does nothing. Useful for optional context managers, mainly for optional temporary file
+    management."""
+    def __enter__(self):
+        return self
+
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        pass
+
+
 class BGZFWriterIO(IO[bytes]):
     """A BGZFWriter IO compatible wrapper that fixes bugs in the BGZF writer."""
     file_path: Path
@@ -604,7 +616,7 @@ class BGZFWriterIO(IO[bytes]):
 
     def __enter__(self) -> Self:
         if self._bgzf_file is not None:
-            raise IOError(f'Cannot open BGZF File: Already open')
+            raise IOError('Cannot open BGZF File: Already open')
 
         self._bgzf_file = Bio.bgzf.BgzfWriter(self.file_path, self._mode)
         return self
@@ -621,7 +633,7 @@ class BGZFWriterIO(IO[bytes]):
 
     def fileno(self) -> int:
         if self._bgzf_file is None:
-            raise ValueError(f'Fileno on a closed BGZF file')
+            raise ValueError('Fileno on a closed BGZF file')
 
         return self._bgzf_file.fileno()
 
@@ -633,7 +645,7 @@ class BGZFWriterIO(IO[bytes]):
 
     def isatty(self) -> bool:
         if self._bgzf_file is None:
-            raise ValueError(f'Isatty on a closed BGZF file')
+            raise ValueError('Isatty on a closed BGZF file')
 
         return self._bgzf_file.isatty()
 
@@ -646,7 +658,7 @@ class BGZFWriterIO(IO[bytes]):
 
     def tell(self) -> int:
         if self._bgzf_file is None:
-            raise ValueError(f'Tell on a closed BGZF file')
+            raise ValueError('Tell on a closed BGZF file')
 
         return self._bgzf_file.tell()
 
@@ -654,7 +666,7 @@ class BGZFWriterIO(IO[bytes]):
             self, s: str | bytes,
     ) -> int:
         if self._bgzf_file is None:
-            raise ValueError(f'Write to a closed BGZF file')
+            raise ValueError('Write to a closed BGZF file')
 
         if isinstance(s, str):
             s = s.encode(self._encoding)
@@ -673,7 +685,7 @@ class BGZFWriterIO(IO[bytes]):
     @property
     def mode(self) -> str:
         if self._bgzf_file is None:
-            raise ValueError(f'Mode on a closed BGZF file')
+            raise ValueError('Mode on a closed BGZF file')
 
         return self._mode
 

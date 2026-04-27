@@ -55,7 +55,7 @@ For example, "score" prioritizes alignment records by the lowest score first (lo
 alignment record for the start position and end position). If scores are equal, it next prioritizes
 on the higher alignment record score. This ensures that a lift where a coordinate lands on a
 poor alignment record is not prioritized over one where both coordinates land on a better
-alignment record. 
+alignment record.
 
 Values:
 * score: Prioritize by the alignment record scores. First by the lowest score, then by the highest.
@@ -184,21 +184,23 @@ class LiftSeg:
         assert (
                    qry_pos_min := self.df_ops.select(pl.col('qry_pos').min()).item()
                ) == self._row['qry_pos'], (
-            f'Query start position mismatch in LiftSeg init: lift-table={qry_pos_min} != align-table={self._row["qry_pos"]}'
+            f'Query start position mismatch in LiftSeg init: '
+            f'lift-table={qry_pos_min} != align-table={self._row["qry_pos"]}'
         )
 
         assert (
                    qry_end_max := self.df_ops.select(pl.col('qry_end').max()).item()
                ) == self._row['qry_end'], (
-            f'Query end position mismatch in LiftSeg init: lift-table={qry_end_max} != align-table={self._row["qry_end"]}'
+            f'Query end position mismatch in LiftSeg init: '
+            f'lift-table={qry_end_max} != align-table={self._row["qry_end"]}'
         )
 
         assert (
                    ref_end_max := self.df_ops.select(pl.col('ref_end').max()).item()
                ) == self._row['end'], (
-            f'Reference end position mismatch in LiftSeg init: lift-table={ref_end_max} != align-table={self._row["end"]}'
+            f'Reference end position mismatch in LiftSeg init: '
+            f'lift-table={ref_end_max} != align-table={self._row["end"]}'
         )
-
 
     def __repr__(self) -> str:
         """Get a string representation of the object."""
@@ -234,7 +236,6 @@ class LiftSeg:
             return (qry_end - 1) - (pos - ref_pos), op_code
 
         return qry_pos + (pos - ref_pos), op_code
-
 
     def to_ref(
             self,
@@ -303,7 +304,7 @@ class AlignLift:
         :param cache_align: Number of alignment records to cache in memory.
         """
         if df is None:
-            raise ValueError(f'Parameter "df" is missing')
+            raise ValueError('Parameter "df" is missing')
 
         df = (
             df
@@ -315,7 +316,7 @@ class AlignLift:
             df = df.lazy()
 
         if df_qry_fai is None:
-            raise ValueError(f'Parameter "df_qry_fai" is missing')
+            raise ValueError('Parameter "df_qry_fai" is missing')
 
         if isinstance(df_qry_fai, pl.LazyFrame):
             df_qry_fai = df_qry_fai.collect()

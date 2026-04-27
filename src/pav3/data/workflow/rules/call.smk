@@ -673,17 +673,12 @@ rule call_intra_snv_insdel:
 
         os.makedirs(temp_dir_parent, exist_ok=True)
 
-        with tempfile.TemporaryDirectory(
-                dir=temp_dir_parent, prefix=f'call_intra_{wildcards.hap}_snv_insdel.'
-        ) as temp_dir_name:
-
-            df_snv, df_insdel = pav3.call.intra.variant_tables_snv_insdel(
-                df_align=df_align,
-                ref_fa_filename=str(ref_fa_filename),
-                qry_fa_filename=str(qry_fa_filename),
-                temp_dir_name=temp_dir_name,
-                pav_params=pav_params,
-            )
-
-            df_snv.sink_parquet(output.pq_snv)
-            df_insdel.sink_parquet(output.pq_insdel)
+        pav3.call.intra.variant_tables_snv_insdel(
+            df_align=df_align,
+            ref_fa_filename=str(ref_fa_filename),
+            qry_fa_filename=str(qry_fa_filename),
+            temp_dir_name=temp_dir_parent,
+            sink_snv=output.pq_snv,
+            sink_insdel=output.pq_insdel,
+            pav_params=pav_params,
+        )

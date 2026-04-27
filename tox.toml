@@ -32,7 +32,7 @@ deps = [
     "flake8-bugbear",
     "flake8-pyproject",
 ]
-commands = [["flake8", "src/pav3", "tests", "{posargs}"]]
+commands = [["flake8", "src/pav3", "tests{posargs:}"]]
 
 [env.sphinx]
 deps = [

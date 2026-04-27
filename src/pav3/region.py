@@ -63,7 +63,10 @@ class Region(object):
 
     def __repr__(self):
         """Get coordinate string in 1-based closed coordinates (Samtools, UCSC browser)."""
-        return f'Region({self.chrom}, {self.pos}, {self.end}, {self.is_rev}, {self.pos_align_index}, {self.end_align_index})'
+        return (
+            f'Region({self.chrom}, {self.pos}, {self.end}, {self.is_rev}, '
+            f'{self.pos_align_index}, {self.end_align_index})'
+        )
 
     def __str__(self):
         """Get coordinate string in 1-based closed coordinates (Samtools, UCSC browser)."""
@@ -372,6 +375,7 @@ def region_from_string(
         pos -= 1
 
     return Region(match_obj[1], pos, end, is_rev, pos_align_index, end_align_index)
+
 
 def region_from_dict(
         d: dict[str, Any],

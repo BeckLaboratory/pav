@@ -1,11 +1,5 @@
 """Table schemas."""
 
-__all__ = [
-    'ALIGN',
-    'VARIANT',
-    'cast',
-]
-
 from typing import (
     overload,
     Union,
@@ -13,9 +7,15 @@ from typing import (
 
 import polars as pl
 
+import agglovar
+
 PolarsDataType = Union[pl.DataType, type[pl.DataType]]
 
-import agglovar
+__all__ = [
+    'ALIGN',
+    'VARIANT',
+    'cast',
+]
 
 
 ALIGN: dict[str, PolarsDataType] = {
@@ -169,6 +169,7 @@ Fields:
     * seq: Variant sequence in reference orientation. Null if not defined (never "*" or other placeholders).
 """
 
+
 @overload
 def cast(
     df: pl.DataFrame,
@@ -177,6 +178,7 @@ def cast(
 ) -> pl.DataFrame:
     ...
 
+
 @overload
 def cast(
     df: pl.LazyFrame,
@@ -184,6 +186,7 @@ def cast(
     do_sort: bool = True,
 ) -> pl.LazyFrame:
     ...
+
 
 def cast(
     df: pl.DataFrame | pl.LazyFrame,

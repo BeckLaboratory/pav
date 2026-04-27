@@ -63,7 +63,7 @@ Columns:
     * qry_pos: Query start position.
     * qry_end: Query end position.
     * is_rev: True if the sequence was reverse-complemented during alignment.
-    * anchor_gap: Length of the reference 
+    * anchor_gap: Length of the reference
     * len_ref: Length of the segment on the reference. Negative if anchors overlap (tandem duplication), positive
         if there is a gap between anchors (deletion), and 0 if anchors meet (insertion).
     * len_qry: Length of the segment on the query.
@@ -171,7 +171,7 @@ class AnchoredInterval:
             pos_align_index, end_align_index = end_align_index, pos_align_index
 
         if ref_end == ref_pos:  # If Insertion site (ref_end == ref_pos)
-           ref_end += 1
+            ref_end += 1
 
         # Get query region
         self.region_ref = Region(
@@ -188,7 +188,7 @@ class AnchoredInterval:
         self.len_qry = len(self.region_qry)
 
         # Get query region (ref trimmed)
-        qry_ref_index_list =(
+        qry_ref_index_list = (
             df_align_qryref
             .with_row_index('_index')
             .filter(
@@ -228,7 +228,7 @@ class AnchoredInterval:
             pos_align_index_qryref, end_align_index_qryref = end_align_index_qryref, pos_align_index_qryref
 
         if ref_end_qryref == ref_pos_qryref:  # If Insertion site (ref_end == ref_pos)
-           ref_end_qryref += 1
+            ref_end_qryref += 1
 
         self.region_ref_qryref = Region(
             chrom=chrom,
@@ -288,7 +288,6 @@ class AnchoredInterval:
             + ([abs(self.len_ref)] if abs(self.len_ref) > 0 else []),
             reverse=True
         )
-
 
         # Scores
         # self.score_gap_sum_aligned = gap_sum_score(
@@ -627,12 +626,12 @@ def gap_sum_score(
 
     if mapped:
         df_segment = df_segment.filter(pl.col('is_aligned'))
-    elif mapped == False:
+    elif mapped is False:
         df_segment = df_segment.filter(~ pl.col('is_aligned'))
 
     return (
         df_segment
-        .select(pl.col('len_qry').map_elements(score_model.gap, return_dtype=pl.Float32).sum())
+        .select(pl.col('len_qry').map_elements(score_model.gap, return_dtype=pl.Float64).cast(pl.Float32).sum())
         .item()
     )
 
@@ -656,7 +655,7 @@ def unaligned_switch_sum_score(
         )
         .select(
             pl.max_horizontal(
-                pl.col('len_qry').map_elements(score_model.gap, return_dtype=pl.Float32),
+                pl.col('len_qry').map_elements(score_model.gap, return_dtype=pl.Float64).cast(pl.Float32),
                 pl.lit(score_model.template_switch(1))
             ).sum()
         )

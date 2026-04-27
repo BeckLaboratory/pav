@@ -204,8 +204,7 @@ def alias_to_obj_dict(
                                 import_path[:-(dot_count)] if dot_count > 0 else import_path
                             )
                         ) + (
-                            ('.' + module_path)
-                                if module_path is not None else ''
+                            ('.' + module_path) if module_path is not None else ''
                         )
                     )
 
@@ -365,10 +364,11 @@ def get_defined_names(
             yield node.target.id, 'def', None, None
 
         elif isinstance(node, ast.ImportFrom):
-
             module_name = (
-                '.'.join(mod.__name__.split('.')[:-node.level]
-                + (node.module.split('.') if node.module else []))
+                '.'.join(
+                    mod.__name__.split('.')[:-node.level]
+                    + (node.module.split('.') if node.module else [])
+                )
             )
 
             for node_name in node.names:
@@ -438,4 +438,3 @@ def get_module_definitions(
                 if isinstance(target, ast.Name):
                     if include_dunder or not target.id.startswith('__'):
                         yield target.id
-

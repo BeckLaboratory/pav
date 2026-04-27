@@ -3,6 +3,7 @@
 from pathlib import Path
 import tomllib
 
+
 def get_pav_dir(
         path: Path | str,
 ) -> Path:

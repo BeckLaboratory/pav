@@ -24,7 +24,7 @@ __all__ = [
 
 
 import collections
-from collections.abc import Iterable, Mapping
+from collections.abc import Iterable
 import datetime
 from pathlib import Path
 import threading
@@ -54,6 +54,7 @@ from .const import FILTER_REASON
 # * P: One value for each allele value in GT.
 # * M: One value for each possible base modification.
 
+
 @agglovar.meta.decorators.immutable
 class InfoField:
     name: str = agglovar.meta.descriptors.CheckedString(match=r'[A-Z]([A-Z_]*[A-Z])?')
@@ -73,6 +74,7 @@ class InfoField:
     def __str__(self) -> str:
         return f'##INFO=<ID={self.name},Number={self.number},Type={self.type_},Description="{self.description}">'
 
+
 @agglovar.meta.decorators.immutable
 class FilterField:
     name: str = agglovar.meta.descriptors.CheckedString(match=r'[A-Z]([A-Z_]*[A-Z])?')
@@ -84,6 +86,7 @@ class FilterField:
 
     def __str__(self) -> str:
         return f'##FILTER=<ID={self.name},Description="{self.description}">'
+
 
 @agglovar.meta.decorators.immutable
 class FormatField:
@@ -101,6 +104,7 @@ class FormatField:
     def __str__(self) -> str:
         return f'##FORMAT=<ID={self.name},Number={self.number},Type={self.type_},Description="{self.description}">'
 
+
 @agglovar.meta.decorators.immutable
 class AltField:
     name: str = agglovar.meta.descriptors.CheckedString(match=r'[A-Z]([A-Z:_]*[A-Z])?')
@@ -112,6 +116,7 @@ class AltField:
 
     def __str__(self) -> str:
         return f'##ALT=<ID={self.name},Description="{self.description}">'
+
 
 VCF_VERSION = '4.5'
 
@@ -253,6 +258,7 @@ def get_headers(
     )
 
     return headers
+
 
 def init_vcf_fields(
     df: pl.LazyFrame,
@@ -448,7 +454,9 @@ def vcf_fields_seq_insdel(
                 (
                     pl.struct([pl.col('chrom'), pl.col('_ref_base_pos')])
                     .map_elements(
-                        lambda vals: ref_file.fetch(str(vals['chrom']), int(vals['_ref_base_pos']), int(vals['_ref_base_pos'] + 1)),
+                        lambda vals: ref_file.fetch(
+                            str(vals['chrom']), int(vals['_ref_base_pos']), int(vals['_ref_base_pos'] + 1)
+                        ),
                         return_dtype=pl.String
                     )
                     .cast(pl.String)
@@ -672,7 +680,7 @@ def gt_column_iterator(
         if isinstance(df_callable, pl.DataFrame):
             df_callable[(asm_name, hap)] = df_callable.lazy()
 
-    for asm_name, hap_list in hap_dict.items():
+    for asm_name in hap_dict.keys():
         yield asm_name, gt_column_asm(
             df,
             asm_name=asm_name,

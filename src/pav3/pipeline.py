@@ -622,7 +622,9 @@ def read_assembly_table(
             continue
 
         if col_lower in col_map:
-            raise ValueError(f'Duplicate column names found in assembly table when ignoring case: {assembly_table_path}')
+            raise ValueError(
+                f'Duplicate column names found in assembly table when ignoring case: {assembly_table_path}'
+            )
 
         col_map[col] = col_lower
 
@@ -688,7 +690,9 @@ def read_assembly_table(
             else:
                 dup_source = f'(derived from columns {hap_col_map[hap]} and {col})'
 
-            raise ValueError(f'Duplicate haplotype name "{hap}" found in assembly table {dup_source}: {assembly_table_path}')
+            raise ValueError(
+                f'Duplicate haplotype name "{hap}" found in assembly table {dup_source}: {assembly_table_path}'
+            )
 
         hap_col_map[hap] = col
 
@@ -906,7 +910,7 @@ def get_rules_path(
             ) as rule_path:
                 if rule_path.exists():
                     return str(rule_path)
-        except (ImportError, FileNotFoundError, AttributeError, ModuleNotFoundError) as e:
+        except (ImportError, FileNotFoundError, AttributeError) as e:
             raise FileNotFoundError(
                 f'Rule file "{rule_filename}" not found in package resources: {e}'
             ) from e
@@ -981,6 +985,7 @@ def get_pav_config_path(
         )
 
     return found_paths[0]
+
 
 def get_pav_asm_table_path(
         asm_table_path: Optional[str | Path] = None,

@@ -8,6 +8,7 @@ import argparse
 
 from .. import __version__
 
+
 def _add_opt_version(parser: argparse.ArgumentParser) -> None:
     """Add version option to parser."""
     parser.add_argument(
@@ -16,6 +17,7 @@ def _add_opt_version(parser: argparse.ArgumentParser) -> None:
         version=f'PAV {__version__}',
         help='Show PAV version and exit.'
     )
+
 
 def _add_opt_verbose(
         parser: argparse.ArgumentParser
@@ -26,6 +28,7 @@ def _add_opt_verbose(
         default=False, action='store_true',
         help='Generate verbose output',
     )
+
 
 def _add_opt_debug(
         parser: argparse.ArgumentParser

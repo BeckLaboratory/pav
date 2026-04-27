@@ -84,6 +84,7 @@ from agglovar.meta.descriptors import (
 
 T = TypeVar('T')
 
+
 class Taggable:
     """Object that can be matched against tags.
 
@@ -130,7 +131,7 @@ class Taggable:
         """Check if keys exist in the resource map and raise an error if not."""
 
         if isinstance(tags, str):
-            tags = {tags,}
+            tags = {tags, }
 
         if missing_key := set(tags) - set(self.tags.keys()):
             n = len(missing_key)
@@ -191,10 +192,10 @@ class MappableResource[T](Mapping[str, T]):
         self._resource_map = resource_map if resource_map is not None else {}
 
     @overload
-    def __getitem__(self, key: str | int) -> T:...
+    def __getitem__(self, key: str | int) -> T: ...
 
     @overload
-    def __getitem__(self, key: slice | Iterable[str | int]) -> list[T]:...
+    def __getitem__(self, key: slice | Iterable[str | int]) -> list[T]: ...
 
     def __getitem__(
             self,
@@ -222,10 +223,10 @@ class MappableResource[T](Mapping[str, T]):
             ]
 
     @overload
-    def get_resource(self, key: str | int) -> WorkflowResource[T]:...
+    def get_resource(self, key: str | int) -> WorkflowResource[T]: ...
 
     @overload
-    def get_resource(self, key: slice | Iterable[str | int]) -> list[WorkflowResource[T]]:...
+    def get_resource(self, key: slice | Iterable[str | int]) -> list[WorkflowResource[T]]: ...
 
     def get_resource(
             self,
@@ -252,13 +253,13 @@ class MappableResource[T](Mapping[str, T]):
             ]
 
     @overload
-    def by_tag(self, key: dict[str, str]) -> list[T]:...
+    def by_tag(self, key: dict[str, str]) -> list[T]: ...
 
     @overload
-    def by_tag(self, key: str, value: str | Iterable[str]) -> list[T]:...
+    def by_tag(self, key: str, value: str | Iterable[str]) -> list[T]: ...
 
     @overload
-    def by_tag(self, key: str, value: str | Iterable[str], intersect: bool = True) -> list[T]:...
+    def by_tag(self, key: str, value: str | Iterable[str], intersect: bool = True) -> list[T]: ...
 
     def by_tag(
             self,
@@ -286,14 +287,14 @@ class MappableResource[T](Mapping[str, T]):
     def resource_by_tag(
             self,
             key: dict[str, str],
-    ) -> list[WorkflowResource[T]]:...
+    ) -> list[WorkflowResource[T]]: ...
 
     @overload
     def resource_by_tag(
             self,
             key: str,
             value: str | Iterable[str]
-    ) -> list[WorkflowResource[T]]:...
+    ) -> list[WorkflowResource[T]]: ...
 
     @overload
     def resource_by_tag(
@@ -301,7 +302,7 @@ class MappableResource[T](Mapping[str, T]):
             key: str,
             value: str | Iterable[str],
             intersect: bool = True,
-    ) -> list[WorkflowResource[T]]:...
+    ) -> list[WorkflowResource[T]]: ...
 
     def resource_by_tag(
             self,
@@ -394,7 +395,7 @@ class MappableResource[T](Mapping[str, T]):
         """Check if keys exist in the resource map and raise an error if not."""
 
         if isinstance(key, str):
-            key = {key,}
+            key = {key, }
 
         if missing_key := set(key) - set(self._resource_map.keys()):
             n = len(missing_key)
@@ -426,6 +427,7 @@ class MappableResource[T](Mapping[str, T]):
     def __repr__(self):
         return f'MappableResource({", ".join(self._resource_map.keys())})'
 
+
 @immutable
 class _ResourceView(MappableResource[Any]):
     def __init__(
@@ -436,6 +438,7 @@ class _ResourceView(MappableResource[Any]):
         super().__init__(resources)
         self.task_name = task_name if task_name else '<unknown>'
 
+
 @immutable
 class _PathView(MappableResource[Path]):
     def __init__(
@@ -445,6 +448,7 @@ class _PathView(MappableResource[Path]):
     ) -> None:
         super().__init__(resources)
         self.task_name = task_name if task_name else '<unknown>'
+
 
 @immutable
 class ResourceContainer(Taggable, MappableResource[Any]):
@@ -495,11 +499,16 @@ class ResourceContainer(Taggable, MappableResource[Any]):
 
         MappableResource.__init__(self, self._all_resources)
 
-        self.paths = _PathView(self._paths,self.task_name)
+        self.paths = _PathView(self._paths, self.task_name)
         self.resources = _ResourceView(self._resources, self.task_name)
 
     def __repr__(self) -> str:
-        return f'WorkflowTaskResources({self.task_name}, Paths({', '.join(self._paths.keys())}), Resources({', '.join(self._resources.keys())}), {super().__repr__()})'
+        return (
+            f'WorkflowTaskResources({self.task_name},'
+            f' Paths({', '.join(self._paths.keys())}),'
+            f' Resources({', '.join(self._resources.keys())}),'
+            f' {super().__repr__()})'
+        )
 
 
 def _is_path_resource(

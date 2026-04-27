@@ -64,6 +64,7 @@ def sort_expr(has_id: bool = True) -> list[pl.Expr]:
         [pl.col('id')] if has_id else []
     )
 
+
 def qry_region_expr() -> pl.Expr:
     """Get query region string from `qry_id`, `qry_pos`, and `qry_end` columns.
 
@@ -72,6 +73,7 @@ def qry_region_expr() -> pl.Expr:
     return pl.concat_str(
         'qry_id', pl.lit(':'), pl.col('qry_pos') + 1, pl.lit('-'), pl.col('qry_end')
     ).alias('qry_region')
+
 
 def id_expr() -> pl.Expr:
     """Generate variant IDs for any variant type.

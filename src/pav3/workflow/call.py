@@ -23,6 +23,7 @@ from ..call.expr import sort_expr
 
 logger = logging.getLogger(__name__)
 
+
 def integrate_sources(
         pav_params,
         input: dict[str, str],
@@ -76,7 +77,7 @@ def integrate_sources(
     collect_list = defaultdict(list)
 
     # Parameters controlling how variants are integrated and in what order
-    param_dict = {  #    do_write, add_discord, filter_discord, filter_inner
+    param_dict = {  # do_write, add_discord, filter_discord, filter_inner
         'inter_cpx':    (True,     True,        False,          False),
         'inter_insdel': (False,    True,        False,          False),
         'inter_inv':    (False,    True,        False,          False),
@@ -187,7 +188,6 @@ def integrate_sources(
 
         # Write
         write_list = [update_discord_frame]
-        collect_index_discord = len(write_list) - 1
 
         if sourcetype == 'inter':
             write_list.append(df.select(['var_index', 'id']))
@@ -284,7 +284,7 @@ def integrate_sources(
 
     # Write duplications
     if pav_params.debug:
-        print(f'Writing dup')
+        print('Writing dup')
 
     df = pl.concat(collect_list['dup'], how='diagonal')
 
@@ -298,7 +298,7 @@ def integrate_sources(
 
     # Write segment and ref_trace tables
     if pav_params.debug:
-        print(f'Writing segment & trace tables')
+        print('Writing segment & trace tables')
 
     (
         df_segment
@@ -414,7 +414,9 @@ def merge_haplotypes(
             df_chrom_list = []
 
             for vartype, filter_pass in itertools.product(vartype_list, (True, False)):
-                logger.debug('%sMerging chromosome %s (vartype=%s, pass=%s): ' % (log_prefix, chrom, vartype, filter_pass))
+                logger.debug(
+                    '%sMerging chromosome %s (vartype=%s, pass=%s): ' % (log_prefix, chrom, vartype, filter_pass)
+                )
 
                 pre_filter = [
                     pl.col('chrom') == chrom,

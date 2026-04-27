@@ -21,7 +21,7 @@ __all__ = [
 ]
 
 from abc import ABC, abstractmethod
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 import pathlib
 import importlib.resources.abc
 import inspect
@@ -44,10 +44,12 @@ class LCAlignModel(ABC):
 
     Warning: Child class implementations must call `super().__post_init__()`.
 
-    :ivar lc_model_def: LC model definition dictionary from a model definition JSON file. If None, the child class
-        must create one or let this parent class raise an exception. Null models do this, most others will not.
-    :ivar model_dir: Directory containing the model definition JSON file. If `None`, no related resources can be loaded
-        and the full model definition must be in `lc_model_def`.
+    :ivar lc_model_def: LC model definition dictionary parsed from ``model.json``. If None, the child class must
+        create one or let this parent class raise an exception. Null models do this; most others do not.
+    :ivar resource_type: Where the model was loaded from: ``"package"`` for a model bundled inside the pav3 package,
+        ``"filesystem"`` for a model directory on disk, or None for null models with no backing resource.
+    :ivar anchor: For ``"package"`` resources, the dotted resource name (e.g. ``"pav3.data.lcmodel.default"``).
+        For ``"filesystem"`` resources, the path string to the model directory. None for null models.
     """
 
     lc_model_def: Optional[dict[str, Any]]

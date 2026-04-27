@@ -98,6 +98,7 @@ def as_bool(
 
     raise ValueError('Cannot interpret as boolean value: {}'.format(val))
 
+
 def collapse_to_set(
         to_flatten: Iterable[Any],
         to_type: Optional[Callable] = None
@@ -134,6 +135,7 @@ def collapse_to_set(
 def _ident(x):
     """Parameter identity function."""
     return x
+
 
 def init_logger(
         level: Optional[int | str] = logging.INFO,

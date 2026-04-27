@@ -13,6 +13,7 @@ from ._common_opt import (
     _add_opt_version,
 )
 
+
 def subcommand_call(
         targets: Optional[list[str]],
         config: Optional[str],
@@ -76,7 +77,7 @@ def subcommand_call(
     ]
 
     if cores:
-        snake_args.extend([f'--cores', str(cores)])
+        snake_args.extend(['--cores', str(cores)])
 
     if profile:
         snake_args.extend(['--profile', profile])
@@ -108,7 +109,7 @@ def subcommand_call(
         + targets
         + (
             ['--config'] + config_params
-                if config_params else []
+            if config_params else []
         )
     )
 
@@ -132,7 +133,7 @@ def _add_subparser_call(
 
     parser_call = subparsers.add_parser(
         'call',
-        description=f'Call variants from assemblies',
+        description='Call variants from assemblies',
         help='Call variants.'
     )
 
@@ -187,8 +188,10 @@ def _add_subparser_call(
         'targets',
         type=str,
         nargs='*',
-        help='Run PAV targets. Can include specific file names to generate or aggregation rule names. Runs all samples by default.',
+        help=(
+            'Run PAV targets. Can include specific file names to generate or aggregation rule names. '
+            'Runs all samples by default.'
+        ),
     )
-
 
     return parser_call

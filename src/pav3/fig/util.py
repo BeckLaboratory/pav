@@ -15,9 +15,10 @@ from typing import (
 
 from .. import util
 
+
 def lighten_color(
         color: str | Tuple[float, float, float],
-        amount: float=0.25
+        amount: float = 0.25
 ) -> Tuple[float, float, float]:
     """Lighten color.
 
@@ -46,7 +47,7 @@ def lighten_color(
 
 def get_colors_pass_fail(
         color_dict: dict[str, tuple[float, float, float]],
-        lighten_amt: float=0.25
+        lighten_amt: float = 0.25
 ) -> dict[tuple[str, bool], tuple[float, float, float]]:
     """
     Get a dictionary of colors for PASS/FAIL records. Takes a dictionary of colors with keys describing the color
@@ -78,11 +79,13 @@ def color_to_ucsc_string(
 ) -> str:
     ...
 
+
 @overload
 def color_to_ucsc_string(
         color: dict[str, tuple[float, float, float]]
 ) -> dict[str, str]:
     ...
+
 
 def color_to_ucsc_string(
         color: tuple[float, float, float] | dict[str, tuple[float, float, float]]
@@ -99,7 +102,7 @@ def color_to_ucsc_string(
     if isinstance(color, dict):
         return {
             key: ','.join((str(int(color_val * 255)) for color_val in color_val_tup))
-                for key, color_val_tup in color.items()
+            for key, color_val_tup in color.items()
         }
 
     return ','.join((str(int(color_val * 255)) for color_val in color))

@@ -167,7 +167,7 @@ def call_hap_insdelsnv(
     as_lines = [
         f'table {track_desc_short}',
         f'"{track_desc_long}"',
-        f'('
+        '('
     ] + [
         '{type} {name}; "{desc}"'.format(**row)
         for row in df_as.iter_rows(named=True)
@@ -218,9 +218,17 @@ def call_hap_invdupcpx(
             ).alias('inv_inner'),
             pl.concat_str(
                 pl.lit('REF='),
-                pl.col('outer_ref').struct.field('chrom'), pl.lit(':'), pl.col('outer_ref').struct.field('pos'), pl.lit('-'), pl.col('outer_ref').struct.field('end'),
+                pl.col('outer_ref').struct.field('chrom'),
+                pl.lit(':'),
+                pl.col('outer_ref').struct.field('pos'),
+                pl.lit('-'),
+                pl.col('outer_ref').struct.field('end'),
                 pl.lit(' - QRY='),
-                pl.col('outer_qry').struct.field('chrom'), pl.lit(':'), pl.col('outer_qry').struct.field('pos'), pl.lit('-'), pl.col('outer_qry').struct.field('end'),
+                pl.col('outer_qry').struct.field('chrom'),
+                pl.lit(':'),
+                pl.col('outer_qry').struct.field('pos'),
+                pl.lit('-'),
+                pl.col('outer_qry').struct.field('end')
             ).alias('inv_outer'),
             pl.col('pos').alias('pos_thick'),
             pl.col('end').alias('end_thick'),
@@ -236,7 +244,11 @@ def call_hap_invdupcpx(
         .with_columns(
             pl.col('pos').alias('pos_thick'),
             pl.col('end').alias('end_thick'),
-            ((pl.col('pos') + pl.col('end')) // 2 + pl.col('varlen') // 2).clip(pl.col('end'), pl.col('_chrom_len')).alias('end')
+            (
+                (pl.col('pos') + pl.col('end')) // 2 + pl.col('varlen') // 2
+            ).clip(
+                pl.col('end'), pl.col('_chrom_len')
+            ).alias('end')
         )
         .with_columns(
             (pl.col('end') - pl.col('varlen')).clip(0, pl.col('pos_thick')).alias('pos')
@@ -378,7 +390,7 @@ def call_hap_invdupcpx(
     as_lines = [
         f'table {track_desc_short}',
         f'"{track_desc_long}"',
-        f'('
+        '('
     ] + [
         '{type} {name}; "{desc}"'.format(**row)
         for row in df_as.iter_rows(named=True)
@@ -512,7 +524,7 @@ def align(
     as_lines = [
         f'table {track_desc_short}',
         f'"{track_desc_long}"',
-        f'('
+        '('
     ] + [
         '{type} {name}; "{desc}"'.format(**row)
         for row in df_as.iter_rows(named=True)
@@ -703,6 +715,7 @@ def _read_df_as(
 
     return pl.read_csv(field_path, separator='\t')
 
+
 def _read_var_color_table():
     return pl.DataFrame(
         [
@@ -725,6 +738,7 @@ def _read_var_color_table():
             'color': pl.String,
         },
     ).lazy()
+
 
 def _var_fields(
         df: pl.LazyFrame,
