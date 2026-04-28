@@ -377,7 +377,7 @@ def merge_haplotypes(
     os.makedirs(out_path.parent, exist_ok=True)
 
     # Setup join object
-    pairwise_join = agglovar.pairwise.overlap.PairwiseOverlap.from_definiton(
+    pairwise_join = agglovar.pairwise.overlap.PairwiseOverlap.from_definition(
         merge_params
     )
 
