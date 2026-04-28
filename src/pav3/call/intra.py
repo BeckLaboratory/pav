@@ -162,8 +162,12 @@ def variant_tables_snv_insdel(
             )
             .with_columns(
                 pl.lit('SNV').alias('vartype'),
-                pl.col('pos').map_elements(lambda pos: seq_ref[pos], return_dtype=pl.String).alias('ref'),
-                pl.col('qry_pos').map_elements(lambda pos: seq_qry[pos], return_dtype=pl.String).alias('alt'),
+                pl.col('pos').map_elements(
+                    lambda pos, seq_ref=seq_ref: seq_ref[pos], return_dtype=pl.String
+                ).alias('ref'),
+                pl.col('qry_pos').map_elements(
+                    lambda pos, seq_qry=seq_qry: seq_qry[pos], return_dtype=pl.String
+                ).alias('alt'),
             )
         )
         if is_rev:
@@ -208,7 +212,7 @@ def variant_tables_snv_insdel(
                 pl.lit('DEL').alias('vartype'),
                 pl.col('op_len').alias('varlen'),
                 pl.struct('pos', 'end').map_elements(
-                    lambda coords: seq_ref[coords['pos']:coords['end']], return_dtype=pl.String
+                    lambda coords, seq_ref=seq_ref: seq_ref[coords['pos']:coords['end']], return_dtype=pl.String
                 ).alias('seq'),
                 (
                     pl.col('op_len')
@@ -303,11 +307,13 @@ def variant_tables_snv_insdel(
                 qry_shift = 1 if is_rev else 0
 
                 if is_rev:
-                    get_ins_seq = lambda coords: str(
-                        Bio.Seq.Seq(seq_qry[coords['qry_pos']:coords['qry_end']]).reverse_complement()
-                    )
+                    def get_ins_seq(coords, seq_qry=seq_qry):
+                        return str(
+                            Bio.Seq.Seq(seq_qry[coords['qry_pos']:coords['qry_end']]).reverse_complement()
+                        )
                 else:
-                    get_ins_seq = lambda coords: seq_qry[coords['qry_pos']:coords['qry_end']]
+                    def get_ins_seq(coords, seq_qry=seq_qry):
+                        return seq_qry[coords['qry_pos']:coords['qry_end']]
 
                 # Extract ops to numpy and compute per-op reference/query coordinates
                 op_arr = op.row_to_arr(row)

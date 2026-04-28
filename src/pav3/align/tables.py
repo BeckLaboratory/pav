@@ -168,7 +168,7 @@ def sam_to_align_table(
         align_features: Optional[Iterable[str] | str] = 'align',
         flag_filter: int = 0x700,
         ref_fa_filename: Optional[str] = None,
-        qry_fa_filename: Optional[str] = None
+        qry_fa_filename: Optional[str] = None,
 ) -> pl.DataFrame:
     """Read alignment records from a SAM file.
 
@@ -282,12 +282,9 @@ def sam_to_align_table(
                     continue
 
                 # Get alignment operations
-                try:
-                    op_arr = op.normalize_clipping(op.cigar_to_arr(tok[5]))
-                except ValueError as e:
-                    logger.warning(f'Failed to normalize alignment operations: {e}')
-                    continue
+                op_arr = op.cigar_to_arr(tok[5])
 
+                # Move alignment match "M" to sequence match/mismatch "EQ" and "X".
                 if np.any(op_arr[:, 0] == op.M):
                     if ref_fasta is None:
                         raise ValueError('Found "M" alignment operations but ref_fa_filename was not provided')
@@ -309,6 +306,7 @@ def sam_to_align_table(
                             else int(op_arr[0, 1]) if op_arr[0, 0] == op.H
                             else 0
                         )
+
                         qry_len_m = int(np.sum(op_arr[np.isin(op_arr[:, 0], op.CONSUMES_QRY_ARR), 1]))
 
                         qry_seq_m = region_seq_fasta(
@@ -323,6 +321,14 @@ def sam_to_align_table(
 
                     op_arr = align_to_seq_ops(op_arr, qry_seq_m, ref_seq_m)
 
+                # Normalize to hard-clipping
+                try:
+                    op_arr = op.normalize_clipping(op_arr)
+                except ValueError as e:
+                    logger.warning(f'Failed to normalize alignment operations: {e}')
+                    continue
+
+                # Get lengths and query position
                 len_qry = np.sum(op_arr[np.isin(op_arr[:, 0], op.CONSUMES_QRY_ARR), 1])
                 len_ref = np.sum(op_arr[np.isin(op_arr[:, 0], op.CONSUMES_REF_ARR), 1])
 

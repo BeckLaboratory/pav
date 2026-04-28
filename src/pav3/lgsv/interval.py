@@ -631,7 +631,7 @@ def gap_sum_score(
 
     return (
         df_segment
-        .select(pl.col('len_qry').map_elements(score_model.gap, return_dtype=pl.Float64).cast(pl.Float32).sum())
+        .select(pl.col('len_qry').map_elements(score_model.gap, return_dtype=pl.Float64).sum())
         .item()
     )
 
@@ -655,7 +655,7 @@ def unaligned_switch_sum_score(
         )
         .select(
             pl.max_horizontal(
-                pl.col('len_qry').map_elements(score_model.gap, return_dtype=pl.Float64).cast(pl.Float32),
+                pl.col('len_qry').map_elements(score_model.gap, return_dtype=pl.Float64),
                 pl.lit(score_model.template_switch(1))
             ).sum()
         )

@@ -2,28 +2,12 @@ requires = ["tox>=4"]
 env_list = ["py312", "py313", "py314", "flake8"]
 
 
-#[env.py312]
-#description = "Run unit tests"
-#deps = [
-#    "pytest~=8.4",
-#]
-#commands = [["pytest", "tests", "{posargs}"]]
-#
-#
-#[env.py313]
-#description = "Run unit tests"
-#deps = [
-#    "pytest~=8.4",
-#]
-#commands = [["pytest", "tests", "{posargs}"]]
-#
-#
-#[env.py314]
-#description = "Run unit tests"
-#deps = [
-#    "pytest~=8.4",
-#]
-#commands = [["pytest", "tests", "{posargs}"]]
+[env_run_base]
+description = "Run unit tests"
+deps = [
+    "pytest~=8.4",
+]
+commands = [["pytest", "tests", "{posargs}"]]
 
 
 [env.flake8]

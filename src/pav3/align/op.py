@@ -115,16 +115,16 @@ OP_CODE: dict[str, int] = {
 }
 """Mapping from CIGAR characters to operation codes."""
 
-CONSUMES_QRY_ARR: np.typing.NDArray[np.integer] = np.array([M, I, S, EQ, X])
-"""Array of operation codes that consume query bases."""
-
 CONSUMES_REF_ARR: np.typing.NDArray[np.integer] = np.array([M, D, N, EQ, X])
 """Array of operation codes that consume reference bases."""
 
-ADV_REF_ARR: np.typing.NDArray[np.integer] = np.array([M, EQ, X, D])
+CONSUMES_QRY_ARR: np.typing.NDArray[np.integer] = np.array([M, I, S, EQ, X])
+"""Array of operation codes that consume query bases."""
+
+ADV_REF_ARR: np.typing.NDArray[np.integer] = np.array([M, D, EQ, X])
 """Array of operation codes that advance the reference position."""
 
-ADV_QRY_ARR: np.typing.NDArray[np.integer] = np.array([M, EQ, X, I, S, H])
+ADV_QRY_ARR: np.typing.NDArray[np.integer] = np.array([M, I, S, H, EQ, X])
 """Array of operation codes that advance the query position."""
 
 VAR_ARR: np.typing.NDArray[np.integer] = np.array([X, I, D])
