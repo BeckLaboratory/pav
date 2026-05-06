@@ -1,6 +1,6 @@
 """PAV Python library routines."""
 
-__version__ = '3.0.0.dev21'
+__version__ = '3.0.0.dev22'
 
 __all__ = [
     'align',

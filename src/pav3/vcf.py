@@ -126,6 +126,10 @@ INFO_FIELDS = [
     #     'Unique variant ID',
     # ),
     InfoField(
+        'SVTYPE', '.', 'String',
+        'Variant type (e.g. INS, DEL, INV, DUP, CPX) for non-SNV variants',
+    ),
+    InfoField(
         'SVLEN', '.', 'Integer',
         'Variant length',
     ),
@@ -802,6 +806,18 @@ def standard_info_fields(
     #             pl.concat_str(pl.lit('ID='), 'id')
     #         )
     #     )
+
+    if 'vartype' in cols:
+        df = df.with_columns(
+            pl.when(pl.col('vartype') != 'SNV')
+            .then(
+                pl.col('_vcf_info').list.concat(
+                    pl.concat_str(pl.lit('SVTYPE='), 'vartype')
+                )
+            )
+            .otherwise('_vcf_info')
+            .alias('_vcf_info')
+        )
 
     if 'varlen' in cols:
         df = df.with_columns(

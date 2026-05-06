@@ -48,7 +48,10 @@ def _discover_align_tables() -> list[tuple[str, str, Path]]:
 
 _TABLES = _discover_align_tables()
 _PARAMS = (
-    [pytest.param(asm, hap, path, id=f'{asm}-{hap}') for asm, hap, path in _TABLES]
+    [
+        pytest.param(asm, hap, path, id=f'{asm}-{hap}', marks=pytest.mark.sample(asm))
+        for asm, hap, path in _TABLES
+    ]
     if _TABLES
     else [pytest.param('', '', Path(), id='no-test-data')]
 )
