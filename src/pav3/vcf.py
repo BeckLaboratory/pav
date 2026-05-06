@@ -18,14 +18,13 @@ __all__ = [
     'vcf_fields_sym',
     'vcf_fields_snv',
     'gt_column_iterator',
-    'gt_column_hap',
     'standard_info_fields',
     'reformat_vcf_table',
 ]
 
 
 import collections
-from collections.abc import Iterable, Mapping
+from collections.abc import Iterable
 import datetime
 from pathlib import Path
 import threading
@@ -55,6 +54,7 @@ from .const import FILTER_REASON
 # * P: One value for each allele value in GT.
 # * M: One value for each possible base modification.
 
+
 @agglovar.meta.decorators.immutable
 class InfoField:
     name: str = agglovar.meta.descriptors.CheckedString(match=r'[A-Z]([A-Z_]*[A-Z])?')
@@ -74,6 +74,7 @@ class InfoField:
     def __str__(self) -> str:
         return f'##INFO=<ID={self.name},Number={self.number},Type={self.type_},Description="{self.description}">'
 
+
 @agglovar.meta.decorators.immutable
 class FilterField:
     name: str = agglovar.meta.descriptors.CheckedString(match=r'[A-Z]([A-Z_]*[A-Z])?')
@@ -85,6 +86,7 @@ class FilterField:
 
     def __str__(self) -> str:
         return f'##FILTER=<ID={self.name},Description="{self.description}">'
+
 
 @agglovar.meta.decorators.immutable
 class FormatField:
@@ -102,6 +104,7 @@ class FormatField:
     def __str__(self) -> str:
         return f'##FORMAT=<ID={self.name},Number={self.number},Type={self.type_},Description="{self.description}">'
 
+
 @agglovar.meta.decorators.immutable
 class AltField:
     name: str = agglovar.meta.descriptors.CheckedString(match=r'[A-Z]([A-Z:_]*[A-Z])?')
@@ -114,6 +117,7 @@ class AltField:
     def __str__(self) -> str:
         return f'##ALT=<ID={self.name},Description="{self.description}">'
 
+
 VCF_VERSION = '4.5'
 
 INFO_FIELDS = [
@@ -121,6 +125,10 @@ INFO_FIELDS = [
     #     'ID', '1', 'String',
     #     'Unique variant ID',
     # ),
+    InfoField(
+        'SVTYPE', '.', 'String',
+        'Variant type (e.g. INS, DEL, INV, DUP, CPX) for non-SNV variants',
+    ),
     InfoField(
         'SVLEN', '.', 'Integer',
         'Variant length',
@@ -254,6 +262,7 @@ def get_headers(
     )
 
     return headers
+
 
 def init_vcf_fields(
     df: pl.LazyFrame,
@@ -449,7 +458,9 @@ def vcf_fields_seq_insdel(
                 (
                     pl.struct([pl.col('chrom'), pl.col('_ref_base_pos')])
                     .map_elements(
-                        lambda vals: ref_file.fetch(str(vals['chrom']), int(vals['_ref_base_pos']), int(vals['_ref_base_pos'] + 1)),
+                        lambda vals: ref_file.fetch(
+                            str(vals['chrom']), int(vals['_ref_base_pos']), int(vals['_ref_base_pos'] + 1)
+                        ),
                         return_dtype=pl.String
                     )
                     .cast(pl.String)
@@ -673,7 +684,7 @@ def gt_column_iterator(
         if isinstance(df_callable, pl.DataFrame):
             df_callable[(asm_name, hap)] = df_callable.lazy()
 
-    for asm_name, hap_list in hap_dict.items():
+    for asm_name in hap_dict.keys():
         yield asm_name, gt_column_asm(
             df,
             asm_name=asm_name,
@@ -795,6 +806,18 @@ def standard_info_fields(
     #             pl.concat_str(pl.lit('ID='), 'id')
     #         )
     #     )
+
+    if 'vartype' in cols:
+        df = df.with_columns(
+            pl.when(pl.col('vartype') != 'SNV')
+            .then(
+                pl.col('_vcf_info').list.concat(
+                    pl.concat_str(pl.lit('SVTYPE='), 'vartype')
+                )
+            )
+            .otherwise('_vcf_info')
+            .alias('_vcf_info')
+        )
 
     if 'varlen' in cols:
         df = df.with_columns(
@@ -1007,19 +1030,22 @@ def standard_info_fields(
 
 def reformat_vcf_table(
     df: pl.LazyFrame,
-    sample_columns: Optional[Mapping[int, str]] = None,
+    sample_col_prefix: str = '_vcf_sample_'
 ) -> pl.LazyFrame:
     """Reformat VCF table to VCF format."""
+    schema = df.collect_schema()
+
+    strip_len = len(sample_col_prefix)
 
     sample_col_exprs = [
         (
-            pl.col(f'_vcf_sample_{i}')
+            pl.col(sample_col)
             .list.eval(  # Replacing semicolons should not be needed, but don't break VCFs if they are present
                 pl.element().str.replace_all(';', ':')
             )
-        ).list.join(';').alias(sample)
-        for i, sample in sample_columns.items()
-    ] if sample_columns is not None else []
+        ).list.join(';').alias(sample_col[strip_len:])
+        for sample_col in schema.keys() if sample_col.startswith(sample_col_prefix)
+    ]
 
     return (
         df

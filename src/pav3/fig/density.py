@@ -4,17 +4,15 @@ Uses density models to compare the density of k-mers in the query and reference 
 for visualizing intra-alignment INV and alignment-independent visualization of variant regions.
 """
 
-"""Inversion figures."""
-
-__all__ = [
-    'kde_density_base',
-]
-
 import numpy as np
 import polars as pl
 
 from ..region import Region
 from .. import util
+
+__all__ = [
+    'kde_density_base',
+]
 
 
 def kde_density_base(

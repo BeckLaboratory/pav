@@ -17,4 +17,3 @@ from ._subcommand_call import subcommand_call
 from ._subcommand_batch import subcommand_batch
 
 from ._subcommand_license import subcommand_license
-

@@ -134,9 +134,6 @@ class VarRegionKde:
             if df_kde_noexp.shape[0] > 0:
                 df_rl_sv = rl_encoder(df_kde_noexp)
 
-                # Number of k-mers not dropped by KDE (found in both query and ref in either orientation)
-                kmer_n_kde = df_rl_sv['len_kde'].sum()
-
                 kde_len_rl = df_rl_sv.select(pl.col('len_kde').sum()).item()
 
                 prop_fwd, prop_fwdrev, prop_rev = (

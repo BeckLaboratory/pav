@@ -122,7 +122,7 @@ rule align_tables:
 
         # Trim-none: Read alignments as a BED file.
         df_none = pav3.align.tables.sam_to_align_table(
-            sam_filename=input.sam,
+            sam_path=Path(input.sam),
             df_qry_fai=df_qry_fai,
             score_model=score_model,
             lc_model=lc_model,

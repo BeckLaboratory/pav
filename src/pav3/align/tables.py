@@ -4,6 +4,8 @@ __all__ = [
     'ALIGN_TABLE_SORT_ORDER',
     'NAMED_COORD_COLS',
     'DEPTH_SCHEMA',
+    'align_to_seq_ops',
+    'seq_to_align_ops',
     'sam_to_align_table',
     'align_depth_table',
     'align_depth_filter',
@@ -15,13 +17,16 @@ __all__ = [
 
 import logging
 import numpy as np
-import os
+from pathlib import Path
 import polars as pl
+import pysam
 from typing import Iterable, Optional
 
 from .. import schema
 
 from ..io import SamStreamer
+from ..region import Region
+from ..seq import region_seq_fasta
 
 from . import op
 
@@ -55,15 +60,115 @@ DEPTH_SCHEMA = {
 """Schema for alignment depth tables."""
 
 
+def align_to_seq_ops(
+        op_arr: np.ndarray,
+        qry_seq: str,
+        ref_seq: str
+) -> np.ndarray:
+    """Expand alignment match ("M") operations into sequence match ("=") and mismatch ("X") operations.
+
+    Walks the operation array and, for each alignment match operation, compares the corresponding
+    query and reference bases to produce runs of identical bases ("=") and differing bases ("X").
+    All other operations are passed through unchanged.
+
+    :param op_arr: Operation array (N x 2 int), first column is the operation code and second is
+        the operation length.
+    :param qry_seq: Query sequence from the SAM record (field 10, 0-based index 9).
+    :param ref_seq: Reference sequence for the aligned region, starting at the first aligned
+        reference base.
+
+    :returns: Operation array with all "M" operations replaced by runs of "=" and "X". Has the
+        same dtype as op_arr.
+
+    :raises ValueError: If qry_seq or ref_seq is missing (equal to "*").
+    """
+    if qry_seq == '*':
+        raise ValueError('Cannot expand "M" operations: query sequence is missing ("*")')
+
+    if ref_seq == '*':
+        raise ValueError('Cannot expand "M" operations: reference sequence is missing ("*")')
+
+    qry_arr = np.frombuffer(qry_seq.upper().encode('ascii'), dtype=np.uint8)
+    ref_arr = np.frombuffer(ref_seq.upper().encode('ascii'), dtype=np.uint8)
+
+    consumes_ref = set(op.CONSUMES_REF_ARR.tolist())
+    consumes_qry = set(op.CONSUMES_QRY_ARR.tolist())
+
+    result = []
+    ref_pos = 0
+    qry_pos = 0
+
+    for op_code, op_len in op_arr:
+        if op_code == op.M:
+            match = qry_arr[qry_pos:qry_pos + op_len] == ref_arr[ref_pos:ref_pos + op_len]
+
+            # Run-length encode: prepending the opposite of match[0] guarantees a boundary at index 0
+            boundaries = np.flatnonzero(np.diff(match, prepend=~match[0]))
+            lengths = np.diff(np.append(boundaries, op_len))
+
+            for start, length in zip(boundaries, lengths):
+                result.append((op.EQ if match[start] else op.X, int(length)))
+
+            ref_pos += op_len
+            qry_pos += op_len
+        else:
+            result.append((int(op_code), int(op_len)))
+
+            if op_code in consumes_ref:
+                ref_pos += op_len
+
+            if op_code in consumes_qry:
+                qry_pos += op_len
+
+    return np.array(result, dtype=op_arr.dtype) if result else np.empty((0, 2), dtype=op_arr.dtype)
+
+
+def seq_to_align_ops(
+        op_arr: np.ndarray
+) -> np.ndarray:
+    """Collapse runs of sequence match ("="), alignment match ("M"), and mismatch ("X") into a single "M" operation.
+
+    Consecutive alignment operations ("=", "M", "X") are summed and emitted as one "M" operation.
+    Non-alignment operations are passed through individually. This is the inverse transform of
+    align_to_seq_ops and is useful for testing.
+
+    :param op_arr: Operation array (N x 2 int), first column is the operation code and second is
+        the operation length.
+
+    :returns: Operation array with consecutive "=", "M", and "X" runs collapsed into "M". Has the
+        same dtype as op_arr.
+    """
+    if len(op_arr) == 0:
+        return np.empty((0, 2), dtype=op_arr.dtype)
+
+    is_align = np.isin(op_arr[:, 0], list(op.ALIGN_SET))
+
+    # Find run boundaries where alignment status changes; prepend guarantees a boundary at index 0
+    boundaries = np.flatnonzero(np.diff(is_align, prepend=~is_align[0]))
+    run_lengths = np.diff(np.append(boundaries, len(op_arr)))
+
+    result = []
+
+    for start, run_len in zip(boundaries, run_lengths):
+        if is_align[start]:
+            result.append((op.M, int(op_arr[start:start + run_len, 1].sum())))
+        else:
+            for i in range(start, start + run_len):
+                result.append((int(op_arr[i, 0]), int(op_arr[i, 1])))
+
+    return np.array(result, dtype=op_arr.dtype)
+
+
 def sam_to_align_table(
-        sam_filename: str,
+        sam_path: str | Path,
         df_qry_fai: pl.DataFrame,
         min_mapq: int = 0,
         score_model: Optional[ScoreModel | str] = None,
         lc_model: Optional[LCAlignModel] = None,
         align_features: Optional[Iterable[str] | str] = 'align',
         flag_filter: int = 0x700,
-        ref_fa_filename: Optional[str] = None
+        ref_fa_filename: Optional[str] = None,
+        qry_fa_filename: Optional[str] = None,
 ) -> pl.DataFrame:
     """Read alignment records from a SAM file.
 
@@ -71,7 +176,7 @@ def sam_to_align_table(
     string can exceed this limit (https://github.com/samtools/samtools/issues/1667) and causing PAV to crash with an
     error message starting with "CIGAR length too long at position".
 
-    :param sam_filename: File to read.
+    :param sam_path: File to read.
     :param df_qry_fai: Pandas Series with query names as keys and query lengths as values.
     :param min_mapq: Minimum MAPQ score for alignment record.
     :param score_model: Score model to use.
@@ -81,6 +186,8 @@ def sam_to_align_table(
         tables, "all" is all known features). If None, use "align_table".
     :param flag_filter: Filter alignments matching these flags.
     :param ref_fa_filename: Reference FASTA filename.
+    :param qry_fa_filename: Query FASTA filename. Required if "M" alignment operations are present and sequence fields
+        are missing.
 
     :returns: Table of alignment records.
 
@@ -119,7 +226,7 @@ def sam_to_align_table(
         'align_ops',
     ]
 
-    if not os.path.isfile(sam_filename) or os.stat(sam_filename).st_size == 0:
+    if not sam_path.is_file() or sam_path.stat().st_size == 0:
         raise FileNotFoundError('SAM file is empty or missing')
 
     # Get records from SAM
@@ -128,7 +235,9 @@ def sam_to_align_table(
     align_index = -1
     line_number = 0
 
-    with SamStreamer(sam_filename, ref_fa=ref_fa_filename) as in_file:
+    ref_fasta = pysam.FastaFile(ref_fa_filename) if ref_fa_filename is not None else None
+
+    with SamStreamer(str(sam_path), ref_fa=ref_fa_filename) as in_file:
         for line in in_file:
             line_number += 1
 
@@ -173,15 +282,53 @@ def sam_to_align_table(
                     continue
 
                 # Get alignment operations
+                op_arr = op.cigar_to_arr(tok[5])
+
+                # Move alignment match "M" to sequence match/mismatch "EQ" and "X".
+                if np.any(op_arr[:, 0] == op.M):
+                    if ref_fasta is None:
+                        raise ValueError('Found "M" alignment operations but ref_fa_filename was not provided')
+
+                    ref_len_m = int(np.sum(op_arr[np.isin(op_arr[:, 0], op.CONSUMES_REF_ARR), 1]))
+                    ref_seq_m = ref_fasta.fetch(tok[2].strip(), pos_ref, pos_ref + ref_len_m)
+
+                    qry_seq_m = tok[9]
+
+                    if qry_seq_m == '*':
+                        if qry_fa_filename is None:
+                            raise ValueError(
+                                'Found "M" alignment operations with missing query sequence (SEQ is "*") '
+                                'but qry_fa_filename was not provided'
+                            )
+
+                        qry_hard_offset = (
+                            int(op_arr[-1, 1]) if (is_rev and op_arr[-1, 0] == op.H)
+                            else int(op_arr[0, 1]) if op_arr[0, 0] == op.H
+                            else 0
+                        )
+
+                        qry_len_m = int(np.sum(op_arr[np.isin(op_arr[:, 0], op.CONSUMES_QRY_ARR), 1]))
+
+                        qry_seq_m = region_seq_fasta(
+                            Region(
+                                chrom=tok[0].strip(),
+                                pos=qry_hard_offset,
+                                end=qry_hard_offset + qry_len_m,
+                                is_rev=is_rev
+                            ),
+                            qry_fa_filename
+                        )
+
+                    op_arr = align_to_seq_ops(op_arr, qry_seq_m, ref_seq_m)
+
+                # Normalize to hard-clipping
                 try:
-                    op_arr = op.normalize_clipping(op.cigar_to_arr(tok[5]))
+                    op_arr = op.normalize_clipping(op_arr)
                 except ValueError as e:
                     logger.warning(f'Failed to normalize alignment operations: {e}')
                     continue
 
-                if np.any(op_arr[:, 0] * op.M):
-                    raise ValueError('PAV does not allow match alignment operations (op "M", requires "=" and "X")')
-
+                # Get lengths and query position
                 len_qry = np.sum(op_arr[np.isin(op_arr[:, 0], op.CONSUMES_QRY_ARR), 1])
                 len_ref = np.sum(op_arr[np.isin(op_arr[:, 0], op.CONSUMES_REF_ARR), 1])
 
@@ -227,6 +374,9 @@ def sam_to_align_table(
             except Exception as e:
                 raise ValueError('Failed to parse record at line {}: {}'.format(line_number, str(e))) from e
 
+    if ref_fasta is not None:
+        ref_fasta.close()
+
     # Merge records
     df = pl.DataFrame(record_list, orient='row', schema=schema.ALIGN)
 
@@ -243,7 +393,7 @@ def sam_to_align_table(
     filter_loc = lc_model(
         df,
         existing_score_model=score_model,
-        df_qry_fai=df_qry_fai
+        df_qry_fai=df_qry_fai,
     )
 
     df = (

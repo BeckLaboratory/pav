@@ -44,7 +44,7 @@ Controls how strong anchoring alignments need to be to support large alignment-t
 calculated on the number of query bases between the anchors and multiplied by this factor, and if the magnitude of the
 penalty exceeds the magnitude of the anchor score, the two alignments are not allowed to anchor a variant. A number
 less than 1.0 will allow smaller anchors to support larger variants, and a number greater than 1.0 will require stronger
-anchors. 
+anchors.
 """
 
 

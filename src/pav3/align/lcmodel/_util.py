@@ -24,31 +24,31 @@ from ._lcmodel_null import LCAlignModelNull
 LC_MODEL_RESOURCE = 'pav3.data.lcmodel'
 """Resource directory where built-in LC models are kept in the package."""
 
+
 def get_model(
-        model_name: Optional[str] = None,
+        model_name: Optional[str] = 'default',
 ) -> LCAlignModel | None:
-    """Load model from path used to tag low-confidence (LC) alignments.
+    """Load a model used to tag low-confidence (LC) alignments.
 
-    If lc_model_path is None, an empty string, or keyword "none" (not case sensitive), a null model is used that does
-    not tag any alignment records as LC.
+    If `model_name` is None, an empty string, or the keywords "none" or "null" (not case-sensitive), a null model is
+    returned that does not tag any alignment records as LC.
 
-    If lc_model_path is strictly alpha-numeric string, then the pre-trained models in the package data directory are
-    searched first. If the model path contains non-alpha-numeric characters (e.g. '.' or './') or the model is not
-    found in the package's pre-trained models, then this path is searched from the current working directory.
+    If `model_name` is a strictly alpha-numeric string, the pre-trained models bundled in the package data directory
+    are searched first. If `model_name` contains non-alpha-numeric characters (e.g. '.' or './'), or the name is not
+    found among the pre-trained models, it is treated as a filesystem path and searched from the current working
+    directory.
 
-    If a model directory is located, "model.json" is read from it (an error is generated if it does not exist). This
-    file contains at minimum the model type ("type") attribute. The model directory may contain other files read by the
+    Once a model directory is located, "model.json" is read from it (an error is raised if that file is absent). This
+    file must contain at minimum a ``"type"`` attribute. The model directory may contain other files read by the
     specific model type.
 
-    If serach_dir is not None, it is searched first for the model. If it is not found, then
+    :param model_name: Name of a pre-trained model or path to a model directory on the filesystem. If None or 'none'
+        (not case-sensitive), a null model that does not tag any alignment records as low confidence is returned.
 
-    :param model_name: Name of a pre-trained model or path to model directory. If None or 'none' (not case-sensitive),
-        return a null model that does not tag any alignment records as low confidence.
+    :returns: LC alignment model, or None if no model could be located.
 
-    :returns: LC alignment model or None if a model could not be located.
-
-    :raises ValueError: If model path exists but does not contain a model definition file.
-    :raises ValueError: If model definition is invalid or recursive aliases are detected.
+    :raises ValueError: If the model directory exists but does not contain a model definition file.
+    :raises ValueError: If the model definition is invalid or recursive aliases are detected.
     """
     if model_name is None:
         return null_model()
@@ -58,7 +58,7 @@ def get_model(
 
     model_name = model_name.strip()
 
-    if model_name.lower() == 'none' or model_name == '':
+    if model_name.lower().strip() in {'none', 'null', ''}:
         return null_model()
 
     # Locate model and load config
@@ -85,18 +85,22 @@ def locate_model(
 ) -> tuple[str, str, dict[str, Any]] | None:
     """Locate a model by name or path.
 
-    Recursively follow aliases until a model definition is found or no model can be located.
+    Recursively follow aliases until a concrete model definition is found or no model can be located.
 
-    :param model_name: Name of a pre-trained model or path to model directory. If None or 'none' (not case-sensitive),
-        return a null model that does not tag any alignment records as low confidence.
+    :param model_name: Name of a pre-trained model or path to a model directory on the filesystem.
 
-    :returns: A tuple containing two elements (or None if no model is found):
+    :returns: A 3-tuple ``(resource_type, anchor, lc_model_def)`` where:
 
-        1. The model directory (pathlib.Path or importlib.resources.abc.Traversable)
-        2. The model definition (JSON)
+        * ``resource_type`` is ``"package"`` when the model was found inside the installed package, or
+          ``"filesystem"`` when it was found on the filesystem.
+        * ``anchor`` is the dotted package resource name (e.g. ``"pav3.data.lcmodel.default"``) for
+          ``"package"`` resources, or the path string to the model directory for ``"filesystem"`` resources.
+        * ``lc_model_def`` is the parsed contents of ``model.json`` as a dict.
 
-    :raises ValueError: If model path exists but does not contain a model definition file.
-    :raises ValueError: If model definition is invalid or recursive aliases are detected.
+        Returns None if no model can be located.
+
+    :raises ValueError: If the model directory exists but does not contain a model definition file.
+    :raises ValueError: If the model definition is invalid or recursive aliases are detected.
     """
     # Locate a model
     model_name_list = []
@@ -178,10 +182,13 @@ def locate_model(
 def locate_config_package(
         model_name: str
 ) -> Optional[tuple[str, str]]:
-    """Locate a model directory in the PAV package.
+    """Locate a model directory bundled inside the pav3 package.
 
-    :returns: If a model is found, returns a tuple of (resource_type, anchor) where resource_type is "package"
-        and anchor is the model directory's resource name. Returns None if a model directory was not found.
+    :param model_name: Alpha-numeric model name used to construct the dotted package resource path
+        ``pav3.data.lcmodel.<model_name>``.
+
+    :returns: ``("package", anchor)`` where ``anchor`` is the dotted resource name
+        (e.g. ``"pav3.data.lcmodel.default"``), or None if the model resource was not found.
     """
 
     if not re.search(r'^\w+$', model_name):
@@ -197,7 +204,7 @@ def locate_config_package(
     if not model_dir.is_dir():
         raise ValueError(f'LC align model directory resource exists but is not a directory: {model_dir}')
 
-    if not importlib.resources.is_resource(model_resource, 'model.json'):
+    if not (importlib.resources.files(model_resource) / 'model.json').is_file():
         raise ValueError(f'Missing "model.json" in LC align model resource: {model_resource}')
 
     return 'package', model_resource
@@ -230,4 +237,4 @@ def locate_config_filesystem(
 
 def null_model() -> LCAlignModelNull:
     """Get a null model."""
-    return LCAlignModelNull(None, None)
+    return LCAlignModelNull(None, None, None)

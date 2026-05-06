@@ -276,7 +276,8 @@ def find_optimal_svs(
                         df_seg,
                         caller_resources.score_model,
                     )
-                    + caller_resources.score_model.template_switch(df_seg.height - 1)  # Per segment transition (segments + 1, - 2 anchors)
+                    + caller_resources.score_model.template_switch(df_seg.height - 1)
+                    # Per segment transition (segments + 1, - 2 anchors)
                 )
 
                 if (start_index, end_index) in chain_set:

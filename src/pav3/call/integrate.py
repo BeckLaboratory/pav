@@ -10,6 +10,7 @@ import polars as pl
 from .expr import id_snv, id_nonsnv
 from .. import schema
 
+
 def set_base_cols(
         df: pl.LazyFrame,
         sourcetype: str,
@@ -32,6 +33,7 @@ def set_base_cols(
     )
 
     return df
+
 
 def read_trim_table(
     df_align_none: pl.LazyFrame,
@@ -172,18 +174,18 @@ def id_and_version(
 
     existing_ids = [  # To lazy
         (df_existing.lazy() if isinstance(df_existing, pl.DataFrame) else df_existing)
-            for df_existing in existing_ids
+        for df_existing in existing_ids
     ]
 
     existing_ids = [  # Drop if no ID column
         df_existing.select(pl.col('id').cast(schema.VARIANT['id'])) for df_existing in existing_ids
-            if 'id' in df_existing.collect_schema().names()
+        if 'id' in df_existing.collect_schema().names()
     ]
 
     df_existing = (
         (
             pl.concat(existing_ids)
-                if existing_ids else pl.LazyFrame([], schema={'id': schema.VARIANT['id']})
+            if existing_ids else pl.LazyFrame([], schema={'id': schema.VARIANT['id']})
         )
         .filter(
             pl.col('id').is_not_null()
@@ -306,7 +308,6 @@ def add_cpx_derived(
         )
     )
 
-
     # Anchor DEL/DUP
     df_a = (
         df_base
@@ -413,7 +414,6 @@ def add_cpx_derived(
         df_derived_inv
         .with_columns(id_nonsnv().alias('id'))
     )
-
 
     # collect_list['insdel'].append(
     #     id_and_version(

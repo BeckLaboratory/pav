@@ -24,11 +24,7 @@ from ..anno import perfect_homology
 from ..region import Region
 from ..inv import get_inv_qry_regions
 
-from .interval import (
-    AnchoredInterval,
-    gap_sum_score,
-    unaligned_switch_sum_score,
-)
+from .interval import AnchoredInterval
 from .resources import CallerResources
 from .region_kde import VarRegionKde
 from .struct import get_ref_trace, smooth_ref_trace, qry_trace_str, ref_trace_str
@@ -507,7 +503,6 @@ class Variant(ABC):
             _.as_dict() for _ in sorted(dup_regions)
         ])
 
-
     #
     # To be overridden
     #
@@ -535,7 +530,6 @@ class InsertionVariant(Variant):
     # Qry: --->--------->---------->--------->--------->
     #    :                                    --------->-------->--------->--------->-----
     # Ref: --------------------------------------------------------------------------------
-
 
     def __init__(
             self,
@@ -809,7 +803,6 @@ class InversionVariant(Variant):
                     + caller_resources.score_model.template_switch() * 2
                 )
 
-
         # Try call by KDE
         if self.region_ref_outer is None:
 
@@ -850,8 +843,13 @@ class InversionVariant(Variant):
                 # Found inversion by KDE
 
                 # Lift to reference
-                self.region_ref = caller_resources.align_lift.region_to_ref(self.region_qry, same_align=True)
-                self.region_ref_outer = caller_resources.align_lift.region_to_ref(self.region_qry_outer, same_align=True)
+                self.region_ref = caller_resources.align_lift.region_to_ref(
+                    self.region_qry, same_align=True
+                )
+
+                self.region_ref_outer = caller_resources.align_lift.region_to_ref(
+                    self.region_qry_outer, same_align=True
+                )
 
                 if self.region_ref is None:
                     # Lift failed on inner coordinates - breakpoints at the edge of an alignment record
@@ -906,7 +904,6 @@ class ComplexVariant(Variant):
 
         # Set base properties
         len_dup = interval.len_outer_dup
-        len_del = interval.len_outer_del
 
         self.vartype = 'CPX'
         self.region_ref = interval.region_ref
@@ -916,11 +913,6 @@ class ComplexVariant(Variant):
         # Pre-score and check
         score_model = self.caller_resources.score_model
         ts = score_model.template_switch()
-
-        ts_score = sum([
-            min([score_model.gap(_), ts])
-            for _ in interval.seg_len_unaligned_or_outer
-        ])
 
         n_features = (
             # Aligned segments

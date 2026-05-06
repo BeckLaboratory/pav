@@ -1,24 +1,29 @@
 """Table schemas."""
 
+from typing import (
+    overload,
+    Union,
+)
+
+import polars as pl
+
+import agglovar
+
+PolarsDataType = Union[pl.DataType, type[pl.DataType]]
+
 __all__ = [
     'ALIGN',
     'VARIANT',
     'cast',
 ]
 
-from typing import overload
 
-import polars as pl
-
-import agglovar
-
-
-ALIGN: dict[str, pl.DataType] = {
-    'chrom': pl.String,
-    'pos': pl.Int64,
-    'end': pl.Int64,
+ALIGN: dict[str, PolarsDataType] = {
+    'chrom': agglovar.schema.VARIANT['chrom'],
+    'pos': agglovar.schema.VARIANT['pos'],
+    'end': agglovar.schema.VARIANT['end'],
     'align_index': pl.Int32,
-    'filter': pl.List(pl.String),
+    'filter': agglovar.schema.VARIANT['filter'],
     'qry_id': pl.String,
     'qry_pos': pl.Int64,
     'qry_end': pl.Int64,
@@ -34,7 +39,7 @@ ALIGN: dict[str, pl.DataType] = {
 }
 """Schema of alignment tables excluding features (added by ailgn.feature)."""
 
-VARIANT: dict[str, pl.DataType] = {
+VARIANT: dict[str, PolarsDataType] = {
     'chrom': agglovar.schema.VARIANT['chrom'],
     'pos': agglovar.schema.VARIANT['pos'],
     'end': agglovar.schema.VARIANT['end'],
@@ -164,25 +169,28 @@ Fields:
     * seq: Variant sequence in reference orientation. Null if not defined (never "*" or other placeholders).
 """
 
+
 @overload
 def cast(
     df: pl.DataFrame,
-    schema: dict[str, pl.DataType],
+    schema: dict[str, PolarsDataType],
     do_sort: bool = True,
 ) -> pl.DataFrame:
     ...
 
+
 @overload
 def cast(
     df: pl.LazyFrame,
-    schema: dict[str, pl.DataType],
+    schema: dict[str, PolarsDataType],
     do_sort: bool = True,
 ) -> pl.LazyFrame:
     ...
 
+
 def cast(
     df: pl.DataFrame | pl.LazyFrame,
-    schema: dict[str, pl.DataType],
+    schema: dict[str, PolarsDataType],
     do_sort: bool = True,
 ) -> pl.DataFrame | pl.LazyFrame:
     """

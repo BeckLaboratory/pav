@@ -76,7 +76,7 @@ def try_intra_region(
     min_qry_ref_prop = pav_params.inv_min_qry_ref_prop
 
     # Stop if no inverted sequence was found
-    #if df_rl is None or not df_rl.select((pl.col('state') == 2).any()).item():
+    # if df_rl is None or not df_rl.select((pl.col('state') == 2).any()).item():
     if region_qry_inner is None or region_qry_outer is None:
         log_file.write(f'Intra-align inversion region {region_flag}: No inverted states found\n')
         log_file.flush()
@@ -233,7 +233,10 @@ def get_inv_qry_regions(
 
         # Max region size
         if region_limit is not None and 0 < region_limit < len(region_ref):
-            log_file.write(f'Intra-align inversion region {region_flag}: Reach region size limit ({region_limit}): {region_ref}\n')
+            log_file.write(
+                f'Intra-align inversion region {region_flag}: '
+                f'Reach region size limit ({region_limit}): {region_ref}\n'
+            )
             break
 
         # Get query region
@@ -259,7 +262,10 @@ def get_inv_qry_regions(
 
         if df_kde is None:
             # No matching k-mers, ref & query are too divergent, not likely an inversion
-            log_file.write(f'Intra-align inversion region {region_flag}: No matching k-mers (likely divergent region): {region_ref}\n')
+            log_file.write(
+                f'Intra-align inversion region {region_flag}: '
+                f'No matching k-mers (likely divergent region): {region_ref}\n'
+            )
             break
 
         if df_kde.shape[0] < min_kmers:
@@ -308,7 +314,6 @@ def get_inv_qry_regions(
                 return region_qry_inner, region_qry_outer
 
     return None, None
-
 
 
 def get_inv_row(
@@ -947,7 +952,7 @@ def cluster_table_sig(
     )
 
 
-def  kde_to_inv(
+def kde_to_inv(
         df_kde: pl.DataFrame,
 ) -> pl.DataFrame:
     """Create a table describing an inversion using a hidden Markov model (HMM) to set inversion
@@ -991,12 +996,12 @@ def  kde_to_inv(
     a_trans = np.array(
         [
             # 0   1   2   3   4   5
-            [ 0.95, 0.04, 0.00, 0.00, 0.00, 0.01, ],  # 0: Left Ref
-            [ 0.00, 0.95, 0.05, 0.00, 0.00, 0.00, ],  # 1: Left Invdup
-            [ 0.00, 0.00, 0.95, 0.05, 0.00, 0.00, ],  # 2: Inv
-            [ 0.00, 0.00, 0.00, 0.95, 0.05, 0.00, ],  # 3: Right Invdup
-            [ 0.00, 0.00, 0.00, 0.00, 1.00, 0.00, ],  # 4: Right Ref
-            [ 0.00, 0.00, 0.00, 0.00, 0.05, 0.95, ],  # 5: Inv - no invdup
+            [0.95, 0.04, 0.00, 0.00, 0.00, 0.01, ],  # 0: Left Ref
+            [0.00, 0.95, 0.05, 0.00, 0.00, 0.00, ],  # 1: Left Invdup
+            [0.00, 0.00, 0.95, 0.05, 0.00, 0.00, ],  # 2: Inv
+            [0.00, 0.00, 0.00, 0.95, 0.05, 0.00, ],  # 3: Right Invdup
+            [0.00, 0.00, 0.00, 0.00, 1.00, 0.00, ],  # 4: Right Ref
+            [0.00, 0.00, 0.00, 0.00, 0.05, 0.95, ],  # 5: Inv - no invdup
         ]
     )
 
@@ -1004,12 +1009,12 @@ def  kde_to_inv(
 
     a_emission = np.array(
         [
-            [ 0.90, 0.05, 0.05 ],  # 0: Left Ref
-            [ 0.05, 0.90, 0.05 ],  # 1: Left Invdup
-            [ 0.05, 0.05, 0.90 ],  # 2: Inv
-            [ 0.05, 0.90, 0.05 ],  # 3: Right Invdup
-            [ 0.90, 0.05, 0.05 ],  # 4: Right Ref
-            [ 0.05, 0.05, 0.90 ],  # 5: Inv - no invdup
+            [0.90, 0.05, 0.05],  # 0: Left Ref
+            [0.05, 0.90, 0.05],  # 1: Left Invdup
+            [0.05, 0.05, 0.90],  # 2: Inv
+            [0.05, 0.90, 0.05],  # 3: Right Invdup
+            [0.90, 0.05, 0.05],  # 4: Right Ref
+            [0.05, 0.05, 0.90],  # 5: Inv - no invdup
         ]
     )
 

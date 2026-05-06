@@ -12,6 +12,7 @@ from ._subcommand_call import _add_subparser_call, subcommand_call
 from ._subcommand_batch import _add_subparser_batch, subcommand_batch
 from ._common_opt import _add_opt_version
 
+
 def parse_arguments(
         argv: Optional[list[Any]] = None
 ):
@@ -26,7 +27,10 @@ def parse_arguments(
     parser = argparse.ArgumentParser(
         prog='pav3',
         description='PAV assembly-based variant caller',
-        epilog=f'The PAV subcommand must be first followed by options and arguments. Use subcommand "call" to call variants.',
+        epilog=(
+            'The PAV subcommand must be first followed by options and arguments. '
+            'Use subcommand "call" to call variants.'
+        ),
     )
 
     _add_opt_version(parser)
@@ -69,7 +73,7 @@ def main(
         return subcommand_call(
             **{
                 attr: getattr(args, attr)
-                    for attr in list(inspect.signature(subcommand_call).parameters.keys())
+                for attr in list(inspect.signature(subcommand_call).parameters.keys())
             }
         )
 
@@ -77,7 +81,7 @@ def main(
         return subcommand_batch(
             **{
                 attr: getattr(args, attr)
-                    for attr in list(inspect.signature(subcommand_batch).parameters.keys())
+                for attr in list(inspect.signature(subcommand_batch).parameters.keys())
             }
         )
 
@@ -85,7 +89,7 @@ def main(
         return subcommand_license(
             **{
                 attr: getattr(args, attr)
-                    for attr in list(inspect.signature(subcommand_license).parameters.keys())
+                for attr in list(inspect.signature(subcommand_license).parameters.keys())
             }
         )
     else:

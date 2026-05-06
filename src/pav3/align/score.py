@@ -242,7 +242,9 @@ class AffineScoreModel(ScoreModel):
 
         if isinstance(score_template_switch, tuple):
             if len(score_template_switch) != 2:
-                raise ValueError(f'Template switch score tuple must be 2 elements (multiplier, gap size): {score_template_switch}')
+                raise ValueError(
+                    f'Template switch score tuple must be 2 elements (multiplier, gap size): {score_template_switch}'
+                )
 
             self.score_template_switch = (
                 abs(float(score_template_switch[0]))
@@ -351,7 +353,8 @@ class AffineScoreModel(ScoreModel):
         return (
             np.sum(op_arr[:, 1] * (op_arr[:, 0] == op.EQ) * self.score_match)
             + np.sum(op_arr[:, 1] * (op_arr[:, 0] == op.X) * self.score_mismatch)
-            + np.nan_to_num(gap_score[:, 0], neginf=0.0).sum()  # If no gap penalties (i.e. mismatch model), then gap_score is -inf (set to 0.0)
+            + np.nan_to_num(gap_score[:, 0], neginf=0.0).sum()
+            # If no gap penalties (i.e. mismatch model), then gap_score is -inf (set to 0.0)
         )
 
     def model_param_string(self) -> str:
@@ -541,9 +544,7 @@ def get_affine_by_params(param_string: str) -> AffineScoreModel:
             except ValueError as e:
                 raise ValueError(f'Invalid numeric value for parameter "{key}": {val}') from e
 
-
         params[param_name] = val
-
 
     # Return alignment object
     return AffineScoreModel(

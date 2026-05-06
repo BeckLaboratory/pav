@@ -16,6 +16,7 @@ from ._common_opt import (
 
 logger = logging.getLogger(__name__)
 
+
 def subcommand_batch(
         targets: Optional[list[str]],
         config: Optional[str],
@@ -67,7 +68,7 @@ def subcommand_batch(
     ]
 
     if cores:
-        snake_args.extend([f'--cores', str(cores)])
+        snake_args.extend(['--cores', str(cores)])
 
     if profile:
         snake_args.extend(['--profile', profile])
@@ -99,7 +100,7 @@ def subcommand_batch(
         + targets
         + (
             ['--config'] + config_params
-                if config_params else []
+            if config_params else []
         )
     )
 
@@ -123,7 +124,7 @@ def _add_subparser_batch(
 
     parser_batch = subparsers.add_parser(
         'batch',
-        description=f'Call variants on all assemblies in an assembly table.',
+        description='Call variants on all assemblies in an assembly table.',
         help='Call variants from assembly table.'
     )
 
@@ -178,8 +179,10 @@ def _add_subparser_batch(
         'targets',
         type=str,
         nargs='*',
-        help='Run PAV targets. Can include specific file names to generate or aggregation rule names. Runs all samples by default.',
+        help=(
+            'Run PAV targets. Can include specific file names to generate or aggregation rule names. '
+            'Runs all samples by default.'
+        ),
     )
-
 
     return parser_batch

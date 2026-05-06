@@ -14,18 +14,19 @@ in a separate module in PAV (see :mod:`pav3.lgsv`).
 
 __all__ = [
     'CALL_SOURCE',
+    'DEFAULT_BATCH_SIZE',
     'variant_tables_snv_insdel',
     'variant_tables_inv',
     'variant_flag_inv'
 ]
 
 import agglovar
-import os
 from pathlib import Path
 from typing import Optional
 
 import Bio.Seq
 import Bio.SeqIO
+import numpy as np
 import polars as pl
 
 from .. import schema
@@ -33,8 +34,9 @@ from .. import schema
 from ..align import op
 
 from ..align.lift import AlignLift
-from ..align.score import ScoreModel, get_score_model
+from ..align.score import get_score_model
 from ..inv import cluster_table, get_inv_row, try_intra_region
+from ..io import NullContext, TempDirContainer
 from ..kde import KdeTruncNorm
 from ..region import Region
 from ..params import PavParams
@@ -48,43 +50,46 @@ from .util import COMPL_TR_FROM, COMPL_TR_TO
 CALL_SOURCE: str = 'INTRA'
 """Variant call source column value."""
 
+DEFAULT_BATCH_SIZE: int = 5_000_000
+"""Default batch size for variant table accumulation."""
+
 
 def variant_tables_snv_insdel(
         df_align: pl.DataFrame | pl.LazyFrame,
         ref_fa_filename: str,
         qry_fa_filename: str,
+        batch: int | bool = False,
+        sink_snv: Optional[Path | str] = None,
+        sink_insdel: Optional[Path | str] = None,
         temp_dir_name: Optional[str] = None,
         pav_params: Optional[PavParams] = None,
-) -> tuple[pl.LazyFrame, pl.LazyFrame]:
+) -> Optional[tuple[pl.DataFrame, pl.DataFrame]]:
     """Call variants from alignment operations.
 
     Calls variants in two separate tables, SNVs in the first, and INS/DEL (including indel and SV) in the second.
 
-    Each chromosome is processed separately. If a temporary directory is defined, then the three variant call tables
-    for each chromosome is written to the temporary directory location (N files = 3 * M chromosomes). For divergent
-    species (e.g. diverse mouse species or nonhuman primates vs a human reference), this can reduce memory usage. If
-    a temporary directory is not defined, then the tables are held in memory.
+    Each chromosome is processed separately. Per-chromosome results are sorted and either held in memory or written
+    to a temporary parquet file (when `batch` is set). The final tables concatenate per-chromosome results in
+    chromosome sort order.
 
-    The temporary tables (in memory or on disk) are sorted by all fields except "chrom" (see below), so a sorted
-    table is achieved by concatenating the temporary tables in chromosomal order. Temporary tables on disk are
-    parquet files so they can be concatenated without excessive memory demands.
+    If `sink_snv` and `sink_insdel` are provided, the function writes output to those paths and returns None.
+    This is required when `batch` is set, because temporary files expire when the function returns.
 
-    The LazyFrames returned by this function are constructed by concatenating the temporary tables in chromosomal
-    order. To write directly to disk, sink these LazyFrames to a final table. To create an in-memory table, collect
-    them.
-
-    Variant sort order is chromosome (chrom), position (pos), alternate base (alt, SNVs) or end position (end, non-SNV),
-    alignment score (highest first, column not retained in variant table), query ID (qry_id), and query position
-    (qry_pos). This ensures variants are sorted in a deterministic way across PAV runs.
+    Variant sort order within each chromosome: position (pos), alternate base (alt, SNVs) or end position
+    (end, non-SNV), alignment score (highest first), query ID (qry_id), and query position (qry_pos).
 
     :param df_align: Assembly alignments before alignment trimming.
     :param ref_fa_filename: Reference FASTA file name.
     :param qry_fa_filename: Assembly FASTA file name.
-    :param temp_dir_name: Temporary directory name for variant tables (one parquet file per chromosome) or None to
-        retain oall variants in memory.
+    :param batch: If True, use the default batch size and write per-chromosome results to temporary parquet files
+        to reduce peak memory. If an integer greater than 0, use that as the batch size threshold. If False or 0,
+        hold all results in memory. `sink_snv` and `sink_insdel` are required when batch is enabled.
+    :param sink_snv: Path to write the final SNV parquet. Required when `batch` is set.
+    :param sink_insdel: Path to write the final INS/DEL parquet. Required when `batch` is set.
+    :param temp_dir_name: Parent directory for temporary files when `batch` is set. Defaults to the system temp dir.
     :param pav_params: PAV parameters.
 
-    :returns: Tuple of three LazyFrames: SNV variants, INS/DEL variants, and INV variants.
+    :returns: Tuple of (df_snv, df_insdel) DataFrames when no sink paths are provided, else None.
     """
     # Params
     if pav_params is None:
@@ -103,262 +108,296 @@ def variant_tables_snv_insdel(
     if not isinstance(df_align, pl.LazyFrame):
         df_align = df_align.lazy()
 
-    chrom_list = df_align.select('chrom').unique().sort('chrom').collect().to_series().to_list()
+    # Batch configuration
+    if batch is True:
+        batch_size = DEFAULT_BATCH_SIZE
+    elif batch is False or int(batch) <= 0:
+        batch_size = 0
+    else:
+        batch_size = int(batch)
 
-    # Temp directory
-    if temp_dir_name is not None and not os.path.isdir(temp_dir_name):
-        raise ValueError(f'Temporary directory does not exist or is not a directory: {temp_dir_name}')
+    if batch_size > 0 and (sink_snv is None or sink_insdel is None):
+        raise RuntimeError('`sink_snv` and `sink_insdel` must be specified when `batch` is set')
 
-    # Create variant tables
+    # Row index for alignment access
     df_align = (
         df_align
         .drop('_index', strict=False)
         .with_row_index('_index')
     )
 
+    # Chromosome list in sorted order (determines output order)
+    chrom_list = (
+        df_align.select('chrom').unique().sort('chrom').collect().to_series().to_list()
+    )
+
+    # Sort orders (include _align_score for tie-breaking; it is dropped before output)
+    sort_order_snv = {
+        'by': ['pos', 'alt', 'var_score', '_align_score', 'qry_id', 'qry_pos'],
+        'descending': [False, False, True, True, False, False],
+    }
+    sort_order_insdel = {
+        'by': ['pos', 'end', '_align_score', 'qry_id', 'qry_pos'],
+        'descending': [False, False, True, False, False],
+    }
+
+    # Helper functions that build the lazy chain for each variant type.
+    # Defined here so a zero-row probe can derive the output schema without hardcoding it.
+    def _snv_chain(df_lazy: pl.LazyFrame, seq_ref, seq_qry, qry_shift: int, is_rev: bool) -> pl.LazyFrame:
+        df_snv = (
+            df_lazy
+            .filter(pl.col('op_code') == op.X)
+            .with_columns(pl.int_ranges(0, pl.col('op_len')).alias('_offset_pos'))
+            .explode('_offset_pos')
+            .with_columns(
+                (pl.col('pos') + pl.col('_offset_pos')).alias('pos'),
+                (
+                    pl.col('qry_pos') + pl.col('_offset_pos')  # Shift within coordinates
+                    + (pl.col('op_len') - 2 * pl.col('_offset_pos') - 1) * qry_shift  # Invert offset on reverse strand
+                ).alias('qry_pos'),
+            )
+            .with_columns(
+                (pl.col('pos') + 1).alias('end'),
+                (pl.col('qry_pos') + 1).alias('qry_end'),
+            )
+            .with_columns(
+                pl.lit('SNV').alias('vartype'),
+                pl.col('pos').map_elements(
+                    lambda pos, seq_ref=seq_ref: seq_ref[pos], return_dtype=pl.String
+                ).alias('ref'),
+                pl.col('qry_pos').map_elements(
+                    lambda pos, seq_qry=seq_qry: seq_qry[pos], return_dtype=pl.String
+                ).alias('alt'),
+            )
+        )
+        if is_rev:
+            df_snv = df_snv.with_columns(
+                pl.col('alt').replace(COMPL_TR_FROM, COMPL_TR_TO).alias('alt'),
+            )
+        return df_snv.select(
+            'chrom', 'pos', 'end',
+            expr_id_snv,
+            'vartype', 'ref', 'alt',
+            'filter',
+            'qry_id', 'qry_pos', 'qry_end',
+            pl.col('is_rev').alias('qry_rev'),
+            pl.lit(CALL_SOURCE).alias('call_source'),
+            pl.lit(varscore_snv).alias('var_score'),
+            'align_source',
+            '_align_score',
+        )
+
+    def _insdel_chain(df_lazy: pl.LazyFrame, get_ins_seq, seq_ref) -> pl.LazyFrame:
+        df_ins = (
+            df_lazy
+            .filter(pl.col('op_code') == op.I)
+            .with_columns(
+                (pl.col('pos') + 1).alias('end'),
+                pl.lit('INS').alias('vartype'),
+                pl.col('op_len').alias('varlen'),
+                pl.struct('qry_pos', 'qry_end').map_elements(get_ins_seq, return_dtype=pl.String).alias('seq'),
+                (
+                    pl.col('op_len')
+                    .map_elements(score_model.gap, return_dtype=pl.Float64)
+                    .cast(pl.Float32)
+                    .alias('var_score')
+                ),
+            )
+        )
+        df_del = (
+            df_lazy
+            .filter(pl.col('op_code') == op.D)
+            .with_columns(
+                (pl.col('qry_pos') + 1).alias('qry_end'),
+                pl.lit('DEL').alias('vartype'),
+                pl.col('op_len').alias('varlen'),
+                pl.struct('pos', 'end').map_elements(
+                    lambda coords, seq_ref=seq_ref: seq_ref[coords['pos']:coords['end']], return_dtype=pl.String
+                ).alias('seq'),
+                (
+                    pl.col('op_len')
+                    .map_elements(score_model.gap, return_dtype=pl.Float64)
+                    .cast(pl.Float32)
+                    .alias('var_score')
+                ),
+            )
+        )
+        return pl.concat([df_ins, df_del]).select(
+            'chrom', 'pos', 'end',
+            expr_id_insdel,
+            'vartype', 'varlen',
+            'filter',
+            'qry_id', 'qry_pos', 'qry_end',
+            pl.col('is_rev').alias('qry_rev'),
+            pl.lit(CALL_SOURCE).alias('call_source'),
+            'var_score',
+            'align_source',
+            'seq',
+            '_align_score',
+        )
+
+    # Run the chains on a zero-row probe DataFrame to derive the correct empty-output schemas.
+    # This ensures that when df_align is empty (or a chromosome has no variants), the returned
+    # DataFrames have exactly the same schema as when variants are present. Any change to the
+    # select() calls inside the chain functions automatically propagates here.
+    _probe = pl.DataFrame({
+        'op_code': pl.Series([], dtype=pl.Int64),
+        'op_len': pl.Series([], dtype=pl.Int64),
+        'chrom': pl.Series([], dtype=pl.String),
+        'pos': pl.Series([], dtype=pl.Int64),
+        'end': pl.Series([], dtype=pl.Int64),
+        'qry_pos': pl.Series([], dtype=pl.Int64),
+        'qry_end': pl.Series([], dtype=pl.Int64),
+        'qry_id': pl.Series([], dtype=pl.String),
+        'is_rev': pl.Series([], dtype=pl.Boolean),
+        'filter': pl.Series([], dtype=pl.List(pl.String)),
+        'align_source': pl.Series([], dtype=pl.List(pl.Int32)),
+        '_align_score': pl.Series([], dtype=pl.Float32),
+    }).lazy()
+
+    _dummy = lambda _: None  # noqa: E731  (placeholder; never called on 0 rows)
+
+    _empty_snv = schema.cast(
+        _snv_chain(_probe, _dummy, _dummy, 0, False).collect(),
+        schema.VARIANT,
+    ).drop('_align_score')
+
+    _empty_insdel = schema.cast(
+        _insdel_chain(_probe, _dummy, _dummy).collect(),
+        schema.VARIANT,
+    ).drop('_align_score')
+
+    # Per-chromosome sorted result frames (LazyFrame, one entry per chromosome)
+    final_snv: list[pl.LazyFrame] = []
+    final_insdel: list[pl.LazyFrame] = []
+
     with (
+        (TempDirContainer(temp_dir_name, prefix='call_intra_') if batch_size > 0 else NullContext()) as temp_dir,
         LRUSequenceCache(ref_fa_filename, 1) as ref_cache,
         LRUSequenceCache(qry_fa_filename, 10) as qry_cache,
     ):
-        chrom_table_list = {'snv': [], 'insdel': []}
-
         for chrom in chrom_list:
             if debug:
                 print(f'Intra-alignment discovery: {chrom}')
 
-            temp_file_name = {
-                'snv': os.path.join(temp_dir_name, f'snv_{chrom}.parquet'),
-                'insdel': os.path.join(temp_dir_name, f'insdel_{chrom}.parquet'),
-            } if temp_dir_name is not None else None
-
             seq_ref = ref_cache[chrom]
 
-            df_chrom_list = {'snv': [], 'insdel': []}
+            # Collect this chromosome's rows once — avoids O(N²) LazyFrame re-execution per alignment
+            df_chrom = (
+                df_align
+                .filter(pl.col('chrom') == chrom)
+                .sort('qry_id')
+                .collect()
+            )
 
-            for index, qry_id, is_rev, pos in (
-                    df_align
-                    .filter(pl.col('chrom') == chrom)
-                    .sort('qry_id')
-                    .select('_index', 'qry_id', 'is_rev', 'pos')
-                    .collect()
-                    .iter_rows()
-            ):
+            chrom_snv: list[pl.DataFrame] = []
+            chrom_insdel: list[pl.DataFrame] = []
+
+            for row in df_chrom.iter_rows(named=True):
+                index = row['_index']
+                qry_id = row['qry_id']
+                is_rev = row['is_rev']
+                pos = row['pos']
+
                 if debug:
                     print(f'* {chrom}: index={index}, qry_id={qry_id}, is_rev={is_rev}, pos={pos}')
 
-                # Query sequence
                 seq_qry = qry_cache[qry_id]
-
                 qry_len = len(seq_qry)
-
                 qry_shift = 1 if is_rev else 0
 
                 if is_rev:
-                    get_ins_seq = lambda coords: str(Bio.Seq.Seq(seq_qry[coords['qry_pos']:coords['qry_end']]).reverse_complement())
-                else:
-                    get_ins_seq = lambda coords: seq_qry[coords['qry_pos']:coords['qry_end']]
-
-                # Get alignment indices
-                df = (
-                    df_align
-                    .filter(pl.col('_index') == index)
-                    .with_columns(
-                        pl.col('align_ops').struct.field('op_code'),
-                        pl.col('align_ops').struct.field('op_len'),
-                    )
-                    .drop('align_ops')
-                    .explode(['op_code', 'op_len'])
-                    .with_columns(
-                        pl.when(pl.col('op_code').is_in(op.ADV_QRY_ARR))
-                        .then(pl.col('op_len'))
-                        .otherwise(0)
-                        .alias('qry_len'),
-                        pl.when(pl.col('op_code').is_in(op.ADV_REF_ARR))
-                        .then(pl.col('op_len'))
-                        .otherwise(0)
-                        .alias('ref_len'),
-                    )
-                    .with_columns(
-                        (pl.col('ref_len').cum_sum() + pos).alias('end'),
-                        (pl.col('qry_len').cum_sum()).alias('qry_end'),
-                    )
-                    .with_columns(
-                        pl.col('end').shift(1, fill_value=pos).alias('pos'),
-                        pl.col('qry_end').shift(1, fill_value=0).alias('qry_pos'),
-                        pl.concat_list('align_index').alias('align_source'),
-                        pl.col('score').alias('_align_score')
-                    )
-                )
-
-                if is_rev:
-                    df = (
-                        df
-                        .with_columns(
-                            (qry_len - (pl.col('qry_end'))).alias('qry_pos'),
-                            (qry_len - pl.col('qry_pos')).alias('qry_end'),
+                    def get_ins_seq(coords, seq_qry=seq_qry):
+                        return str(
+                            Bio.Seq.Seq(seq_qry[coords['qry_pos']:coords['qry_end']]).reverse_complement()
                         )
-                    )
+                else:
+                    def get_ins_seq(coords, seq_qry=seq_qry):
+                        return seq_qry[coords['qry_pos']:coords['qry_end']]
 
-                # Call SNV
-                df_snv = (
-                    df
-                    .filter(pl.col('op_code') == op.X)
+                # Extract ops to numpy and compute per-op reference/query coordinates
+                op_arr = op.row_to_arr(row)
+                n_ops = len(op_arr)
 
-                    # Expand multi-base SNVs (MNVs) to individual SNV calls
-                    .with_columns(
-                        pl.int_ranges(0, pl.col('op_len')).alias('_offset_pos')
-                    )
-                    .explode('_offset_pos')
-                    .with_columns(
-                        (pl.col('pos') + pl.col('_offset_pos')).alias('pos'),
-                        (
-                            pl.col('qry_pos') + pl.col('_offset_pos')  # Shift within coordinates
-                            + (pl.col('op_len') - 2 * pl.col('_offset_pos') - 1) * qry_shift  # If on reverse coordinates, invert coordinates within multi-base mismatch alignments
-                        ).alias('qry_pos'),
-                    )
-                    .with_columns(
-                        (pl.col('pos') + 1).alias('end'),
-                        (pl.col('qry_pos') + 1).alias('qry_end'),
-                    )
+                adv_ref = op_arr[:, 1] * np.isin(op_arr[:, 0], op.ADV_REF_ARR)
+                adv_qry = op_arr[:, 1] * np.isin(op_arr[:, 0], op.ADV_QRY_ARR)
 
-                    # Complete SNV variant table
-                    .with_columns(
-                        pl.lit('SNV').alias('vartype'),
-                        pl.col('pos').map_elements(lambda pos: seq_ref[pos]).alias('ref'),
-                        pl.col('qry_pos').map_elements(lambda pos: seq_qry[pos]).alias('alt'),
-                    )
-                )
+                ref_pos_arr = np.cumsum(adv_ref) - adv_ref + pos
+                qry_pos_arr = np.cumsum(adv_qry) - adv_qry
 
                 if is_rev:
-                    df_snv = df_snv.with_columns(
-                        pl.col('alt').replace(COMPL_TR_FROM, COMPL_TR_TO).alias('alt'),
-                    )
+                    qry_pos_col = qry_len - (qry_pos_arr + adv_qry)
+                    qry_end_col = qry_len - qry_pos_arr
+                else:
+                    qry_pos_col = qry_pos_arr
+                    qry_end_col = qry_pos_arr + adv_qry
 
-                df_snv = (
-                    df_snv
-                    .select(
-                        'chrom', 'pos', 'end',
-                        expr_id_snv,
-                        'vartype',
-                        'ref', 'alt',
-                        'filter',
-                        'qry_id', 'qry_pos', 'qry_end',
-                        pl.col('is_rev').alias('qry_rev'),
-                        pl.lit(CALL_SOURCE).alias('call_source'),
-                        pl.lit(varscore_snv).alias('var_score'),
-                        'align_source',
-                        '_align_score',
-                    )
-                    .with_row_index('_index')
-                )
+                df = pl.DataFrame({
+                    'op_code': op_arr[:, 0],
+                    'op_len': op_arr[:, 1],
+                    'chrom': pl.Series([chrom] * n_ops, dtype=pl.String),
+                    'pos': ref_pos_arr,
+                    'end': ref_pos_arr + adv_ref,
+                    'qry_pos': qry_pos_col,
+                    'qry_end': qry_end_col,
+                    'qry_id': pl.Series([qry_id] * n_ops, dtype=pl.String),
+                    'is_rev': pl.Series([is_rev] * n_ops, dtype=pl.Boolean),
+                    'filter': pl.Series([row['filter']] * n_ops, dtype=pl.List(pl.String)),
+                    'align_source': pl.Series([[row['align_index']]] * n_ops, dtype=pl.List(pl.Int32)),
+                    '_align_score': pl.Series([row['score']] * n_ops, dtype=pl.Float32),
+                }).lazy()
 
-                # Call INS/DEL
-                df_ins = (
-                    df
-                    .filter(pl.col('op_code') == op.I)
-                    .with_columns(
-                        (pl.col('pos') + 1).alias('end'),
-                        pl.lit('INS').alias('vartype'),
-                        pl.col('op_len').alias('varlen'),
-                        (
-                            pl.struct('qry_pos', 'qry_end')
-                            .map_elements(get_ins_seq, return_dtype=pl.String)
-                        ).alias('seq'),
-                        pl.col('op_len').map_elements(score_model.gap).alias('var_score'),
-                    )
-                )
+                df_snv, df_insdel = pl.collect_all([
+                    _snv_chain(df, seq_ref, seq_qry, qry_shift, is_rev),
+                    _insdel_chain(df, get_ins_seq, seq_ref),
+                ])
 
-                df_del = (
-                    df
-                    .filter(pl.col('op_code') == op.D)
-                    .with_columns(
-                        (pl.col('qry_pos') + 1).alias('qry_end'),
-                        pl.lit('DEL').alias('vartype'),
-                        pl.col('op_len').alias('varlen'),
-                        (
-                            pl.struct('pos', 'end')
-                            .map_elements(lambda coords: seq_ref[coords['pos']:coords['end']], return_dtype=pl.String)
-                        ).alias('seq'),
-                        pl.col('op_len').map_elements(score_model.gap).alias('var_score'),
-                    )
-                )
+                chrom_snv.append(df_snv)
+                chrom_insdel.append(df_insdel)
 
-                df_insdel = (
-                    pl.concat([df_ins, df_del])
-                    .sort(
-                        ['pos', 'end', '_align_score', 'qry_id', 'qry_pos'],
-                        descending=[False, False, True, False, False]
-                    )
-                    .select(
-                        'chrom', 'pos', 'end',
-                        expr_id_insdel,
-                        'vartype', 'varlen',
-                        'filter',
-                        'qry_id', 'qry_pos', 'qry_end',
-                        pl.col('is_rev').alias('qry_rev'),
-                        pl.lit(CALL_SOURCE).alias('call_source'),
-                        'var_score',
-                        'align_source',
-                        'seq',
-                        '_align_score',
-                    )
-                )
-
-                df_snv = df_snv.collect().lazy()
-                df_insdel = df_insdel.collect().lazy()
-
-                # Append to chromosome list
-                df_chrom_list['snv'].append(df_snv)
-                df_chrom_list['insdel'].append(df_insdel)
-
-            df_snv = schema.cast(
-                (
-                    pl.concat(df_chrom_list['snv'])
-                    .sort(
-                        ['pos', 'alt', 'var_score', '_align_score', 'qry_id', 'qry_pos'],
-                        descending=[False, False, True, True, False, False]
-                    )
-                    .drop('_align_score')
-                ),
-                schema.VARIANT
+            # Sort chromosome results and either write to a temp file or keep in memory
+            df_chrom_snv = (
+                schema.cast(pl.concat(chrom_snv).sort(**sort_order_snv).drop('_align_score'), schema.VARIANT)
+                if chrom_snv else _empty_snv
+            )
+            df_chrom_insdel = (
+                schema.cast(pl.concat(chrom_insdel).sort(**sort_order_insdel).drop('_align_score'), schema.VARIANT)
+                if chrom_insdel else _empty_insdel
             )
 
-            df_insdel = schema.cast(
-                (
-                    pl.concat(df_chrom_list['insdel'])
-                    .sort(
-                        ['pos', 'var_score', '_align_score', 'qry_id', 'qry_pos'],
-                        descending=[False, True, True, False, False]
-                    )
-                    .drop('_align_score')
-                ),
-                schema.VARIANT
-            )
-
-            # Save chromosome-level tables
-            if temp_file_name is not None:
-                # If using a temporary file, write file and scan it (add to list of LazyFrames to concat)
-
-                write_snv = df_snv.sink_parquet(temp_file_name['snv'], lazy=True)
-                write_insdel = df_insdel.sink_parquet(temp_file_name['insdel'], lazy=True)
-
-                pl.collect_all([write_snv, write_insdel])
-
-                chrom_table_list['snv'].append(pl.scan_parquet(temp_file_name['snv']))
-                chrom_table_list['insdel'].append(pl.scan_parquet(temp_file_name['insdel']))
-
+            if batch_size > 0:
+                temp_snv_file = temp_dir.next(prefix='snv_', suffix='.parquet')
+                temp_insdel_file = temp_dir.next(prefix='insdel_', suffix='.parquet')
+                df_chrom_snv.write_parquet(temp_snv_file)
+                df_chrom_insdel.write_parquet(temp_insdel_file)
+                final_snv.append(pl.scan_parquet(temp_snv_file))
+                final_insdel.append(pl.scan_parquet(temp_insdel_file))
             else:
-                df_snv, df_insdel = pl.collect_all([df_snv, df_insdel,])
+                final_snv.append(df_chrom_snv.lazy())
+                final_insdel.append(df_chrom_insdel.lazy())
 
-                # if not using a temporary file, save in-memory tables to be concatenated.
-                chrom_table_list['snv'].append(df_snv.lazy())
-                chrom_table_list['insdel'].append(df_insdel.lazy())
+        # Build final lazy frames (chromosomes already in sorted order from chrom_list)
+        lf_snv = pl.concat(final_snv) if final_snv else _empty_snv.lazy()
+        lf_insdel = pl.concat(final_insdel) if final_insdel else _empty_insdel.lazy()
 
-        # Concat tables
-        return (
-            pl.concat(chrom_table_list['snv']),
-            pl.concat(chrom_table_list['insdel'])
-        )
+        # Sink or return — must happen inside the `with` block so temp files are still accessible
+        if batch_size > 0:
+            pl.collect_all([
+                lf_snv.sink_parquet(Path(sink_snv), lazy=True),
+                lf_insdel.sink_parquet(Path(sink_insdel), lazy=True),
+            ])
+
+            return None
+
+        result = pl.collect_all([lf_snv, lf_insdel])
+
+        if sink_snv is not None:
+            result[0].write_parquet(sink_snv)
+
+        if sink_insdel is not None:
+            result[1].write_parquet(sink_insdel)
+
+        return result[0], result[1]
 
 
 def variant_tables_inv(

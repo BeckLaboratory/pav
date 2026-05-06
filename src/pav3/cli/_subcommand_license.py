@@ -6,6 +6,7 @@ from .. import __license__
 from .. import __license_spdx__
 from .. import __license_text__
 
+
 def subcommand_license(
         out_format: str = 'brief'
 ) -> int:
@@ -26,6 +27,7 @@ def subcommand_license(
         raise ValueError(f'Unknown license format: {format}')
 
     return 0
+
 
 def _add_subparser_license(
         subparsers
